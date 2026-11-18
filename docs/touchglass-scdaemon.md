@@ -4,9 +4,11 @@
 
 ## How it works
 
-gpg-agent starts `touchglass-scdaemon --multi-server` with a pipe on stdin and stdout. The proxy starts the real scdaemon with the same arguments and environment, then forwards bytes in both directions on one thread per direction, using blocking `read` and `write`. A line tap scans a copy of the stream, recognizes Assuan lines and passes them to an operation detector on its own queue. The detector sends events to the host socket from a separate writer thread through a queue of 64 events. When the host is absent, slow or stopped, events are dropped; forwarding never waits on the detector or the host.
+gpg-agent starts `touchglass-scdaemon --multi-server` with a pipe on stdin and stdout. The proxy starts the real scdaemon with the same arguments and environment, then forwards bytes in both directions on one thread per direction, using blocking `read` and `write`. A line tap scans a copy of the stream, recognizes Assuan lines and passes them to an operation detector on its own queue. The detector sends events to the host socket from a separate writer thread through a queue of 64 events. When the host isn't running at an `op_start`, the writer starts the TouchGlass app, at most once every 10 seconds, and waits up to 2 seconds for it to accept connections, so the touch wait that follows reaches it. When the host is still absent, or slow or stopped, events are dropped; forwarding never waits on the detector or the host.
 
-The proxy exits when scdaemon exits, with the same exit status, or by the same signal. When gpg-agent closes the pipe, the proxy closes scdaemon's stdin and keeps forwarding scdaemon's output until scdaemon exits. `SIGTERM`, `SIGINT` and `SIGHUP` are forwarded to scdaemon.
+The proxy exits when scdaemon exits, with the same exit status, or by the same signal. When gpg-agent closes the pipe, the proxy closes scdaemon's stdin and keeps forwarding scdaemon's output until scdaemon exits. `SIGTERM`, `SIGINT` and `SIGHUP` are forwarded to scdaemon. `SIGUSR1` and `SIGUSR2` are ignored: scdaemon sends its card event signal to the peer of a socket session, which is the proxy for a relayed session, and the default action would end the proxy.
+
+The proxy's parent is the gpg-agent that started it. Each `op_start` carries that agent's PID as `agent_pid`, so the host looks for the client that asked for the operation among that agent's connections only.
 
 ### Socket relay
 
@@ -16,7 +18,7 @@ gpg-agent uses the pipe for one session at a time. Sessions that overlap it, suc
 
 | Event | When |
 | --- | --- |
-| `op_start` | `PKSIGN`, `PKAUTH` or `PKDECRYPT` reaches scdaemon. The slot and card serial come from the `S KEYINFO` line the agent requests before each operation. `PKSIGN` with the slot 3 key reports `auth`, because scdaemon runs it as an authentication. |
+| `op_start` | `PKSIGN`, `PKAUTH` or `PKDECRYPT` reaches scdaemon. The slot and card serial come from the `S KEYINFO` line the agent requests before each operation. `PKSIGN` with the slot 3 key reports `auth`, because scdaemon runs it as an authentication. `agent_pid` is the proxy's parent, the gpg-agent; the field is optional, so hosts and proxies of different versions still understand each other. |
 | `pin_needed` | scdaemon sends `INQUIRE NEEDPIN`. |
 | `pin_sent` | The agent answers that inquiry with `END`. |
 | `touch_wait` | An operation is outstanding, no inquiry is open, and 400 ms passed since the operation command, the last inquiry answer or `S PINCACHE_PUT`. The card sends nothing while it waits for a touch, so this delay is the only signal. `at` is the start of that delay. A `POPUPPINPADPROMPT --ack` inquiry reports it at once. |
@@ -33,6 +35,8 @@ The proxy finds the real scdaemon in this order:
 1. The `TOUCHGLASS_SCDAEMON_PROGRAM` environment variable.
 2. The first line of `~/Library/Application Support/TouchGlass/scdaemon-program`, which the installer writes from `gpgconf --list-components`.
 3. `/opt/homebrew/libexec/scdaemon`, `/usr/local/libexec/scdaemon`, `/usr/local/MacGPG2/libexec/scdaemon`, `/opt/local/libexec/scdaemon`.
+
+The proxy starts the app bundle it lives in, `TouchGlass.app/Contents/MacOS/touchglass-scdaemon`, with `open -g`. Outside a bundle, it opens the app named `TouchGlass`. The `TOUCHGLASS_HOST_APP` environment variable overrides this with a bundle path or an app name; `none` never starts the host.
 
 Other environment variables, for tests: `TOUCHGLASS_SOCKET` (host socket), `TOUCHGLASS_RUNTIME_DIR` (directory for the relay socket) and `TOUCHGLASS_TOUCH_DELAY_MS` (touch detection delay).
 

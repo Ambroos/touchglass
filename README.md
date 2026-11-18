@@ -38,12 +38,19 @@ Install does the following:
 
 1. Builds `build/TouchGlass.app` if it is missing or older than the sources, and copies it to `~/Applications`. To install somewhere else, pass `--app-dir <directory>`; to install a bundle you built yourself, pass `--from <path to TouchGlass.app>`.
 2. Writes the path of the real scdaemon to `~/Library/Application Support/TouchGlass/scdaemon-program`. The path comes from the `scdaemon-program` line that `gpg-agent.conf` already has, or else from `gpgconf --list-components`. For Homebrew, install prefers a stable path such as `/opt/homebrew/opt/gnupg/libexec/scdaemon` over the versioned `Cellar` path, which a GnuPG upgrade removes.
-3. If `~/Library/Application Support/TouchGlass/pinentry.conf` doesn't exist, writes it with `fallback-pinentry` set to the pinentry that `gpg-agent.conf` named before, or to `pinentry-mac`. `touchglass-pinentry` hands prompts to that pinentry when the TouchGlass host isn't reachable.
+3. If `~/Library/Application Support/TouchGlass/pinentry.conf` doesn't exist, writes it with `fallback-pinentry` set to the pinentry that `gpg-agent.conf` named before, else `pinentry-mac`, else the pinentry that `gpgconf --list-components` reports. `touchglass-pinentry` hands prompts to that pinentry when the TouchGlass host isn't reachable. If install finds no pinentry at all, it warns and leaves the setting out. On a later install, it replaces a `fallback-pinentry` that no longer exists and keeps one that works.
 4. Backs up `gpg-agent.conf` to `gpg-agent.conf.touchglass-backup-<timestamp>` next to it.
 5. Points `pinentry-program` and `scdaemon-program` in `gpg-agent.conf` at the helpers in the app bundle. It comments out the effective line with a `# touchglass: ` prefix and adds the TouchGlass line after it. If an option isn't set, it adds a `# touchglass: added <option>` marker and the TouchGlass line at the top of the file. It changes no other line.
 6. Stops gpg-agent with `gpgconf --kill gpg-agent`, so it reads the new settings on next use. gpg-agent forgets its cached PINs and passphrases, so the next card operation asks for the PIN again.
 
-Running install again changes nothing, and adds no second backup or marker. Install uses `GNUPGHOME` if it is set, and `~/.gnupg` otherwise.
+Install uses `GNUPGHOME` if it is set, and `~/.gnupg` otherwise. If the GnuPG home doesn't exist, install creates it with mode 700.
+
+Running install again, for example after you pulled changes, leaves `gpg-agent.conf` as it is and adds no second backup or marker. It replaces the installed app, and then:
+
+- Quits the running host with `pkill -x TouchGlass`. The helpers start the new host on the next prompt or card operation.
+- Stops scdaemon with `gpgconf --kill scdaemon`. The running `touchglass-scdaemon` lives as long as scdaemon does, often for days, so without this the previous version keeps handling card operations. gpg-agent starts scdaemon again on the next card operation, and the card asks for the PIN again.
+
+Install copies the new app next to the old one and then swaps them, so a failed copy leaves the installed app whole. `--dry-run` lists these steps too.
 
 To see what gpg-agent uses, whether the host is running, the installed app version and the backups:
 
@@ -58,7 +65,14 @@ scripts/touchglass uninstall --dry-run
 scripts/touchglass uninstall
 ```
 
-Uninstall restores the original `pinentry-program` and `scdaemon-program` lines from the `# touchglass: ` markers, so the file matches what it was before install, and stops gpg-agent. If the markers are missing, it takes the original lines from the newest backup. It works when the app was moved or deleted, and it keeps the backups. To also delete the installed app, pass `--remove-app`.
+Uninstall restores the original `pinentry-program` and `scdaemon-program` lines from the `# touchglass: ` markers, so the file matches what it was before install, and stops gpg-agent. If the markers are missing, it takes the original lines from the newest backup. It works when the app was moved or deleted. To also delete the installed app, pass `--remove-app`.
+
+Uninstall leaves these behind, for you to delete if you don't reinstall:
+
+- The `gpg-agent.conf.touchglass-backup-<timestamp>` files next to `gpg-agent.conf`.
+- `~/Library/Application Support/TouchGlass`, which holds `pinentry.conf`, `scdaemon-program`, `host.conf` if you wrote one, and the host's socket. A later install reuses `pinentry.conf`.
+- The installed app, unless you pass `--remove-app`.
+- A running host. Quit it with `pkill -x TouchGlass`.
 
 To test the installer:
 
@@ -66,7 +80,7 @@ To test the installer:
 scripts/test-installer.sh
 ```
 
-The tests run each case with a temporary `HOME` and `GNUPGHOME` and a stub `gpgconf`, so they don't touch your GnuPG setup or stop your gpg-agent.
+The tests run each case with a temporary `HOME` and `GNUPGHOME` and stub `gpgconf`, `pgrep` and `pkill` commands, so they don't touch your GnuPG setup, stop your gpg-agent or quit your TouchGlass host.
 
 ## Run the demo
 
@@ -76,7 +90,7 @@ The demo shows scripted panel states with simulated card replies:
 build/TouchGlass.app/Contents/MacOS/TouchGlass --demo sign
 ```
 
-Scenarios: `sign`, `touch`, `timeout`, `wrong-pin`, `ssh`, `decrypt`, `blocked`, `passphrase`, `insert-card`, `message`, `removed`, `error`, and `all`, which runs every scenario in sequence. `--help` describes each one.
+Scenarios: `sign`, `touch`, `timeout`, `wrong-pin`, `ssh`, `decrypt`, `blocked`, `passphrase`, `insert-card`, `message`, `removed`, `error`, `client`, and `all`, which runs every scenario in sequence. `--help` describes each one.
 
 In the demo, any text in the PIN field continues. To simulate the touch, click **Simulate touch** in the demo controls window, or press Space while that window is focused. Without a touch, the demo touches after 4 seconds.
 
@@ -87,6 +101,7 @@ In the demo, any text in the PIN field continues. To simulate the touch, click *
 | `--slow <factor>` | Slows the panel animations down by this factor, to review them. |
 | `--no-controls` | Hides the demo controls window. |
 | `--focus-report` | Prints whether the PIN panel took key focus. |
+| `--appearance <look>` | Uses the `readable` (default) or `smoked` look, as the `appearance` setting does. |
 | `--client <label>` | Shows this label for what asked, instead of each scenario's sample label. |
 | `--no-client` | Hides the client line, like `show-client = no`. |
 
@@ -96,7 +111,7 @@ The demo never reads, logs or prints what you type in the PIN field.
 
 ## Settings
 
-The host reads `~/Library/Application Support/TouchGlass/host.conf`, one `key = value` per line, with `#` for comments:
+The host reads `~/Library/Application Support/TouchGlass/host.conf` when it starts, one `key = value` per line, with `#` for comments:
 
 | Key | Values | Effect |
 | --- | --- | --- |
@@ -105,6 +120,41 @@ The host reads `~/Library/Application Support/TouchGlass/host.conf`, one `key = 
 | `touch-timeout` | Seconds, 1 to 600 | Sets the length of the touch countdown. Without it, the host uses the timeout that `touchglass-scdaemon` reports, 15 seconds. Set it only if your card waits for a different time. The reminder sounds and the urgent phase keep their proportions: at a third and two thirds of the countdown. If the value is shorter than the card's own timeout, the countdown reaches 0 and the panel stays until the card answers. |
 
 The demo takes `appearance` as `--appearance`, and `show-client = no` as `--no-client`.
+
+After you change `host.conf`, quit the host so that it reads the file again:
+
+```sh
+pkill -x TouchGlass
+```
+
+The helpers start the host again on the next prompt or card operation. While the host isn't running and can't be started, `touchglass-pinentry` hands prompts to the `fallback-pinentry`, and card operations work without the touch panel.
+
+### Sounds
+
+The panel plays the system alert sounds Tink, Ping and Basso, at the alert volume. Two user defaults of the app turn them off; both default to on:
+
+```sh
+# All panel sounds.
+defaults write dev.touchglass.TouchGlass soundsEnabled -bool false
+# Only the reminders during the touch countdown.
+defaults write dev.touchglass.TouchGlass reminderSoundsEnabled -bool false
+```
+
+The host reads them each time it plays a sound, so no restart is needed.
+
+### Pinentry settings
+
+`touchglass-pinentry` reads `~/Library/Application Support/TouchGlass/pinentry.conf`, in the same format, each time gpg-agent starts it:
+
+| Key | Default | Effect |
+| --- | --- | --- |
+| `fallback-pinentry` | The first of `/opt/homebrew/bin/pinentry-mac` and `/usr/local/bin/pinentry-mac` that exists | The pinentry that takes over a prompt when the host isn't reachable or stops answering. |
+| `host-app` | The `TouchGlass.app` that contains the pinentry | The app to start when the host isn't running: a bundle path, an app name, or `none` to never start it. |
+| `connect-timeout-ms` | 300 | How long a connection to the host socket may take. |
+| `launch-timeout-ms` | 2000 | How long to wait for a host that the pinentry started to accept connections. |
+| `ping-interval-ms` | 1000 | How often the pinentry checks that the host still answers while a prompt shows. |
+| `host-stall-ms` | 3000 | How long the host may go without answering before the pinentry hands the prompt to the fallback. |
+| `log-file` | None | A file for diagnostic lines: message types and Assuan keywords, never a PIN or passphrase. |
 
 ### What asked
 
