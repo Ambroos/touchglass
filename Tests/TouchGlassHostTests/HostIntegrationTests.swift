@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import ScdTestSupport
+import Synchronization
 import Testing
 import TouchGlassCore
 import TouchGlassIPC
@@ -85,6 +86,86 @@ struct HostIntegrationTests {
         #expect(harness.finish()?.status == 0)
     }
 
+    /// A signature that needs the PIN and a touch, with every real component: the proxy over fake-scdaemon
+    /// reports the operation on one host connection, the real pinentry asks for the PIN on another, and the
+    /// panel goes from PIN entry to verifying to touch to success. The test plays gpg-agent: it answers
+    /// NEEDPIN by running the pinentry, as the agent does.
+    @Test func pinThenTouchSignatureAcrossProxyAndPinentry() async throws {
+        let (directory, socket) = shortSocketPath()
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        var card = ProxyHarness.Card()
+        card.touch_ms = 900
+        let harness = try ProxyHarness(card: card, hostPath: socket)
+        defer { harness.cleanUp() }
+        let server = try HostServer(path: socket)
+        let panel = RecordingPanel()
+        // A fake test PIN, the fake card's default.
+        panel.autoSubmit = "123456"
+        let session = HostSession(server: server, panel: panel)
+        session.start()
+        defer { session.stop() }
+
+        try harness.start()
+        _ = harness.handshake()
+        let agent = harness.agent
+        let grip = ProxyHarness.signGrip
+        let operation = Task.detached { () -> (signed: Bool, pinentry: [String]) in
+            _ = agent.transact("SERIALNO --all")
+            _ = agent.transact("KEYINFO \(grip)")
+            _ = agent.transact("SETDATA 3051300D060960864801650304020305000440" + String(repeating: "AB", count: 64))
+            let transcript = Mutex<[String]>([])
+            let reply = agent.transact("PKSIGN --hash=sha512 \(grip)") { keyword, _ in
+                switch keyword {
+                case "PINCACHE_GET":
+                    return []
+                case "NEEDPIN":
+                    // gpg-agent starts the pinentry only when scdaemon asks for the PIN.
+                    guard let pinentry = try? PinentryProcess(socket: socket, home: directory) else { return nil }
+                    defer { pinentry.stop() }
+                    var lines: [String] = []
+                    func exchange(_ command: String) {
+                        pinentry.send(command)
+                        while let line = pinentry.readLineBlocking() {
+                            lines.append(line)
+                            if line.hasPrefix("OK") || line.hasPrefix("ERR") { break }
+                        }
+                    }
+                    lines += pinentry.readLineBlocking().map { [$0] } ?? []
+                    exchange("SETDESC Please unlock the card%0A%0A\u{1E}Number\u{1F}: 12 345 678%0AHolder\u{1F}: %0ACounter\u{1F}: 7")
+                    exchange("SETPROMPT PIN")
+                    exchange("GETPIN")
+                    exchange("BYE")
+                    transcript.withLock { $0 = lines }
+                    let pin = lines.first { $0.hasPrefix("D ") }.map { String($0.dropFirst(2)) }
+                    return pin.map(AgentDriver.pinAnswer)
+                default:
+                    return nil
+                }
+            }
+            return (reply.isOK, transcript.withLock { $0 })
+        }
+
+        let result = await operation.value
+        #expect(result.signed)
+        #expect(result.pinentry.contains("D 123456"))
+        #expect(await waitUntil { panel.contains { $0 == .show(.success(.sign)) } })
+
+        let request = PinRequest(operation: .sign, cardSerial: "12345678")
+        let pinIndex = panel.events.firstIndex(of: .show(.pinEntry(request)))
+        let verifyingIndex = panel.events.firstIndex(of: .show(.verifying(request)))
+        let touchIndex = panel.events.firstIndex { if case .show(.touchWait(let wait)) = $0 { wait.operation == .sign } else { false } }
+        let successIndex = panel.events.firstIndex(of: .show(.success(.sign)))
+        #expect(pinIndex != nil && verifyingIndex != nil && touchIndex != nil && successIndex != nil, "events: \(panel.events)")
+        if let pinIndex, let verifyingIndex, let touchIndex, let successIndex {
+            #expect(pinIndex < verifyingIndex && verifyingIndex < touchIndex && touchIndex < successIndex)
+        }
+        // The verifying state stays until the card reports back; the pinentry closing does not dismiss it.
+        if let verifyingIndex, let touchIndex {
+            #expect(!panel.events[verifyingIndex..<touchIndex].contains(.dismiss))
+        }
+        #expect(harness.finish()?.status == 0)
+    }
+
     /// The real pinentry asks the host for a card PIN and gets the submitted value back.
     @Test func pinentryRoundTrip() async throws {
         let (directory, socket) = shortSocketPath()
@@ -145,6 +226,25 @@ final class PinentryProcess: @unchecked Sendable {
 
     func send(_ line: String) {
         input.fileHandleForWriting.write(Data((line + "\n").utf8))
+    }
+
+    /// Reads one line on the calling thread, for code that runs off the main actor.
+    func readLineBlocking(timeout: TimeInterval = 5) -> String? {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let line = takeLine() { return line }
+            usleep(10_000)
+        }
+        return nil
+    }
+
+    private func takeLine() -> String? {
+        lock.withLock {
+            guard let newline = buffer.firstIndex(of: 0x0A) else { return nil }
+            let bytes = buffer[..<newline]
+            buffer.removeSubrange(...newline)
+            return String(decoding: bytes, as: UTF8.self)
+        }
     }
 
     @MainActor
