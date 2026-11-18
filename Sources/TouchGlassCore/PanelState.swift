@@ -31,13 +31,16 @@ public struct PinRequest: Sendable, Equatable {
     public var attemptsLeft: Int?
     /// Overrides `pin.minimumLength`. Demo mode sets 1 so that any text continues.
     public var minimumLengthOverride: Int?
+    /// What asked for the operation, such as "git commit · touchglass". It can arrive after the panel shows.
+    public var client: String?
 
-    public init(operation: OperationKind, pin: PinKind = .user, cardSerial: String, attemptsLeft: Int? = nil, minimumLengthOverride: Int? = nil) {
+    public init(operation: OperationKind, pin: PinKind = .user, cardSerial: String, attemptsLeft: Int? = nil, minimumLengthOverride: Int? = nil, client: String? = nil) {
         self.operation = operation
         self.pin = pin
         self.cardSerial = cardSerial
         self.attemptsLeft = attemptsLeft
         self.minimumLengthOverride = minimumLengthOverride
+        self.client = client
     }
 
     public var minimumLength: Int { minimumLengthOverride ?? pin.minimumLength }
@@ -48,35 +51,46 @@ public struct PassphraseRequest: Sendable, Equatable {
     public var description: String
     /// The agent's error text after a rejected passphrase, shown verbatim.
     public var error: String?
+    /// What asked for the passphrase.
+    public var client: String?
 
-    public init(description: String, error: String? = nil) {
+    public init(description: String, error: String? = nil, client: String? = nil) {
         self.description = description
         self.error = error
+        self.client = client
     }
 }
 
 public struct TouchWait: Sendable, Equatable {
     public var operation: OperationKind
     public var cardSerial: String
-    /// When the card stops waiting: the time the command reached scdaemon plus `TouchTiming.cardTimeout`.
+    /// When the card stops waiting: the time the command reached scdaemon plus `duration`.
     public var deadline: Date
     /// When the panel showed the touch step. Escalation phases count from here.
     public var shownAt: Date
+    /// The card's whole touch timeout, which a full ring stands for.
+    public var duration: TimeInterval
+    /// What asked for the operation, such as "git commit · touchglass". It can arrive after the panel shows.
+    public var client: String?
 
-    public init(operation: OperationKind, cardSerial: String, deadline: Date, shownAt: Date) {
+    public init(operation: OperationKind, cardSerial: String, deadline: Date, shownAt: Date, duration: TimeInterval = TouchTiming.cardTimeout, client: String? = nil) {
         self.operation = operation
         self.cardSerial = cardSerial
         self.deadline = deadline
         self.shownAt = shownAt
+        self.duration = duration
+        self.client = client
     }
 
     /// A touch wait whose command started `TouchTiming.detectionThreshold` before `now`.
-    public static func detected(operation: OperationKind, cardSerial: String, now: Date = Date()) -> TouchWait {
+    public static func detected(operation: OperationKind, cardSerial: String, now: Date = Date(), duration: TimeInterval = TouchTiming.cardTimeout, client: String? = nil) -> TouchWait {
         TouchWait(
             operation: operation,
             cardSerial: cardSerial,
-            deadline: now.addingTimeInterval(TouchTiming.cardTimeout - TouchTiming.detectionThreshold),
-            shownAt: now
+            deadline: now.addingTimeInterval(duration - TouchTiming.detectionThreshold),
+            shownAt: now,
+            duration: duration,
+            client: client
         )
     }
 
@@ -85,12 +99,14 @@ public struct TouchWait: Sendable, Equatable {
     }
 
     public func fractionRemaining(at date: Date) -> Double {
-        min(1, remaining(at: date) / TouchTiming.cardTimeout)
+        guard duration > 0 else { return 0 }
+        return min(1, remaining(at: date) / duration)
     }
 }
 
 public enum Failure: Sendable, Equatable {
-    case touchTimeout
+    /// The card stopped waiting for a touch after this many seconds.
+    case touchTimeout(seconds: Int)
     case wrongPIN
     case pinBlocked
     case cardRemoved

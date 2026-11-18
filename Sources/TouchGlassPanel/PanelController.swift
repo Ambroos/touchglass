@@ -23,6 +23,7 @@ public final class PanelController {
     public init(animationScale: Double = 1, settings: HostSettings = HostSettings()) {
         model.animationScale = animationScale
         model.appearance = settings.appearance
+        model.showsClient = settings.showClient
         let host = NSHostingView(rootView: PanelSurfaceView(model: model))
         host.sizingOptions = []
         host.frame = NSRect(origin: .zero, size: PanelMetrics.windowSize)
@@ -207,7 +208,9 @@ public final class PanelController {
         escalation.forEach { $0.cancel() }
         escalation = []
         let elapsed = Date().timeIntervalSince(wait.shownAt)
-        for cue in Escalation.cues where cue.at > elapsed {
+        // A shorter touch-timeout ends the countdown before the last cues.
+        let end = wait.deadline.timeIntervalSince(wait.shownAt)
+        for cue in Escalation.cues where cue.at > elapsed && cue.at < end {
             let item = DispatchWorkItem { [weak self] in
                 guard let self else { return }
                 switch cue.action {

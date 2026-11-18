@@ -26,9 +26,11 @@ let usage = """
       --no-controls             Hide the demo controls window.
       --focus-report            Print whether the PIN panel took key focus.
       --appearance <look>       readable (default) or smoked.
+      --client <label>          Show this label for what asked, instead of each scenario's sample.
+      --no-client               Hide the client line, as show-client = no does.
 
-    The host reads the same settings from host.conf in its support directory:
-    appearance = smoked|readable.
+    The host reads its settings from host.conf in its support directory:
+    appearance = readable|smoked, show-client = yes|no, touch-timeout = <seconds>.
 
     In the demo, any text in the PIN field continues. Press Space with the demo controls
     window focused, or click Simulate Touch, to touch.
@@ -72,6 +74,10 @@ func parseArguments() -> (DemoScenario, DemoOptions) {
                 fail("--appearance needs smoked or readable.")
             }
             options.settings.appearance = appearance
+        case "--client":
+            guard !arguments.isEmpty else { fail("--client needs a label.") }
+            options.client = arguments.removeFirst()
+        case "--no-client": options.settings.showClient = false
         case "-h", "--help":
             print(usage)
             exit(0)

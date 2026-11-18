@@ -46,7 +46,7 @@ struct PanelContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             ZStack {
-                TextBlock(presentation: presentation)
+                TextBlock(presentation: presentation, showsClient: model.showsClient)
                     .id(textKey)
                     .transition(crossfade)
             }
@@ -264,6 +264,7 @@ struct TouchRingStage: View {
 
 struct TextBlock: View {
     let presentation: PanelPresentation
+    var showsClient = true
     @Environment(\.panelInk) private var ink
 
     var body: some View {
@@ -284,6 +285,17 @@ struct TextBlock: View {
                 .foregroundStyle(presentation.detailIsError ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary))
                 .lineLimit(presentation.detailLineLimit)
                 .opacity(presentation.detail == nil ? 0 : 1)
+            if showsClient, presentation.reservesClientLine {
+                // What asked, such as "git commit · touchglass". The line stays while the label is
+                // unknown, so a label that arrives late fades in without moving anything.
+                Text(verbatim: presentation.clientLine ?? " ")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .opacity(presentation.clientLine == nil ? 0 : 1)
+                    .animation(.easeInOut(duration: 0.2), value: presentation.clientLine)
+            }
             if let attempts = presentation.attemptsLine {
                 Text(verbatim: attempts)
                     .font(.callout.weight(.medium))

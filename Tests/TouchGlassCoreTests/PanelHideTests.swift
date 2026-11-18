@@ -19,7 +19,7 @@ import Testing
 
     @Test func pinPromptAfterHiddenTouchAndTimeoutShows() {
         var machine = hiddenTouch()
-        _ = machine.handle(.show(.failure(.touchTimeout)))
+        _ = machine.handle(.show(.failure(.touchTimeout(seconds: 15))))
         #expect(!machine.isVisible)
 
         let pin = PanelState.pinEntry(PinRequest(operation: .sign, cardSerial: "12345678"))

@@ -24,7 +24,7 @@ import Testing
         let effects = machine.handle(.show(.touchWait(wait)))
         #expect(effects.contains(.update(.touchWait(wait))))
         #expect(effects.contains(.setKey(true)))
-        #expect(machine.handle(.show(.failure(.touchTimeout))).contains(.setKey(true)))
+        #expect(machine.handle(.show(.failure(.touchTimeout(seconds: 15)))).contains(.setKey(true)))
         _ = machine.handle(.dismiss)
         // A new panel starts without focus again.
         #expect(machine.handle(.show(.touchWait(wait))).contains(.setKey(false)))
@@ -36,7 +36,7 @@ import Testing
         var machine = PanelMachine()
         _ = machine.handle(.show(.touchWait(wait)))
         #expect(machine.handle(.userHid) == [.close])
-        let effects = machine.handle(.show(.failure(.touchTimeout)))
+        let effects = machine.handle(.show(.failure(.touchTimeout(seconds: 15))))
         #expect(!effects.contains { if case .update = $0 { true } else { false } })
         #expect(effects.contains(.play(.failure)))
         #expect(!machine.isVisible)

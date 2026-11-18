@@ -30,6 +30,8 @@ public final class PanelModel {
     public var animationScale: Double = 1
     /// The panel's look.
     public var appearance: PanelAppearance = .readable
+    /// Show what asked for the operation under the detail, and keep a line for it.
+    public var showsClient = true
 
     @ObservationIgnored public var actions = PanelActions()
 

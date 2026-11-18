@@ -10,10 +10,19 @@ public enum PanelAppearance: String, Sendable, Equatable, CaseIterable {
 
 /// Host settings from `host.conf`: one `key = value` per line, `#` starts a comment line.
 public struct HostSettings: Sendable, Equatable {
-    public var appearance: PanelAppearance = .readable
+    /// The longest `touch-timeout` the host accepts, in seconds.
+    public static let maximumTouchTimeout: TimeInterval = 600
 
-    public init(appearance: PanelAppearance = .readable) {
+    public var appearance: PanelAppearance = .readable
+    /// Show what asked for a card operation, such as "git commit · touchglass".
+    public var showClient = true
+    /// Overrides the touch countdown length that the scdaemon proxy reports, in seconds.
+    public var touchTimeout: TimeInterval?
+
+    public init(appearance: PanelAppearance = .readable, showClient: Bool = true, touchTimeout: TimeInterval? = nil) {
         self.appearance = appearance
+        self.showClient = showClient
+        self.touchTimeout = touchTimeout
     }
 
     /// Parses the file's text. Unknown keys and invalid values are ignored.
@@ -27,6 +36,14 @@ public struct HostSettings: Sendable, Equatable {
             switch key {
             case "appearance":
                 if let appearance = PanelAppearance(rawValue: value) { settings.appearance = appearance }
+            case "show-client":
+                switch value.lowercased() {
+                case "yes": settings.showClient = true
+                case "no": settings.showClient = false
+                default: continue
+                }
+            case "touch-timeout":
+                if let seconds = Double(value), seconds >= 1, seconds <= maximumTouchTimeout { settings.touchTimeout = seconds }
             default:
                 continue
             }

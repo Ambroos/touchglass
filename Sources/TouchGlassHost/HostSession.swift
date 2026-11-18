@@ -14,13 +14,19 @@ public protocol PanelDriving: AnyObject {
 /// Connects the socket server, the coordinator and the panel on the main actor.
 @MainActor
 public final class HostSession {
-    public private(set) var coordinator = HostCoordinator()
+    public private(set) var coordinator: HostCoordinator
     private let server: HostServer
     private let panel: PanelDriving
+    /// Names what asked for an operation. `nil` turns client labels off.
+    private let resolver: ClientResolving?
+    /// Lookups run one at a time, off the main thread.
+    private let resolverQueue = DispatchQueue(label: "TouchGlass client lookup", qos: .userInitiated)
 
-    public init(server: HostServer, panel: PanelDriving) {
+    public init(server: HostServer, panel: PanelDriving, resolver: ClientResolving? = nil, touchTimeout: TimeInterval? = nil) {
         self.server = server
         self.panel = panel
+        self.resolver = resolver
+        coordinator = HostCoordinator(touchTimeout: touchTimeout)
 
         var actions = PanelActions()
         actions.submitSecret = { [weak self] secret in self?.user(.submit(secret)) }
@@ -67,6 +73,15 @@ public final class HostSession {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                     guard let self else { return }
                     self.perform(self.coordinator.fire(timer, now: Date()))
+                }
+            case .resolveClient(let subject, let query):
+                guard let resolver else { continue }
+                resolverQueue.async { [weak self] in
+                    let label = resolver.label(for: query)
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self else { return }
+                        self.perform(self.coordinator.clientResolved(subject, label: label))
+                    }
                 }
             }
         }

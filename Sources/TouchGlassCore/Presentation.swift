@@ -49,6 +49,12 @@ public struct PanelPresentation: Sendable, Equatable {
     public var detail: String?
     public var detailIsError: Bool
     public var detailLineLimit: Int
+    /// What asked for the operation, on its own line under the detail. Not part of the announcement:
+    /// it often arrives a moment later, and announcing the state again for it would repeat the title.
+    public var clientLine: String? = nil
+    /// The state keeps a line for `clientLine` even while it is empty, so a label that arrives late
+    /// does not move the rest of the panel.
+    public var reservesClientLine = false
     public var attemptsLine: String?
     public var controls: Controls
     /// Identifies which states share a layout, so that changes inside a group do not crossfade.
@@ -133,6 +139,8 @@ extension PanelPresentation {
                 detail: Copy.card(request.cardSerial),
                 detailIsError: false,
                 detailLineLimit: 2,
+                clientLine: request.client,
+                reservesClientLine: true,
                 attemptsLine: Copy.attemptsLine(request.attemptsLeft),
                 controls: .secureField(
                     placeholder: request.pin == .admin ? "Admin PIN" : "PIN",
@@ -150,6 +158,8 @@ extension PanelPresentation {
                 detail: request.error ?? request.description,
                 detailIsError: request.error != nil,
                 detailLineLimit: 2,
+                clientLine: request.client,
+                reservesClientLine: true,
                 attemptsLine: nil,
                 controls: .secureField(placeholder: "Passphrase", minimumLength: 1, cancel: "Cancel", submit: "Unlock", busy: false),
                 layoutGroup: "pin"
@@ -161,6 +171,8 @@ extension PanelPresentation {
                 detail: Copy.touchDetail(wait),
                 detailIsError: false,
                 detailLineLimit: 2,
+                clientLine: wait.client,
+                reservesClientLine: true,
                 attemptsLine: nil,
                 controls: .countdown(wait),
                 layoutGroup: "touch"
@@ -172,6 +184,8 @@ extension PanelPresentation {
                 detail: nil,
                 detailIsError: false,
                 detailLineLimit: 2,
+                // Same reservation as the touch step, so the ring does not move.
+                reservesClientLine: true,
                 attemptsLine: nil,
                 controls: .countdownPlaceholder,
                 layoutGroup: "touch"
@@ -218,10 +232,10 @@ extension PanelPresentation {
 
     private static func failureCopy(_ failure: Failure) -> (Glyph, String, String) {
         switch failure {
-        case .touchTimeout:
+        case .touchTimeout(let seconds):
             (Glyph("clock.badge.exclamationmark", fallback: "exclamationmark.triangle.fill", color: .warning, pointSize: 44),
              "Touch timed out",
-             "The YubiKey waited \(Int(TouchTiming.cardTimeout)) seconds. The next attempt asks for your PIN again.")
+             "The YubiKey waited \(seconds) seconds. The next attempt asks for your PIN again.")
         case .wrongPIN:
             (Glyph("xmark.circle.fill", color: .failure, pointSize: 44),
              "Wrong PIN",

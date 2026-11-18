@@ -11,6 +11,8 @@ struct DemoOptions {
     var showControls = true
     var focusReport = false
     var settings = HostSettings()
+    /// Replaces each scenario's sample client label.
+    var client: String?
 }
 
 enum DemoScenario: String, CaseIterable {
@@ -26,10 +28,11 @@ enum DemoScenario: String, CaseIterable {
     case message
     case removed
     case error
+    case client
     case all
 
     static let sequence: [DemoScenario] = [
-        .sign, .touch, .ssh, .decrypt, .wrongPIN, .blocked, .passphrase, .insertCard, .message, .removed, .error, .timeout,
+        .sign, .touch, .ssh, .decrypt, .wrongPIN, .blocked, .passphrase, .insertCard, .message, .removed, .error, .client, .timeout,
     ]
 
     var summary: String {
@@ -46,6 +49,7 @@ enum DemoScenario: String, CaseIterable {
         case .message: "message with an OK button"
         case .removed: "touch, then the YubiKey is removed"
         case .error: "touch, then a card error"
+        case .client: "PIN, then touch, with a long client label that arrives late"
         case .all: "every scenario in sequence"
         }
     }
@@ -149,28 +153,46 @@ final class DemoRunner {
         controlsWindow?.orderOut(nil)
     }
 
+    /// The sample label each scenario shows, as the host would infer it.
+    private func client(_ scenario: DemoScenario) -> String? {
+        if let client = options.client { return client }
+        switch scenario {
+        case .touch: return "git rebase (3 left) · touchglass"
+        case .ssh: return "ssh build-box"
+        case .decrypt: return "gpg"
+        case .client: return "git push origin · an-example-repository-with-a-rather-long-name"
+        case .passphrase, .insertCard, .message, .all: return nil
+        default: return "git commit · touchglass"
+        }
+    }
+
     private func runOne(_ scenario: DemoScenario) async {
         controls.scenario = scenario.rawValue
+        let client = client(scenario)
         switch scenario {
         case .sign:
-            guard await pinStep(PinRequest(operation: .sign, cardSerial: Self.serial, minimumLengthOverride: 1)) else { return }
-            await touchStep(.sign)
+            guard await pinStep(PinRequest(operation: .sign, cardSerial: Self.serial, minimumLengthOverride: 1, client: client)) else { return }
+            await touchStep(.sign, client: client)
         case .touch:
-            await touchStep(.sign)
+            await touchStep(.sign, client: client)
         case .timeout:
-            await touchStep(.sign, outcome: .timeout)
+            await touchStep(.sign, client: client, outcome: .timeout)
         case .wrongPIN:
-            guard await pinStep(PinRequest(operation: .sign, cardSerial: Self.serial, attemptsLeft: 2, minimumLengthOverride: 1)) else { return }
+            guard await pinStep(PinRequest(operation: .sign, cardSerial: Self.serial, attemptsLeft: 2, minimumLengthOverride: 1, client: client)) else { return }
             await failure(.wrongPIN)
         case .ssh:
-            guard await pinStep(PinRequest(operation: .sshLogin, cardSerial: Self.serial, minimumLengthOverride: 1)) else { return }
-            await touchStep(.sshLogin)
+            guard await pinStep(PinRequest(operation: .sshLogin, cardSerial: Self.serial, minimumLengthOverride: 1, client: client)) else { return }
+            await touchStep(.sshLogin, client: client)
         case .decrypt:
-            guard await pinStep(PinRequest(operation: .decrypt, cardSerial: Self.serial, attemptsLeft: 1, minimumLengthOverride: 1)) else { return }
-            await touchStep(.decrypt)
+            guard await pinStep(PinRequest(operation: .decrypt, cardSerial: Self.serial, attemptsLeft: 1, minimumLengthOverride: 1, client: client)) else { return }
+            await touchStep(.decrypt, client: client)
         case .blocked:
-            guard await pinStep(PinRequest(operation: .sign, cardSerial: Self.serial, attemptsLeft: 1, minimumLengthOverride: 1)) else { return }
+            guard await pinStep(PinRequest(operation: .sign, cardSerial: Self.serial, attemptsLeft: 1, minimumLengthOverride: 1, client: client)) else { return }
             await failure(.pinBlocked)
+        case .client:
+            // The host shows the panel at once and fills the label in when its lookup finishes.
+            guard await pinStep(PinRequest(operation: .sign, cardSerial: Self.serial, minimumLengthOverride: 1), lateClient: client) else { return }
+            await touchStep(.sign, client: client)
         case .passphrase:
             await passphraseStep()
         case .insertCard:
@@ -185,9 +207,9 @@ final class DemoRunner {
                 detail: "The key ABCD 1234 ABCD 1234 is now available for SSH."
             )))
         case .removed:
-            await touchStep(.sign, outcome: .failure(.cardRemoved, after: 3))
+            await touchStep(.sign, client: client, outcome: .failure(.cardRemoved, after: 3))
         case .error:
-            await touchStep(.sign, outcome: .failure(.other("Card error"), after: 2))
+            await touchStep(.sign, client: client, outcome: .failure(.other("Card error"), after: 2))
         case .all:
             break
         }
@@ -196,8 +218,14 @@ final class DemoRunner {
     // MARK: Steps
 
     /// Returns false if the user cancelled.
-    private func pinStep(_ request: PinRequest) async -> Bool {
+    private func pinStep(_ request: PinRequest, lateClient: String? = nil) async -> Bool {
+        var request = request
         controller.send(.show(.pinEntry(request)))
+        if let lateClient {
+            await sleep(0.6)
+            request.client = lateClient
+            controller.send(.show(.pinEntry(request)))
+        }
         if options.focusReport { reportFocus(after: 0.6) }
         let event = await inbox.next([.submitted, .cancelled], timeout: options.autoSubmitAfter)
         if event == .cancelled {
@@ -216,8 +244,8 @@ final class DemoRunner {
         case failure(Failure, after: TimeInterval)
     }
 
-    private func touchStep(_ operation: OperationKind, outcome: TouchOutcome = .touched) async {
-        let wait = TouchWait.detected(operation: operation, cardSerial: Self.serial)
+    private func touchStep(_ operation: OperationKind, client: String? = nil, outcome: TouchOutcome = .touched) async {
+        let wait = TouchWait.detected(operation: operation, cardSerial: Self.serial, client: client)
         controller.send(.show(.touchWait(wait)))
         if options.focusReport { reportFocus(after: 1.0, label: "touch") }
         controls.touchEnabled = true
@@ -234,7 +262,7 @@ final class DemoRunner {
                 controller.send(.show(.success(operation)))
                 await waitUntilClosed()
             } else {
-                await failure(.touchTimeout)
+                await failure(.touchTimeout(seconds: Int(TouchTiming.cardTimeout)))
             }
         case .timeout:
             // Touching is still possible, to try the success path from a late phase.
@@ -243,7 +271,7 @@ final class DemoRunner {
                 controller.send(.show(.success(operation)))
                 await waitUntilClosed()
             } else {
-                await failure(.touchTimeout)
+                await failure(.touchTimeout(seconds: Int(TouchTiming.cardTimeout)))
             }
         case .failure(let failure, let after):
             _ = await inbox.next([], timeout: after)

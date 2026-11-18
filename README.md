@@ -87,6 +87,10 @@ In the demo, any text in the PIN field continues. To simulate the touch, click *
 | `--slow <factor>` | Slows the panel animations down by this factor, to review them. |
 | `--no-controls` | Hides the demo controls window. |
 | `--focus-report` | Prints whether the PIN panel took key focus. |
+| `--client <label>` | Shows this label for what asked, instead of each scenario's sample label. |
+| `--no-client` | Hides the client line, like `show-client = no`. |
+
+The `client` scenario shows a long label that arrives after the PIN prompt opens and truncates in the middle.
 
 The demo never reads, logs or prints what you type in the PIN field.
 
@@ -97,8 +101,20 @@ The host reads `~/Library/Application Support/TouchGlass/host.conf`, one `key = 
 | Key | Values | Effect |
 | --- | --- | --- |
 | `appearance` | `readable` (default), `smoked` | Regular glass with standard label colours in light mode, or smoked clear glass with HDR white text. |
+| `show-client` | `yes` (default), `no` | Shows what asked for the card operation under the detail line, such as `git commit · touchglass` or `ssh build-box`. |
+| `touch-timeout` | Seconds, 1 to 600 | Sets the length of the touch countdown. Without it, the host uses the timeout that `touchglass-scdaemon` reports, 15 seconds. Set it only if your card waits for a different time. |
 
-The demo takes the same setting as `--appearance`.
+The demo takes `appearance` as `--appearance`, and `show-client = no` as `--no-client`.
+
+### What asked
+
+gpg-agent doesn't tell scdaemon or the pinentry which command needs the card, so the host infers it, best effort. For a PIN prompt, it uses the client PID that gpg-agent passes to the pinentry. For a touch without a PIN prompt, it lists gpg-agent's connected clients by matching the agent's Unix sockets with the sockets of your other processes: an ssh client on the agent's ssh socket for an SSH login, any other client for a signature or decryption. From that process it walks up a few parents and reads their arguments and working directory:
+
+- Under git, the label is the git subcommand and the repository's directory name, such as `git commit · touchglass`. `git push` adds the remote. During a rebase it adds the number of commits left.
+- An ssh client outside git shows its destination host.
+- Anything else shows its executable name, such as `gpg`.
+
+The panel opens without waiting for the label, which fills in when the lookup finishes. The lookup gives up after about 50 ms. If several clients could be the one, and they don't give the same label, the panel shows none.
 
 ## Compare materials
 

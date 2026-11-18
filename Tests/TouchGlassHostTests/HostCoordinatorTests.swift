@@ -72,9 +72,9 @@ import TouchGlassIPC
         let scd = 6 << 24
         #expect(HostCoordinator.outcome(OpEnd(conn: "c", result: .error, code: scd | 130)) == .failure(.pinBlocked))
         #expect(HostCoordinator.outcome(OpEnd(conn: "c", result: .error, code: scd | 110)) == .failure(.cardRemoved))
-        #expect(HostCoordinator.outcome(OpEnd(conn: "c", result: .error, code: scd | 62)) == .failure(.touchTimeout))
+        #expect(HostCoordinator.outcome(OpEnd(conn: "c", result: .error, code: scd | 62)) == .failure(.touchTimeout(seconds: 15)))
         #expect(HostCoordinator.outcome(OpEnd(conn: "c", result: .error, code: scd | 99)) == .silent)
-        #expect(HostCoordinator.outcome(OpEnd(conn: "c", result: .timeout)) == .failure(.touchTimeout))
+        #expect(HostCoordinator.outcome(OpEnd(conn: "c", result: .timeout)) == .failure(.touchTimeout(seconds: 15)))
         #expect(HostCoordinator.outcome(OpEnd(conn: "c", result: .cancelled)) == .silent)
     }
 

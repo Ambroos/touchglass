@@ -25,7 +25,12 @@ func runHost() {
         exit(1)
     }
     let settings = HostSettings.load(path: IPCPaths.supportDirectory + "/host.conf")
-    let session = HostSession(server: server, panel: PanelController(settings: settings))
+    let session = HostSession(
+        server: server,
+        panel: PanelController(settings: settings),
+        resolver: settings.showClient ? ClientResolver() : nil,
+        touchTimeout: settings.touchTimeout
+    )
     session.start()
     hostSession = session
 

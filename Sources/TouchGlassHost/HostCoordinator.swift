@@ -26,12 +26,23 @@ public enum HostTimer: Sendable, Equatable {
     case touchExpired(operation: String, deadline: Date)
 }
 
+/// What a client label is for.
+public enum ClientSubject: Sendable, Equatable {
+    /// A card operation, by its proxy connection ID.
+    case operation(String)
+    /// A pinentry request, and the card operation it unlocks if the coordinator knows it.
+    case request(id: String, operation: String?)
+}
+
 /// What the coordinator wants done.
 public enum HostOutput: Sendable, Equatable {
     case panel(PanelEvent)
     case shakeField
     case reply(ConnectionID, IPCMessage)
     case schedule(after: TimeInterval, HostTimer)
+    /// Find out what asked for an operation or request, off the main thread, and report it with
+    /// `clientResolved(_:label:)`. The panel never waits for it.
+    case resolveClient(ClientSubject, ClientQuery)
 }
 
 /// Merges the proxy's card events and the pinentry's prompts into one panel.
@@ -53,8 +64,14 @@ public struct HostCoordinator: Sendable {
         var serial: String
         var pinNeeded = false
         var touchDeadline: Date?
+        /// The card's touch timeout for this operation, in seconds.
+        var touchTimeout: TimeInterval?
         /// The host connection of the proxy that reports this operation. Its operations end when it closes.
         var reporter: ConnectionID?
+        /// What asked for the operation.
+        var client: String?
+        /// `client` came from the pinentry's owner PID, which beats a guess among the agent's clients.
+        var clientIsExact = false
     }
 
     enum Shown: Sendable, Equatable {
@@ -74,18 +91,31 @@ public struct HostCoordinator: Sendable {
     /// Operations that reached touch wait while another one's panel was showing.
     private(set) var queuedTouch: [String] = []
     private(set) var shown: Shown?
+    /// The state last sent to the panel, so a late client label can update it in place.
+    private(set) var panelState: PanelState?
 
-    public init() {}
+    /// Overrides the touch timeout that the proxy reports, in seconds.
+    public var touchTimeout: TimeInterval?
+
+    public init(touchTimeout: TimeInterval? = nil) {
+        self.touchTimeout = touchTimeout
+    }
 
     // MARK: Messages
 
     public mutating func handle(_ message: IPCMessage, from connection: ConnectionID, now: Date) -> [HostOutput] {
+        tracking(handleMessage(message, from: connection, now: now))
+    }
+
+    private mutating func handleMessage(_ message: IPCMessage, from connection: ConnectionID, now: Date) -> [HostOutput] {
         switch message {
         case .opStart(let start):
             operations[start.conn] = CardOperation(kind: Self.kind(start.op), serial: Self.displaySerial(start.serial), reporter: connection)
             operationOrder.removeAll { $0 == start.conn }
             operationOrder.append(start.conn)
-            return []
+            // PKAUTH comes from an ssh client on the agent's ssh socket; signatures and decryptions come
+            // from gpg and the like on its other sockets.
+            return [.resolveClient(.operation(start.conn), .agentClient(ssh: start.op == .auth))]
         case .pinNeeded(let ref):
             // The touch wait, if any, was a false start: the card asks for the PIN first.
             operations[ref.conn]?.pinNeeded = true
@@ -115,6 +145,10 @@ public struct HostCoordinator: Sendable {
     /// A connection closed. Operations its proxy reported end silently: a proxy that stops sends no
     /// `op_end`. Prompts it owned that the user has not answered are withdrawn.
     public mutating func connectionClosed(_ connection: ConnectionID) -> [HostOutput] {
+        tracking(closeConnection(connection))
+    }
+
+    private mutating func closeConnection(_ connection: ConnectionID) -> [HostOutput] {
         var outputs: [HostOutput] = []
         for conn in operationOrder where operations[conn]?.reporter == connection {
             outputs += operationEnded(OpEnd(conn: conn, result: .cancelled))
@@ -128,6 +162,10 @@ public struct HostCoordinator: Sendable {
     // MARK: User actions
 
     public mutating func handle(_ action: UserAction) -> [HostOutput] {
+        tracking(handleAction(action))
+    }
+
+    private mutating func handleAction(_ action: UserAction) -> [HostOutput] {
         switch action {
         case .submit(let secret):
             switch shown {
@@ -170,6 +208,10 @@ public struct HostCoordinator: Sendable {
     // MARK: Timers
 
     public mutating func fire(_ timer: HostTimer, now: Date) -> [HostOutput] {
+        tracking(fireTimer(timer, now: now))
+    }
+
+    private mutating func fireTimer(_ timer: HostTimer, now: Date) -> [HostOutput] {
         switch timer {
         case .rearm:
             guard shown == nil || shown == .result else { return [] }
@@ -177,7 +219,8 @@ public struct HostCoordinator: Sendable {
                 queuedTouch.removeFirst()
                 guard var operation = operations[next] else { continue }
                 // The queued command reaches the card only now, so its touch window starts now.
-                let deadline = now.addingTimeInterval(TouchTiming.cardTimeout - TouchTiming.detectionThreshold)
+                let timeout = operation.touchTimeout ?? touchTimeout ?? TouchTiming.cardTimeout
+                let deadline = now.addingTimeInterval(timeout - TouchTiming.detectionThreshold)
                 operation.touchDeadline = deadline
                 operations[next] = operation
                 return showTouch(next, operation: operation, deadline: deadline, now: now)
@@ -193,6 +236,67 @@ public struct HostCoordinator: Sendable {
         }
     }
 
+    // MARK: Client labels
+
+    /// A client lookup finished. Stores the label with its operation and updates the panel if it shows
+    /// that operation or request. A `nil` label changes nothing.
+    public mutating func clientResolved(_ subject: ClientSubject, label: String?) -> [HostOutput] {
+        guard let label, !label.isEmpty else { return [] }
+        let operationID: String?
+        let requestID: String?
+        switch subject {
+        case .operation(let conn):
+            // A label from the owner PID is exact; a guess that arrives later must not replace it.
+            guard var operation = operations[conn], !operation.clientIsExact else { return [] }
+            operation.client = label
+            operations[conn] = operation
+            operationID = conn
+            requestID = nil
+        case .request(let id, let conn):
+            if let conn, var operation = operations[conn] {
+                operation.client = label
+                operation.clientIsExact = true
+                operations[conn] = operation
+            }
+            operationID = conn
+            requestID = id
+        }
+        return tracking(refreshClient(label, operation: operationID, request: requestID))
+    }
+
+    private mutating func refreshClient(_ label: String, operation operationID: String?, request requestID: String?) -> [HostOutput] {
+        switch shown {
+        case .touch(let conn) where conn == operationID:
+            guard case .touchWait(var wait) = panelState, wait.client != label else { return [] }
+            wait.client = label
+            return [.panel(.show(.touchWait(wait)))]
+        case .cardPIN(let id, let connection, let conn, var request, let submitted):
+            guard id == requestID || (conn != nil && conn == operationID), request.client != label else { return [] }
+            request.client = label
+            shown = .cardPIN(requestID: id, connection: connection, operation: conn, request: request, submitted: submitted)
+            return [.panel(.show(submitted ? .verifying(request) : .pinEntry(request)))]
+        case .passphrase(let id, let connection, var request, let submitted) where id == requestID:
+            guard request.client != label else { return [] }
+            request.client = label
+            shown = .passphrase(requestID: id, connection: connection, request: request, submitted: submitted)
+            return submitted ? [] : [.panel(.show(.passphrase(request)))]
+        default:
+            return []
+        }
+    }
+
+    /// Records the last panel state in `outputs`, for `refreshClient`.
+    private mutating func tracking(_ outputs: [HostOutput]) -> [HostOutput] {
+        for output in outputs {
+            switch output {
+            case .panel(.show(let state)): panelState = state
+            case .panel(.dismiss): panelState = nil
+            default: break
+            }
+        }
+        return outputs
+    }
+
     // MARK: Card events
 
     private mutating func touchWait(_ wait: TouchGlassIPC.TouchWait, from connection: ConnectionID, now: Date) -> [HostOutput] {
@@ -202,8 +306,10 @@ public struct HostCoordinator: Sendable {
             operationOrder.append(wait.conn)
         }
         let start = wait.at.map { Date(timeIntervalSince1970: $0) } ?? now.addingTimeInterval(-TouchTiming.detectionThreshold)
-        let deadline = start.addingTimeInterval(Double(wait.timeoutMs) / 1000)
+        let timeout = touchTimeout ?? Double(wait.timeoutMs) / 1000
+        let deadline = start.addingTimeInterval(timeout)
         operation.touchDeadline = deadline
+        operation.touchTimeout = timeout
         operation.pinNeeded = false
         operations[wait.conn] = operation
 
@@ -223,7 +329,14 @@ public struct HostCoordinator: Sendable {
 
     private mutating func showTouch(_ conn: String, operation: CardOperation, deadline: Date, now: Date) -> [HostOutput] {
         shown = .touch(operation: conn)
-        let wait = TouchGlassCore.TouchWait(operation: operation.kind, cardSerial: operation.serial, deadline: deadline, shownAt: now)
+        let wait = TouchGlassCore.TouchWait(
+            operation: operation.kind,
+            cardSerial: operation.serial,
+            deadline: deadline,
+            shownAt: now,
+            duration: operation.touchTimeout ?? touchTimeout ?? TouchTiming.cardTimeout,
+            client: operation.client
+        )
         let expiry = max(0, deadline.timeIntervalSince(now)) + Self.touchExpiryGrace
         return [.panel(.show(.touchWait(wait))), .schedule(after: expiry, .touchExpired(operation: conn, deadline: deadline))]
     }
@@ -247,7 +360,7 @@ public struct HostCoordinator: Sendable {
         let kind = operation?.kind ?? .unknown
         var outputs: [HostOutput]
         let succeeded: Bool
-        switch Self.outcome(end) {
+        switch Self.outcome(end, touchTimeout: operation?.touchTimeout ?? touchTimeout ?? TouchTiming.cardTimeout) {
         case .success:
             shown = .result
             outputs = [.panel(.show(.success(kind)))]
@@ -284,15 +397,16 @@ public struct HostCoordinator: Sendable {
         static let pinBlocked = 130
     }
 
-    static func outcome(_ end: OpEnd) -> Outcome {
+    static func outcome(_ end: OpEnd, touchTimeout: TimeInterval = TouchTiming.cardTimeout) -> Outcome {
+        let timedOut = Failure.touchTimeout(seconds: Int(touchTimeout.rounded()))
         switch end.result {
         case .ok: return .success
         case .badPin: return .failure(.wrongPIN)
-        case .timeout: return .failure(.touchTimeout)
+        case .timeout: return .failure(timedOut)
         case .cancelled: return .silent
         case .error:
             switch end.code.map({ $0 & 0xFFFF }) {
-            case ErrorCode.timeout: return .failure(.touchTimeout)
+            case ErrorCode.timeout: return .failure(timedOut)
             case ErrorCode.badPIN: return .failure(.wrongPIN)
             case ErrorCode.canceled: return .silent
             case ErrorCode.cardRemoved, ErrorCode.cardNotPresent: return .failure(.cardRemoved)
@@ -318,8 +432,8 @@ public struct HostCoordinator: Sendable {
 
         // A retry of the passphrase that is showing: same prompt, with the agent's error. Only the pinentry
         // that owns the prompt may retry it; another connection must not receive the typed secret.
-        if case .passphrase(_, let shownConnection, _, _) = shown, shownConnection == connection {
-            let next = PassphraseRequest(description: request.desc ?? "", error: request.error)
+        if case .passphrase(_, let shownConnection, let previous, _) = shown, shownConnection == connection {
+            let next = PassphraseRequest(description: request.desc ?? "", error: request.error, client: previous.client)
             shown = .passphrase(requestID: request.id, connection: connection, request: next, submitted: false)
             return [.panel(.show(.passphrase(next))), .shakeField]
         }
@@ -334,11 +448,16 @@ public struct HostCoordinator: Sendable {
         let operationID = operationOrder.last { operations[$0]?.pinNeeded == true }
             ?? (request.fields != nil ? operationOrder.last : nil)
         let isCard = operationID != nil || request.fields != nil
+        // The agent names its client in the owner option: an exact answer, where the proxy's operation
+        // only allows a guess among the agent's clients.
+        let resolve: [HostOutput] = ClientQuery.ownerPID(request.owner).map {
+            [.resolveClient(.request(id: request.id, operation: operationID), .owner($0))]
+        } ?? []
 
         guard isCard else {
             let passphrase = PassphraseRequest(description: request.desc ?? "", error: request.error)
             shown = .passphrase(requestID: request.id, connection: connection, request: passphrase, submitted: false)
-            return [.panel(.show(.passphrase(passphrase)))]
+            return [.panel(.show(.passphrase(passphrase)))] + resolve
         }
 
         let operation = operationID.flatMap { operations[$0] }
@@ -347,10 +466,11 @@ public struct HostCoordinator: Sendable {
             operation: operation?.kind ?? .unknown,
             pin: text.localizedCaseInsensitiveContains("admin") ? .admin : .user,
             cardSerial: serial,
-            attemptsLeft: Self.attemptsLeft(in: request.desc)
+            attemptsLeft: Self.attemptsLeft(in: request.desc),
+            client: operation?.client
         )
         shown = .cardPIN(requestID: request.id, connection: connection, operation: operationID, request: pin, submitted: false)
-        return [.panel(.show(.pinEntry(pin)))]
+        return [.panel(.show(.pinEntry(pin)))] + resolve
     }
 
     private mutating func confirm(_ request: Confirm, from connection: ConnectionID) -> [HostOutput] {
