@@ -37,15 +37,13 @@ public final class ClientResolver: ClientResolving, @unchecked Sendable {
     public static let maxChainLength = 6
 
     private let processes: ProcessSource
-    private let files: FileSource
     private let uid: UInt32
     private let budget: Duration
     private let lock = NSLock()
     private var cachedAgents: [Int32] = []
 
-    public init(processes: ProcessSource = LibprocProcessSource(), files: FileSource = LocalFileSource(), uid: UInt32 = getuid(), budget: Duration = .milliseconds(50)) {
+    public init(processes: ProcessSource = LibprocProcessSource(), uid: UInt32 = getuid(), budget: Duration = .milliseconds(50)) {
         self.processes = processes
-        self.files = files
         self.uid = uid
         self.budget = budget
     }
@@ -144,6 +142,6 @@ public final class ClientResolver: ClientResolving, @unchecked Sendable {
             chain.append(ClientLabel.Link(name: record.name, argv: argv, cwd: processes.currentDirectory(current)))
             current = record.ppid
         }
-        return ClientLabel.label(chain: chain, files: files)
+        return ClientLabel.label(chain: chain)
     }
 }

@@ -39,16 +39,6 @@ final class FakeProcesses: ProcessSource, @unchecked Sendable {
     func unixSockets(_ pid: Int32) -> [UnixSocketRecord] { lock.withLock { entries[pid]?.sockets ?? [] } }
 }
 
-/// A file tree: directories and files with contents.
-struct FakeFiles: FileSource {
-    var directories: Set<String> = []
-    var files: [String: String] = [:]
-
-    func exists(_ path: String) -> Bool { directories.contains(path) || files[path] != nil }
-    func isDirectory(_ path: String) -> Bool { directories.contains(path) }
-    func contents(_ path: String) -> String? { files[path] }
-}
-
 @Suite struct ClientResolverTests {
     static let uid: UInt32 = 501
     static let agentPID: Int32 = 100
@@ -67,11 +57,9 @@ struct FakeFiles: FileSource {
         [UnixSocketRecord(pcb: pcb, peerPCB: agentPCB, peerPath: Self.socketDir + (ssh ? "/S.gpg-agent.ssh" : "/S.gpg-agent"))]
     }
 
-    func resolver(_ table: FakeProcesses, files: FakeFiles = FakeFiles(), budget: Duration = .seconds(5)) -> ClientResolver {
-        ClientResolver(processes: table, files: files, uid: Self.uid, budget: budget)
+    func resolver(_ table: FakeProcesses, budget: Duration = .seconds(5)) -> ClientResolver {
+        ClientResolver(processes: table, uid: Self.uid, budget: budget)
     }
-
-    let repo = FakeFiles(directories: ["/src/touchglass/.git"])
 
     /// A shell, a `git commit` in it, and the gpg it runs, connected to the agent.
     func commitTree(_ table: FakeProcesses, gpgPID: Int32 = 300, gitPID: Int32 = 200, start: Double = 2_000, gitArgv: [String] = ["git", "commit", "-m", "Example"], cwd: String = "/src/touchglass") {
@@ -86,17 +74,17 @@ struct FakeFiles: FileSource {
         let table = FakeProcesses()
         agent(table, connections: [(301, 300, false)])
         commitTree(table)
-        #expect(resolver(table, files: repo).label(for: .agentClient(ssh: false)) == "git commit · touchglass")
+        #expect(resolver(table).label(for: .agentClient(ssh: false)) == "git commit · touchglass")
         // The same client is not an SSH login.
-        #expect(resolver(table, files: repo).label(for: .agentClient(ssh: true)) == nil)
+        #expect(resolver(table).label(for: .agentClient(ssh: true)) == nil)
     }
 
     @Test func noAgentOrNoClientsGivesNoLabel() {
         let table = FakeProcesses()
         commitTree(table)
-        #expect(resolver(table, files: repo).label(for: .agentClient(ssh: false)) == nil)
+        #expect(resolver(table).label(for: .agentClient(ssh: false)) == nil)
         agent(table, connections: [])
-        #expect(resolver(table, files: repo).label(for: .agentClient(ssh: false)) == nil)
+        #expect(resolver(table).label(for: .agentClient(ssh: false)) == nil)
     }
 
     @Test func aLongLivedClientGivesWayToTheNewestOne() {
@@ -104,7 +92,7 @@ struct FakeFiles: FileSource {
         agent(table, connections: [(301, 300, false), (401, 400, false)])
         commitTree(table, start: 5_000)
         table.add(400, ppid: 50, name: "gpg-connect-agent", argv: ["gpg-connect-agent"], start: 1_000, sockets: client(pcb: 400, agentPCB: 401))
-        #expect(resolver(table, files: repo).label(for: .agentClient(ssh: false)) == "git commit · touchglass")
+        #expect(resolver(table).label(for: .agentClient(ssh: false)) == "git commit · touchglass")
     }
 
     @Test func clientsThatStartedTogetherAreAmbiguous() {
@@ -112,7 +100,7 @@ struct FakeFiles: FileSource {
         agent(table, connections: [(301, 300, false), (401, 400, false)])
         commitTree(table, start: 5_000)
         table.add(400, ppid: 50, name: "gpg", argv: ["gpg", "--decrypt", "notes.gpg"], start: 5_002, sockets: client(pcb: 400, agentPCB: 401))
-        #expect(resolver(table, files: repo).label(for: .agentClient(ssh: false)) == nil)
+        #expect(resolver(table).label(for: .agentClient(ssh: false)) == nil)
     }
 
     @Test func clientsThatStartedTogetherAndReadTheSameShareTheLabel() {
@@ -120,7 +108,7 @@ struct FakeFiles: FileSource {
         agent(table, connections: [(301, 300, false), (601, 600, false)])
         commitTree(table, start: 5_000)
         commitTree(table, gpgPID: 600, gitPID: 500, start: 5_001)
-        #expect(resolver(table, files: repo).label(for: .agentClient(ssh: false)) == "git commit · touchglass")
+        #expect(resolver(table).label(for: .agentClient(ssh: false)) == "git commit · touchglass")
     }
 
     @Test func sshClientOnTheSSHSocket() {
@@ -128,30 +116,30 @@ struct FakeFiles: FileSource {
         agent(table, connections: [(301, 300, false), (701, 700, true)])
         commitTree(table)
         table.add(700, ppid: 50, name: "ssh", argv: ["ssh", "-p", "22", "-i", "key", "-o", "X=Y", "host", "cmd"], sockets: client(pcb: 700, agentPCB: 701, ssh: true))
-        #expect(resolver(table, files: repo).label(for: .agentClient(ssh: true)) == "ssh host")
-        #expect(resolver(table, files: repo).label(for: .agentClient(ssh: false)) == "git commit · touchglass")
+        #expect(resolver(table).label(for: .agentClient(ssh: true)) == "ssh host")
+        #expect(resolver(table).label(for: .agentClient(ssh: false)) == "git commit · touchglass")
     }
 
     @Test func sshUnderGitPushReadsAsGit() {
         let table = FakeProcesses()
         agent(table, connections: [(701, 700, true)])
-        table.add(200, ppid: 50, name: "git", argv: ["git", "push", "-u", "origin", "main"], cwd: "/src/touchglass/Sources")
+        table.add(200, ppid: 50, name: "git", argv: ["git", "push", "-u", "origin", "main"], cwd: "/src/touchglass")
         table.add(700, ppid: 200, name: "ssh", argv: ["ssh", "-o", "SendEnv=GIT_PROTOCOL", "git@example.com", "git-receive-pack 'example/touchglass.git'"], sockets: client(pcb: 700, agentPCB: 701, ssh: true))
-        #expect(resolver(table, files: repo).label(for: .agentClient(ssh: true)) == "git push origin · touchglass")
+        #expect(resolver(table).label(for: .agentClient(ssh: true)) == "git push origin · touchglass")
     }
 
     @Test func expiredBudgetGivesNoLabel() {
         let table = FakeProcesses()
         agent(table, connections: [(301, 300, false)])
         commitTree(table)
-        #expect(resolver(table, files: repo, budget: .zero).label(for: .agentClient(ssh: false)) == nil)
+        #expect(resolver(table, budget: .zero).label(for: .agentClient(ssh: false)) == nil)
     }
 
     @Test func agentPIDIsCachedUntilItGoesAway() {
         let table = FakeProcesses()
         agent(table, connections: [(301, 300, false)])
         commitTree(table)
-        let resolver = resolver(table, files: repo)
+        let resolver = resolver(table)
         #expect(resolver.agentPIDs() == [Self.agentPID])
         table.remove(Self.agentPID)
         agent(table, connections: [(301, 300, false)], pid: 150)
@@ -164,7 +152,7 @@ struct FakeFiles: FileSource {
     @Test func ownerPIDIsLabelledWithoutAScan() {
         let table = FakeProcesses()
         commitTree(table)
-        #expect(resolver(table, files: repo).label(for: .owner(300)) == "git commit · touchglass")
+        #expect(resolver(table).label(for: .owner(300)) == "git commit · touchglass")
     }
 
     @Test func missingOrForeignProcessGivesNoLabel() {
@@ -192,8 +180,8 @@ struct FakeFiles: FileSource {
 
     // MARK: Labels
 
-    func label(_ chain: [ClientLabel.Link], files: FakeFiles = FakeFiles()) -> String? {
-        ClientLabel.label(chain: chain, files: files)
+    func label(_ chain: [ClientLabel.Link]) -> String? {
+        ClientLabel.label(chain: chain)
     }
 
     @Test func gpgRunByHand() {
@@ -207,12 +195,12 @@ struct FakeFiles: FileSource {
             .init(name: "gpg", argv: ["gpg", "-bsau", "KEY"]),
             .init(name: "git", argv: ["git", "-C", "path", "-c", "k=v", "--no-pager", "--git-dir=x", "--work-tree", "y", "commit", "--amend"], cwd: "/src/touchglass"),
         ]
-        #expect(label(chain, files: repo) == "git commit · touchglass")
+        #expect(label(chain) == "git commit · touchglass")
     }
 
     @Test func gitSubcommands() {
         func git(_ arguments: String...) -> String? {
-            label([.init(name: "git", argv: ["git"] + arguments, cwd: "/src/touchglass")], files: repo)
+            label([.init(name: "git", argv: ["git"] + arguments, cwd: "/src/touchglass")])
         }
         #expect(git("tag", "-s", "v1.0", "-m", "Release") == "git tag · touchglass")
         #expect(git("merge", "--no-ff", "feature") == "git merge · touchglass")
@@ -235,38 +223,16 @@ struct FakeFiles: FileSource {
         #expect(clone("-b", "main", "git@example.com:example/widget.git", "gadget") == "git clone · gadget")
     }
 
-    @Test func toplevelLookupThroughNestedDirectories() {
-        let files = FakeFiles(directories: ["/src/outer/.git", "/src/outer/vendor/inner/.git"])
-        func repoName(_ cwd: String) -> String? {
-            ClientLabel.Repository.find(from: cwd, files: files)?.name
+    @Test func repositoryIsTheGitProcessDirectory() {
+        func git(_ cwd: String, _ arguments: String...) -> String? {
+            label([.init(name: "gpg", argv: ["gpg", "-bsau", "KEY"]), .init(name: "git", argv: ["git"] + arguments, cwd: cwd)])
         }
-        #expect(repoName("/src/outer/Sources/Deep/Deeper") == "outer")
-        #expect(repoName("/src/outer/vendor/inner/lib") == "inner")
-        #expect(repoName("/src/outer") == "outer")
-        #expect(repoName("/elsewhere/project") == nil)
-        // A git command outside any repository still gets a label, without a name.
-        #expect(label([.init(name: "git", argv: ["git", "tag", "-v", "v1"], cwd: "/elsewhere")], files: files) == "git tag")
-    }
-
-    @Test func rebaseCountsCommitsLeftInAWorktree() {
-        // A worktree's `.git` is a file that points into the main repository's git directory.
-        let files = FakeFiles(
-            directories: ["/src/main/.git"],
-            files: [
-                "/src/wt-feature/.git": "gitdir: ../main/.git/worktrees/wt-feature\n",
-                "/src/main/.git/worktrees/wt-feature/rebase-merge/end": "5\n",
-                "/src/main/.git/worktrees/wt-feature/rebase-merge/msgnum": "3\n",
-            ]
-        )
-        let rebase = ClientLabel.Link(name: "git", argv: ["git", "rebase", "-i", "main"], cwd: "/src/wt-feature/Sources")
-        #expect(label([rebase], files: files) == "git rebase (2 left) · wt-feature")
-
-        // The last commit, or no readable state: no count.
-        var last = files
-        last.files["/src/main/.git/worktrees/wt-feature/rebase-merge/msgnum"] = "5"
-        #expect(label([rebase], files: last) == "git rebase · wt-feature")
-        let plain = FakeFiles(directories: ["/src/wt-feature/.git"])
-        #expect(label([rebase], files: plain) == "git rebase · wt-feature")
+        // git changes to the top level of the work tree, a linked worktree included, before it runs gpg.
+        #expect(git("/src/wt-feature", "rebase", "-i", "main") == "git rebase · wt-feature")
+        #expect(git("/src/outer/vendor/inner", "commit") == "git commit · inner")
+        // No directory, or the root: no name.
+        #expect(label([.init(name: "git", argv: ["git", "tag", "-v", "v1"])]) == "git tag")
+        #expect(git("/", "tag", "-s", "v1") == "git tag")
     }
 
     // MARK: ssh options

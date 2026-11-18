@@ -61,13 +61,6 @@ public protocol ProcessSource: Sendable {
     func unixSockets(_ pid: Int32) -> [UnixSocketRecord]
 }
 
-/// Read access to files, for finding a repository's top level and its rebase state.
-public protocol FileSource: Sendable {
-    func exists(_ path: String) -> Bool
-    func isDirectory(_ path: String) -> Bool
-    func contents(_ path: String) -> String?
-}
-
 /// The live process table, through libproc and `sysctl`. Processes of other users are unreadable and
 /// come back as `nil` or empty.
 public struct LibprocProcessSource: ProcessSource {
@@ -140,6 +133,8 @@ public struct LibprocProcessSource: ProcessSource {
         return ProcessArguments(executable: executable, argv: argv)
     }
 
+    /// The kernel's path for the process's working directory. A query of the process table: it opens and
+    /// checks nothing on disk.
     public func currentDirectory(_ pid: Int32) -> String? {
         var info = proc_vnodepathinfo()
         let size = Int32(MemoryLayout<proc_vnodepathinfo>.size)
@@ -180,27 +175,5 @@ public struct LibprocProcessSource: ProcessSource {
         withUnsafeBytes(of: &address) { raw in
             String(decoding: raw.dropFirst(2).prefix { $0 != 0 }, as: UTF8.self)
         }
-    }
-}
-
-/// The real file system.
-public struct LocalFileSource: FileSource {
-    public init() {}
-
-    public func exists(_ path: String) -> Bool {
-        FileManager.default.fileExists(atPath: path)
-    }
-
-    public func isDirectory(_ path: String) -> Bool {
-        var directory: ObjCBool = false
-        return FileManager.default.fileExists(atPath: path, isDirectory: &directory) && directory.boolValue
-    }
-
-    public func contents(_ path: String) -> String? {
-        // Rebase state and gitdir files are a few bytes; refuse anything large.
-        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
-        defer { try? handle.close() }
-        guard let data = try? handle.read(upToCount: 4096) else { return nil }
-        return String(data: data, encoding: .utf8)
     }
 }

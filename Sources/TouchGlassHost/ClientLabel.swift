@@ -1,7 +1,7 @@
 import Foundation
 
 /// Builds the short label that names what asked for a card operation, such as "git commit · touchglass"
-/// or "ssh build-box", from a process and its parents. Pure apart from the `FileSource` it reads.
+/// or "ssh build-box", from a process and its parents. Pure: it uses only what the process table gives.
 public enum ClientLabel {
     /// One process in the chain from the agent's client up through its parents.
     public struct Link: Sendable, Equatable {
@@ -22,10 +22,10 @@ public enum ClientLabel {
     ///
     /// The nearest git process wins, so `git push` over ssh reads as git. Otherwise an ssh client names
     /// its destination, and anything else its executable name.
-    public static func label(chain: [Link], files: FileSource) -> String? {
+    public static func label(chain: [Link]) -> String? {
         guard let client = chain.first else { return nil }
         if let git = chain.first(where: { executableName($0) == "git" }) {
-            return gitLabel(git, files: files)
+            return gitLabel(git)
         }
         if executableName(client) == "ssh" {
             if let host = SSHArguments.destination(Array(client.argv.dropFirst())) {
@@ -46,7 +46,7 @@ public enum ClientLabel {
 
     // MARK: git
 
-    static func gitLabel(_ git: Link, files: FileSource) -> String {
+    static func gitLabel(_ git: Link) -> String {
         let invocation = GitArguments.parse(Array(git.argv.dropFirst()))
         guard let command = invocation.command else { return "git" }
 
@@ -55,64 +55,22 @@ public enum ClientLabel {
             words += " \(remote)"
         }
 
-        let repository: Repository?
-        if command == "clone" {
-            repository = invocation.cloneTarget.map { Repository(name: $0, gitDirectory: nil) }
-        } else {
-            repository = git.cwd.flatMap { Repository.find(from: $0, files: files) }
-        }
-        if command == "rebase", let left = repository?.rebaseCommitsLeft(files: files), left > 0 {
-            words += " (\(left) left)"
-        }
-        guard let name = repository?.name, !name.isEmpty else { return words }
+        let name = command == "clone" ? invocation.cloneTarget : git.cwd.map(repositoryName)
+        guard let name, !name.isEmpty else { return words }
         return words + separator + name
     }
 
-    // MARK: Repository
-
-    struct Repository: Equatable {
-        var name: String
-        /// The git directory: `.git`, or the directory a `.git` file points to.
-        var gitDirectory: String?
-
-        /// The top level is the nearest directory at or above `directory` that contains a `.git` entry.
-        static func find(from directory: String, files: FileSource, maxDepth: Int = 64) -> Repository? {
-            var current = (directory as NSString).standardizingPath
-            for _ in 0..<maxDepth {
-                let dotGit = (current as NSString).appendingPathComponent(".git")
-                if files.exists(dotGit) {
-                    return Repository(name: (current as NSString).lastPathComponent, gitDirectory: gitDirectory(dotGit, files: files))
-                }
-                let parent = (current as NSString).deletingLastPathComponent
-                if parent == current || parent.isEmpty { return nil }
-                current = parent
-            }
-            return nil
-        }
-
-        /// A worktree or submodule has a `.git` file with a `gitdir:` line instead of a directory.
-        static func gitDirectory(_ dotGit: String, files: FileSource) -> String? {
-            if files.isDirectory(dotGit) { return dotGit }
-            guard let text = files.contents(dotGit),
-                  let line = text.split(whereSeparator: \.isNewline).first,
-                  line.hasPrefix("gitdir:") else { return nil }
-            let path = line.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespaces)
-            if path.hasPrefix("/") { return path }
-            let base = (dotGit as NSString).deletingLastPathComponent
-            return ((base as NSString).appendingPathComponent(path) as NSString).standardizingPath
-        }
-
-        /// Commits still to apply after the current one, from the merge backend's `end` and `msgnum`.
-        func rebaseCommitsLeft(files: FileSource) -> Int? {
-            guard let gitDirectory else { return nil }
-            let state = (gitDirectory as NSString).appendingPathComponent("rebase-merge")
-            func number(_ file: String) -> Int? {
-                files.contents((state as NSString).appendingPathComponent(file))
-                    .flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
-            }
-            guard let end = number("end"), let current = number("msgnum") else { return nil }
-            return max(0, end - current)
-        }
+    /// The repository's name, from the working directory of the git process alone. The lookup reads no
+    /// files: opening or even checking a path in the client's repository can raise a macOS privacy prompt
+    /// for a protected folder, or wait on an unreachable network volume.
+    ///
+    /// When git finds the repository by searching upwards, it changes to the top level of the working
+    /// tree before it runs a command (`setup_git_directory_gently` in git's `setup.c`), so for `git
+    /// commit`, `git tag` and `git rebase` the directory names the repository or worktree. With `GIT_DIR`
+    /// set and no work tree, git stays where it started, and the label names that directory instead.
+    static func repositoryName(_ directory: String) -> String {
+        let name = (directory as NSString).lastPathComponent
+        return name == "/" ? "" : name
     }
 }
 

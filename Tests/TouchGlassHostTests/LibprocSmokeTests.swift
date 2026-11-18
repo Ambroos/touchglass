@@ -62,7 +62,7 @@ import Testing
         }
 
         // The resolver sees this process as the agent and the child as its client.
-        let resolver = ClientResolver(processes: AgentRenamed(base: source, agent: getpid()), files: LocalFileSource(), uid: getuid(), budget: .seconds(2))
+        let resolver = ClientResolver(processes: AgentRenamed(base: source, agent: getpid()), uid: getuid(), budget: .seconds(2))
         let clients = try #require(resolver.agentClients(deadline: .now + .seconds(2)))
         #expect(clients.map(\.pid) == [child])
         #expect(clients.first?.ssh == false)

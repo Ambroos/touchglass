@@ -157,7 +157,7 @@ final class DemoRunner {
     private func client(_ scenario: DemoScenario) -> String? {
         if let client = options.client { return client }
         switch scenario {
-        case .touch: return "git rebase (3 left) · touchglass"
+        case .touch: return "git rebase · touchglass"
         case .ssh: return "ssh build-box"
         case .decrypt: return "gpg"
         case .client: return "git push origin · an-example-repository-with-a-rather-long-name"
