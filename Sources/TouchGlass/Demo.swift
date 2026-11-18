@@ -10,6 +10,7 @@ struct DemoOptions {
     var animationScale: Double = 1
     var showControls = true
     var focusReport = false
+    var settings = HostSettings()
 }
 
 enum DemoScenario: String, CaseIterable {
@@ -122,7 +123,7 @@ final class DemoRunner {
 
     init(options: DemoOptions) {
         self.options = options
-        controller = PanelController(animationScale: options.animationScale)
+        controller = PanelController(animationScale: options.animationScale, settings: options.settings)
 
         var actions = PanelActions()
         // The demo discards the secret without reading it.

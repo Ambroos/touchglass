@@ -25,6 +25,11 @@ let usage = """
       --slow <factor>           Slow panel animations down by this factor, to review them.
       --no-controls             Hide the demo controls window.
       --focus-report            Print whether the PIN panel took key focus.
+      --appearance <look>       smoked (default) or readable.
+      --glass-blur <points>     Experimental: set the glass blur radius (private API).
+
+    The host reads the same settings from host.conf in its support directory:
+    appearance = smoked|readable and glass-blur = default|<points>.
 
     In the demo, any text in the PIN field continues. Press Space with the demo controls
     window focused, or click Simulate Touch, to touch.
@@ -63,6 +68,13 @@ func parseArguments() -> (DemoScenario, DemoOptions) {
         case "--slow": options.animationScale = max(1, number(after: argument))
         case "--no-controls": options.showControls = false
         case "--focus-report": options.focusReport = true
+        case "--appearance":
+            guard !arguments.isEmpty, let appearance = PanelAppearance(rawValue: arguments.removeFirst()) else {
+                fail("--appearance needs smoked or readable.")
+            }
+            options.settings.appearance = appearance
+        case "--glass-blur":
+            options.settings.glassBlur = number(after: argument)
         case "-h", "--help":
             print(usage)
             exit(0)

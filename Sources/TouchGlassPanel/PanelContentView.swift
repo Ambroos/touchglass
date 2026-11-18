@@ -98,13 +98,22 @@ private struct StageView: View {
 
 struct GlyphView: View {
     let glyph: Glyph
+    @Environment(\.panelInk) private var ink
 
     var body: some View {
-        Image(systemName: Symbols.resolve(glyph.symbol, fallback: glyph.fallback))
-            .font(.system(size: glyph.pointSize))
-            .symbolRenderingMode(glyph.color == .multicolor ? .multicolor : .hierarchical)
-            .foregroundStyle(glyph.color.style)
-            .frame(height: glyph.pointSize + 8)
+        let name = Symbols.resolve(glyph.symbol, fallback: glyph.fallback)
+        Group {
+            switch ink {
+            case .standard:
+                Image(systemName: name)
+                    .font(.system(size: glyph.pointSize))
+                    .symbolRenderingMode(glyph.color == .multicolor ? .multicolor : .hierarchical)
+                    .foregroundStyle(glyph.color.style)
+            case .hdr:
+                HDRSymbol(name: name, pointSize: glyph.pointSize, color: glyph.color.hdrColor)
+            }
+        }
+        .frame(height: glyph.pointSize + 8)
     }
 }
 
@@ -117,6 +126,17 @@ enum Symbols {
 }
 
 extension ColorRole {
+    /// White for neutral glyphs; colours stay recognisable at a lower exposure.
+    var hdrColor: CGColor {
+        switch self {
+        case .primary, .accent: HDRInk.white()
+        case .success: HDRInk.color(.systemGreen, exposure: HDRInk.colourExposure)
+        case .failure: HDRInk.color(.systemRed, exposure: HDRInk.colourExposure)
+        case .warning: HDRInk.color(.systemOrange, exposure: HDRInk.colourExposure)
+        case .multicolor: HDRInk.color(.systemYellow, exposure: HDRInk.colourExposure)
+        }
+    }
+
     var style: AnyShapeStyle {
         switch self {
         case .primary, .multicolor: AnyShapeStyle(.primary)
@@ -136,11 +156,69 @@ struct TouchRingStage: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.panelInk) private var ink
 
     var body: some View {
         let elapsed = wait.map { now.timeIntervalSince($0.shownAt) } ?? 0
         let phase = EscalationPhase.at(elapsed: elapsed)
         let progress = completed ? 1 : (wait?.fractionRemaining(at: now) ?? 0)
+
+        Group {
+            switch ink {
+            case .standard: standard(elapsed: elapsed, phase: phase, progress: progress)
+            case .hdr: hdr(elapsed: elapsed, phase: phase, progress: progress)
+            }
+        }
+        .frame(width: PanelMetrics.ringDiameter, height: PanelMetrics.ringDiameter)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(verbatim: "Time left to touch"))
+        .accessibilityValue(Text(verbatim: wait.map { "\(Int($0.remaining(at: now).rounded(.up))) seconds" } ?? ""))
+        .accessibilityAddTraits(.updatesFrequently)
+    }
+
+    private var touchSymbol: String {
+        Symbols.resolve("hand.tap.fill", fallback: "dot.circle.and.hand.point.up.left.fill")
+    }
+
+    /// HDR ring and glyph drawn by Core Animation.
+    @ViewBuilder
+    private func hdr(elapsed: TimeInterval, phase: EscalationPhase, progress: Double) -> some View {
+        let role: ColorRole = completed ? .success : (phase == .urgent ? .warning : .accent)
+        ZStack {
+            if !completed, !reduceMotion, let ripple = Escalation.rippleProgress(elapsed: elapsed) {
+                Circle()
+                    .stroke(phase == .urgent ? Color.orange : Color.white, lineWidth: 1.5)
+                    .frame(width: PanelMetrics.ringDiameter, height: PanelMetrics.ringDiameter)
+                    .scaleEffect(1 + 0.35 * easeOut(ripple))
+                    .opacity(0.5 * (1 - ripple))
+                    .accessibilityHidden(true)
+            }
+            HDRRing(
+                progress: progress,
+                color: role.hdrColor,
+                trackColor: NSColor.white.withAlphaComponent(contrast == .increased ? 0.4 : 0.22).cgColor,
+                lineWidth: PanelMetrics.ringStroke
+            )
+            .frame(width: PanelMetrics.ringDiameter, height: PanelMetrics.ringDiameter)
+
+            ZStack {
+                HDRSymbol(name: completed ? "checkmark" : touchSymbol, pointSize: PanelMetrics.ringGlyphSize, weight: completed ? .semibold : .regular, color: role.hdrColor)
+                    .id(completed)
+                    .transition(.opacity.combined(with: .scale(scale: 0.7, anchor: .center)).animation(.easeOut(duration: 0.25)))
+            }
+            .keyframeAnimator(initialValue: 1.0, trigger: reduceMotion ? 0 : phase.rawValue) { content, scale in
+                content.scaleEffect(scale, anchor: .center)
+            } keyframes: { _ in
+                SpringKeyframe(1.0, duration: 0.01)
+                SpringKeyframe(1.18, duration: 0.15)
+                SpringKeyframe(1.0, duration: 0.35)
+            }
+            .accessibilityHidden(true)
+        }
+    }
+
+    @ViewBuilder
+    private func standard(elapsed: TimeInterval, phase: EscalationPhase, progress: Double) -> some View {
         let ringColor: Color = completed ? .green : (phase == .urgent ? .orange : .accentColor)
         let diameter = PanelMetrics.ringDiameter - PanelMetrics.ringStroke
 
@@ -175,11 +253,6 @@ struct TouchRingStage: View {
                 .animation(.easeOut(duration: 0.25), value: completed)
                 .accessibilityHidden(true)
         }
-        .frame(width: PanelMetrics.ringDiameter, height: PanelMetrics.ringDiameter)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(verbatim: "Time left to touch"))
-        .accessibilityValue(Text(verbatim: wait.map { "\(Int($0.remaining(at: now).rounded(.up))) seconds" } ?? ""))
-        .accessibilityAddTraits(.updatesFrequently)
     }
 
     private func easeOut(_ t: Double) -> Double {
@@ -191,14 +264,20 @@ struct TouchRingStage: View {
 
 struct TextBlock: View {
     let presentation: PanelPresentation
+    @Environment(\.panelInk) private var ink
 
     var body: some View {
         VStack(spacing: 4) {
-            Text(verbatim: presentation.title)
-                .font(.title2.weight(.semibold))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.85)
+            switch ink {
+            case .standard:
+                Text(verbatim: presentation.title)
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+            case .hdr:
+                HDRText(text: presentation.title, font: .systemFont(ofSize: 17, weight: .semibold), color: HDRInk.white(), minimumScaleFactor: 0.85)
+            }
             // The detail slot keeps its height when empty, so the stage does not move between states.
             Text(verbatim: presentation.detail ?? " ")
                 .font(.body)

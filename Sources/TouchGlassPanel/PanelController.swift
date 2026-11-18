@@ -20,8 +20,9 @@ public final class PanelController {
     private var autoClose: DispatchWorkItem?
     private var escalation: [DispatchWorkItem] = []
 
-    public init(animationScale: Double = 1) {
+    public init(animationScale: Double = 1, settings: HostSettings = HostSettings()) {
         model.animationScale = animationScale
+        model.appearance = settings.appearance
         let host = NSHostingView(rootView: PanelSurfaceView(model: model))
         host.sizingOptions = []
         host.frame = NSRect(origin: .zero, size: PanelMetrics.windowSize)

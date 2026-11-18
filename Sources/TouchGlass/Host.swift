@@ -24,7 +24,8 @@ func runHost() {
         FileHandle.standardError.write(Data("TouchGlass: cannot listen on \(IPCPaths.hostSocket): \(error)\n".utf8))
         exit(1)
     }
-    let session = HostSession(server: server, panel: PanelController())
+    let settings = HostSettings.load(path: IPCPaths.supportDirectory + "/host.conf")
+    let session = HostSession(server: server, panel: PanelController(settings: settings))
     session.start()
     hostSession = session
 

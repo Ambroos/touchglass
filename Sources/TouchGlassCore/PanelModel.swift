@@ -28,6 +28,8 @@ public final class PanelModel {
     public var shakeCount = 0
     /// Multiplies every panel animation duration. Demo mode uses it to slow animations down for review.
     public var animationScale: Double = 1
+    /// The panel's look.
+    public var appearance: PanelAppearance = .smoked
 
     @ObservationIgnored public var actions = PanelActions()
 

@@ -1,4 +1,4 @@
-import CoreGraphics
+import AppKit
 
 public enum PanelMetrics {
     /// The visible panel. Fixed for every state.
@@ -8,6 +8,9 @@ public enum PanelMetrics {
     /// The window never resizes; the panel animates inside it.
     public static let margin: CGFloat = 64
     public static let windowSize = CGSize(width: size.width + 2 * margin, height: size.height + 2 * margin)
+
+    /// The smoked glass tint: a warm near-black at 65%.
+    static let smokeColor = NSColor(srgbRed: 0.13, green: 0.12, blue: 0.11, alpha: 0.65)
 
     static let ringDiameter: CGFloat = 96
     static let ringStroke: CGFloat = 4
