@@ -3,8 +3,13 @@ import TouchGlassCore
 import TouchGlassPanel
 
 let usage = """
-    Usage: TouchGlass --demo [scenario] [options]
+    Usage: TouchGlass
+           TouchGlass --demo [scenario] [options]
            TouchGlass --samples
+           TouchGlass --lens-test
+
+    Without arguments, TouchGlass runs as the host: it listens for touchglass-pinentry and
+    touchglass-scdaemon on its socket and shows the panel for their prompts and card operations.
 
     Shows the TouchGlass panel with scripted states. No gpg and no card are involved.
 
@@ -66,7 +71,6 @@ func parseArguments() -> (DemoScenario, DemoOptions) {
         }
     }
 
-    // The IPC host is not built yet; demo mode is the only mode.
     guard let scenario else { fail("Nothing to do.") }
     return (scenario, options)
 }
@@ -74,6 +78,14 @@ func parseArguments() -> (DemoScenario, DemoOptions) {
 setvbuf(stdout, nil, _IOLBF, 0)
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
+
+if CommandLine.arguments.count == 1 || CommandLine.arguments.dropFirst().first == "--host" {
+    MainActor.assumeIsolated {
+        runHost()
+    }
+    app.run()
+    exit(0)
+}
 
 if CommandLine.arguments.dropFirst().first == "--samples" {
     MainActor.assumeIsolated {

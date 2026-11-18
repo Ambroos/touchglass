@@ -8,6 +8,7 @@ let package = Package(
         .executable(name: "TouchGlass", targets: ["TouchGlass"]),
         .library(name: "TouchGlassCore", targets: ["TouchGlassCore"]),
         .library(name: "TouchGlassPanel", targets: ["TouchGlassPanel"]),
+        .library(name: "TouchGlassHost", targets: ["TouchGlassHost"]),
         .executable(name: "touchglass-pinentry", targets: ["touchglass-pinentry"]),
         .library(name: "TouchGlassIPC", targets: ["TouchGlassIPC"]),
         .executable(name: "touchglass-scdaemon", targets: ["touchglass-scdaemon"]),
@@ -17,9 +18,15 @@ let package = Package(
         .target(name: "TouchGlassCore"),
         // SwiftUI views and the AppKit panel window.
         .target(name: "TouchGlassPanel", dependencies: ["TouchGlassCore"]),
-        // The app: argument parsing and demo mode.
-        .executableTarget(name: "TouchGlass", dependencies: ["TouchGlassCore", "TouchGlassPanel"]),
+        // The host: merges proxy and pinentry messages into panel events. Foundation only, no UI.
+        .target(name: "TouchGlassHost", dependencies: ["TouchGlassCore", "TouchGlassIPC"]),
+        // The app: the host with its panel, plus demo and sample modes.
+        .executableTarget(name: "TouchGlass", dependencies: ["TouchGlassCore", "TouchGlassPanel", "TouchGlassHost", "TouchGlassIPC"]),
         .testTarget(name: "TouchGlassCoreTests", dependencies: ["TouchGlassCore"]),
+        .testTarget(
+            name: "TouchGlassHostTests",
+            dependencies: ["TouchGlassHost", "TouchGlassCore", "TouchGlassIPC", "ScdTestSupport", "touchglass-scdaemon", "fake-scdaemon", "touchglass-pinentry"]
+        ),
         // Messages and newline-delimited JSON transport between the helpers and the host. Foundation and Darwin only.
         .target(name: "TouchGlassIPC"),
         .testTarget(name: "TouchGlassIPCTests", dependencies: ["TouchGlassIPC"]),

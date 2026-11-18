@@ -85,8 +85,13 @@ public enum Copy {
         return "\(attempts) attempts left"
     }
 
+    /// "YubiKey 12345678", or "YubiKey" when the serial is unknown.
+    public static func card(_ serial: String) -> String {
+        serial.isEmpty ? "YubiKey" : "YubiKey \(serial)"
+    }
+
     public static func touchDetail(_ wait: TouchWait) -> String {
-        let card = "YubiKey \(wait.cardSerial)"
+        let card = wait.cardSerial.isEmpty ? "your YubiKey" : "YubiKey \(wait.cardSerial)"
         switch wait.operation {
         case .sign: return "Signing with \(card)"
         case .sshLogin: return "SSH login with \(card)"
@@ -125,7 +130,7 @@ extension PanelPresentation {
             self.init(
                 stage: .glyph(Copy.operationGlyph(request.operation)),
                 title: Copy.pinTitle(request),
-                detail: "YubiKey \(request.cardSerial)",
+                detail: Copy.card(request.cardSerial),
                 detailIsError: false,
                 detailLineLimit: 2,
                 attemptsLine: Copy.attemptsLine(request.attemptsLeft),
