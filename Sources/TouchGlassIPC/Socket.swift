@@ -17,8 +17,8 @@ public enum IPCPaths {
     }
 }
 
-/// One connected Unix socket that carries IPC messages. Not thread-safe: use it from one thread at a time, or send from one thread and receive from another.
-public final class IPCConnection {
+/// One connected Unix socket that carries IPC messages. One thread may send while another receives; two threads must not send, or receive, at the same time.
+public final class IPCConnection: @unchecked Sendable {
     public let fileDescriptor: Int32
     private var reader = IPCLineReader()
     private var pending: [IPCMessage] = []
@@ -184,8 +184,8 @@ public enum IPCClient {
     }
 }
 
-/// A listening Unix socket for the host. Accepts only peers with the same user ID.
-public final class IPCServer {
+/// A listening Unix socket for the host. Accepts only peers with the same user ID. Call `accept` from one thread at a time.
+public final class IPCServer: @unchecked Sendable {
     public let path: String
     public let fileDescriptor: Int32
     private var isClosed = false
