@@ -22,6 +22,8 @@ public enum HostTimer: Sendable, Equatable {
     case rearm
     /// Give up on a submitted PIN whose card operation never reported back.
     case verifyWatchdog(requestID: String)
+    /// Drop an operation whose touch wait passed its deadline without an `op_end`.
+    case touchExpired(operation: String, deadline: Date)
 }
 
 /// What the coordinator wants done.
@@ -42,12 +44,17 @@ public struct HostCoordinator: Sendable {
     /// Delay before showing a queued touch wait after the previous operation ended.
     public static let rearmAfterSuccess: TimeInterval = 0.5
     public static let rearmAfterFailure: TimeInterval = 1.5
+    /// How long after a touch deadline the coordinator waits for the card's own timeout reply before it
+    /// drops the operation.
+    public static let touchExpiryGrace: TimeInterval = 2
 
     struct CardOperation: Sendable, Equatable {
         var kind: TouchGlassCore.OperationKind
         var serial: String
         var pinNeeded = false
         var touchDeadline: Date?
+        /// The host connection of the proxy that reports this operation. Its operations end when it closes.
+        var reporter: ConnectionID?
     }
 
     enum Shown: Sendable, Equatable {
@@ -75,20 +82,21 @@ public struct HostCoordinator: Sendable {
     public mutating func handle(_ message: IPCMessage, from connection: ConnectionID, now: Date) -> [HostOutput] {
         switch message {
         case .opStart(let start):
-            operations[start.conn] = CardOperation(kind: Self.kind(start.op), serial: Self.displaySerial(start.serial))
+            operations[start.conn] = CardOperation(kind: Self.kind(start.op), serial: Self.displaySerial(start.serial), reporter: connection)
             operationOrder.removeAll { $0 == start.conn }
             operationOrder.append(start.conn)
             return []
         case .pinNeeded(let ref):
             // The touch wait, if any, was a false start: the card asks for the PIN first.
             operations[ref.conn]?.pinNeeded = true
+            operations[ref.conn]?.reporter = connection
             operations[ref.conn]?.touchDeadline = nil
             queuedTouch.removeAll { $0 == ref.conn }
             return []
         case .pinSent:
             return []
         case .touchWait(let wait):
-            return touchWait(wait, now: now)
+            return touchWait(wait, from: connection, now: now)
         case .opEnd(let end):
             return operationEnded(end)
         case .getPin(let request):
@@ -104,10 +112,17 @@ public struct HostCoordinator: Sendable {
         }
     }
 
-    /// A connection closed. Prompts it owned that the user has not answered are withdrawn.
+    /// A connection closed. Operations its proxy reported end silently: a proxy that stops sends no
+    /// `op_end`. Prompts it owned that the user has not answered are withdrawn.
     public mutating func connectionClosed(_ connection: ConnectionID) -> [HostOutput] {
-        guard let shown, let id = Self.requestID(of: shown), Self.connection(of: shown) == connection else { return [] }
-        return requestEnded(id)
+        var outputs: [HostOutput] = []
+        for conn in operationOrder where operations[conn]?.reporter == connection {
+            outputs += operationEnded(OpEnd(conn: conn, result: .cancelled))
+        }
+        if let shown, let id = Self.requestID(of: shown), Self.connection(of: shown) == connection {
+            outputs += requestEnded(id)
+        }
+        return Self.mergingRearms(outputs)
     }
 
     // MARK: User actions
@@ -134,20 +149,21 @@ public struct HostCoordinator: Sendable {
                 return []
             }
             shown = nil
-            return [.reply(connection, .cancelled(RequestRef(id: id))), .panel(.dismiss)]
+            return [.reply(connection, .cancelled(RequestRef(id: id))), .panel(.dismiss)] + rearmIfQueued()
         case .confirm:
             switch shown {
             case .confirm(let id, let connection), .message(let id, let connection):
                 shown = nil
-                return [.reply(connection, .confirmed(RequestRef(id: id))), .panel(.dismiss)]
+                return [.reply(connection, .confirmed(RequestRef(id: id))), .panel(.dismiss)] + rearmIfQueued()
             default:
                 return []
             }
         case .hide:
             return [.panel(.userHid)]
         case .dismiss:
-            if case .result = shown { shown = nil }
-            return []
+            guard case .result = shown else { return [] }
+            shown = nil
+            return rearmIfQueued()
         }
     }
 
@@ -170,14 +186,18 @@ public struct HostCoordinator: Sendable {
         case .verifyWatchdog(let requestID):
             guard case .cardPIN(requestID, _, _, _, true) = shown else { return [] }
             shown = nil
-            return [.panel(.dismiss)]
+            return [.panel(.dismiss)] + rearmIfQueued()
+        case .touchExpired(let conn, let deadline):
+            guard let operation = operations[conn], operation.touchDeadline == deadline else { return [] }
+            return operationEnded(OpEnd(conn: conn, result: .cancelled))
         }
     }
 
     // MARK: Card events
 
-    private mutating func touchWait(_ wait: TouchGlassIPC.TouchWait, now: Date) -> [HostOutput] {
+    private mutating func touchWait(_ wait: TouchGlassIPC.TouchWait, from connection: ConnectionID, now: Date) -> [HostOutput] {
         var operation = operations[wait.conn] ?? CardOperation(kind: .unknown, serial: "")
+        operation.reporter = connection
         if operations[wait.conn] == nil {
             operationOrder.append(wait.conn)
         }
@@ -204,7 +224,8 @@ public struct HostCoordinator: Sendable {
     private mutating func showTouch(_ conn: String, operation: CardOperation, deadline: Date, now: Date) -> [HostOutput] {
         shown = .touch(operation: conn)
         let wait = TouchGlassCore.TouchWait(operation: operation.kind, cardSerial: operation.serial, deadline: deadline, shownAt: now)
-        return [.panel(.show(.touchWait(wait)))]
+        let expiry = max(0, deadline.timeIntervalSince(now)) + Self.touchExpiryGrace
+        return [.panel(.show(.touchWait(wait))), .schedule(after: expiry, .touchExpired(operation: conn, deadline: deadline))]
     }
 
     private mutating func operationEnded(_ end: OpEnd) -> [HostOutput] {
@@ -218,7 +239,10 @@ public struct HostCoordinator: Sendable {
         case .cardPIN(_, _, let conn?, _, true): isShown = conn == end.conn
         default: isShown = false
         }
-        guard isShown else { return [] }
+        guard isShown else {
+            // A touch wait that never showed, such as one queued behind a prompt, can't leave the panel stuck.
+            return shown == nil || shown == .result ? rearmIfQueued() : []
+        }
 
         let kind = operation?.kind ?? .unknown
         var outputs: [HostOutput]
@@ -292,8 +316,9 @@ public struct HostCoordinator: Sendable {
     private mutating func getPin(_ request: GetPin, from connection: ConnectionID) -> [HostOutput] {
         let text = [request.title, request.desc, request.prompt].compactMap { $0 }.joined(separator: "\n")
 
-        // A retry of the passphrase that is showing: same prompt, with the agent's error.
-        if case .passphrase(_, let shownConnection, _, _) = shown, shownConnection == connection || request.error != nil {
+        // A retry of the passphrase that is showing: same prompt, with the agent's error. Only the pinentry
+        // that owns the prompt may retry it; another connection must not receive the typed secret.
+        if case .passphrase(_, let shownConnection, _, _) = shown, shownConnection == connection {
             let next = PassphraseRequest(description: request.desc ?? "", error: request.error)
             shown = .passphrase(requestID: request.id, connection: connection, request: next, submitted: false)
             return [.panel(.show(.passphrase(next))), .shakeField]
@@ -367,7 +392,24 @@ public struct HostCoordinator: Sendable {
             return []
         }
         shown = nil
-        return [.panel(.dismiss)]
+        return [.panel(.dismiss)] + rearmIfQueued()
+    }
+
+    /// Schedules the next queued touch wait once nothing holds the panel. Every path that clears `shown`
+    /// calls this, so a touch wait queued behind a prompt shows however the prompt ends.
+    private func rearmIfQueued() -> [HostOutput] {
+        guard !queuedTouch.isEmpty, shown == nil || shown == .result else { return [] }
+        return [.schedule(after: Self.rearmAfterSuccess, .rearm)]
+    }
+
+    /// Keeps the first `.rearm` and drops the rest, for a step that ends several operations at once.
+    static func mergingRearms(_ outputs: [HostOutput]) -> [HostOutput] {
+        var seen = false
+        return outputs.filter {
+            guard case .schedule(_, .rearm) = $0 else { return true }
+            defer { seen = true }
+            return !seen
+        }
     }
 
     // MARK: Helpers
