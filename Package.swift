@@ -8,6 +8,7 @@ let package = Package(
         .executable(name: "TouchGlass", targets: ["TouchGlass"]),
         .library(name: "TouchGlassCore", targets: ["TouchGlassCore"]),
         .library(name: "TouchGlassPanel", targets: ["TouchGlassPanel"]),
+        .executable(name: "touchglass-pinentry", targets: ["touchglass-pinentry"]),
         .library(name: "TouchGlassIPC", targets: ["TouchGlassIPC"]),
     ],
     targets: [
@@ -21,5 +22,8 @@ let package = Package(
         // Messages and newline-delimited JSON transport between the helpers and the host. Foundation and Darwin only.
         .target(name: "TouchGlassIPC"),
         .testTarget(name: "TouchGlassIPCTests", dependencies: ["TouchGlassIPC"]),
+        // The pinentry-program: an Assuan pinentry server on stdio that forwards prompts to the host.
+        .executableTarget(name: "touchglass-pinentry", dependencies: ["TouchGlassIPC"]),
+        .testTarget(name: "PinentryTests", dependencies: ["touchglass-pinentry", "TouchGlassIPC"]),
     ]
 )
