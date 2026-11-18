@@ -2,17 +2,17 @@ import Foundation
 
 /// The panel's look.
 public enum PanelAppearance: String, Sendable, Equatable, CaseIterable {
-    /// Clear glass with a dark smoke tint, HDR white title, glyphs and ring. The default.
+    /// Clear glass with dark smoke, HDR white title, glyphs and ring.
     case smoked
-    /// Regular glass without smoke, for the most legible text.
+    /// Regular glass without smoke, for the most legible text. The default.
     case readable
 }
 
 /// Host settings from `host.conf`: one `key = value` per line, `#` starts a comment line.
 public struct HostSettings: Sendable, Equatable {
-    public var appearance: PanelAppearance = .smoked
+    public var appearance: PanelAppearance = .readable
 
-    public init(appearance: PanelAppearance = .smoked) {
+    public init(appearance: PanelAppearance = .readable) {
         self.appearance = appearance
     }
 

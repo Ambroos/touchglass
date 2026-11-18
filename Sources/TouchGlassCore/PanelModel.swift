@@ -29,7 +29,7 @@ public final class PanelModel {
     /// Multiplies every panel animation duration. Demo mode uses it to slow animations down for review.
     public var animationScale: Double = 1
     /// The panel's look.
-    public var appearance: PanelAppearance = .smoked
+    public var appearance: PanelAppearance = .readable
 
     @ObservationIgnored public var actions = PanelActions()
 

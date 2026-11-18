@@ -25,7 +25,7 @@ let usage = """
       --slow <factor>           Slow panel animations down by this factor, to review them.
       --no-controls             Hide the demo controls window.
       --focus-report            Print whether the PIN panel took key focus.
-      --appearance <look>       smoked (default) or readable.
+      --appearance <look>       readable (default) or smoked.
 
     The host reads the same settings from host.conf in its support directory:
     appearance = smoked|readable.

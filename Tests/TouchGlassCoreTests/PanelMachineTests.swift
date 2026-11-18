@@ -101,10 +101,11 @@ import Testing
     @Test func parsesKeysCommentsAndBadValues() {
         let settings = HostSettings.parse("""
             # comment
-            appearance = readable
+            appearance = smoked
             unknown = 1
             """)
-        #expect(settings == HostSettings(appearance: .readable))
+        #expect(settings == HostSettings(appearance: .smoked))
+        #expect(HostSettings().appearance == .readable)
         #expect(HostSettings.parse("appearance = sparkly") == HostSettings())
         #expect(HostSettings.load(path: "/nonexistent/host.conf") == HostSettings())
     }

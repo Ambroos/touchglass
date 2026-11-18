@@ -96,7 +96,7 @@ The host reads `~/Library/Application Support/TouchGlass/host.conf`, one `key = 
 
 | Key | Values | Effect |
 | --- | --- | --- |
-| `appearance` | `smoked` (default), `readable` | Smoked clear glass with HDR white text, or regular glass with standard label colours in light mode. |
+| `appearance` | `readable` (default), `smoked` | Regular glass with standard label colours in light mode, or smoked clear glass with HDR white text. |
 
 The demo takes the same setting as `--appearance`.
 
