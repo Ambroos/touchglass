@@ -12,32 +12,43 @@ public enum MaterialSamples {
     /// How readability is helped on top of the glass.
     public enum Shading: Equatable {
         case none
-        /// The glass's own `tintColor`, warm neutral, at this opacity.
+        /// The glass's own `tintColor`, warm neutral following the appearance, at this opacity.
         case tint(Double)
-        /// A translucent warm-neutral fill between the glass and the content.
-        case fill(Double)
-        /// A feathered warm-neutral fill behind the text only; the rim stays clear.
-        case centreFill(Double)
-        /// A feathered thin material behind the text only; the rim stays clear.
-        case centreFrost
+        /// The glass's own `tintColor`, a warm near-black in both appearances, at this opacity.
+        case darkTint(Double)
+    }
+
+    /// How the ring, glyph and text are drawn.
+    public enum Ink: Equatable {
+        /// The panel's own semantic colours.
+        case standard
+        /// HDR white for glyph, ring and text.
+        case hdrWhite
+        /// HDR light blue for glyph and ring, HDR white text.
+        case hdrBlue
     }
 
     public struct Sample {
+        public var label: String
         public var style: NSGlassEffectView.Style
         public var shading: Shading
+        public var ink: Ink
+        /// A wide, soft, unoffset shadow behind the glyph and text only.
+        public var textShadow: Bool
         public var summary: String
     }
 
     public static let samples: [Sample] = [
-        Sample(style: .clear, shading: .none, summary: "Clear glass, no shading (G, the lens reference)"),
-        Sample(style: .clear, shading: .tint(0.15), summary: "Clear glass, glass tint 15% warm neutral"),
-        Sample(style: .clear, shading: .tint(0.3), summary: "Clear glass, glass tint 30% warm neutral"),
-        Sample(style: .clear, shading: .tint(0.5), summary: "Clear glass, glass tint 50% warm neutral"),
-        Sample(style: .clear, shading: .fill(0.25), summary: "Clear glass, smoke fill layer 25% under the content"),
-        Sample(style: .clear, shading: .fill(0.45), summary: "Clear glass, smoke fill layer 45% under the content"),
-        Sample(style: .clear, shading: .centreFill(0.5), summary: "Clear glass, feathered smoke 50% behind the text only, rim clear"),
-        Sample(style: .clear, shading: .centreFrost, summary: "Clear glass, feathered thin-material frost behind the text only, rim clear"),
-        Sample(style: .regular, shading: .none, summary: "Regular glass, no shading (reference)"),
+        Sample(label: "A", style: .clear, shading: .tint(0.62), ink: .standard, textShadow: false,
+               summary: "Clear glass, glass tint 62% warm neutral (sample 4, smokier)"),
+        Sample(label: "B", style: .clear, shading: .tint(0.62), ink: .standard, textShadow: true,
+               summary: "A plus a wide soft shadow behind the glyph and text"),
+        Sample(label: "C", style: .clear, shading: .darkTint(0.62), ink: .hdrWhite, textShadow: true,
+               summary: "Clear glass, dark smoke tint 62%, HDR white glyph, ring and text, wide soft shadow"),
+        Sample(label: "D", style: .clear, shading: .darkTint(0.62), ink: .hdrBlue, textShadow: true,
+               summary: "C with an HDR light-blue glyph and ring, HDR white text"),
+        Sample(label: "E", style: .regular, shading: .none, ink: .hdrWhite, textShadow: true,
+               summary: "Regular glass (sample 9) with C's HDR white text and wide soft shadow"),
     ]
 
     static let size = CGSize(width: 240, height: 216)
@@ -47,6 +58,10 @@ public enum MaterialSamples {
 
     /// Warm neutral that follows the appearance: a warm off-white in light mode, a warm
     /// near-black in dark mode, so text contrast improves in both.
+    static func darkSmoke(_ opacity: Double) -> NSColor {
+        NSColor(srgbRed: 0.13, green: 0.12, blue: 0.11, alpha: opacity)
+    }
+
     static func smoke(_ opacity: Double) -> NSColor {
         NSColor(name: nil) { appearance in
             if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
@@ -68,10 +83,13 @@ public enum MaterialSamples {
         let left = (screen.midX - gridWidth / 2).rounded()
         let top = (screen.midY + gridHeight / 2).rounded()
 
+        for screen in NSScreen.screens {
+            print("Screen \(screen.localizedName): EDR headroom now \(screen.maximumExtendedDynamicRangeColorComponentValue), potential \(screen.maximumPotentialExtendedDynamicRangeColorComponentValue). HDR shows only when it is above 1.0.")
+        }
         print("Click a sample to make it key before judging it: the lens only shows on the key window.")
         for (index, sample) in samples.enumerated() {
             let number = index + 1
-            print("\(number): \(sample.summary)")
+            print("\(sample.label): \(sample.summary)")
             let column = index % columns
             let row = index / columns
             let origin = NSPoint(
@@ -137,10 +155,12 @@ public enum MaterialSamples {
         let glass = NSGlassEffectView(frame: NSRect(origin: .zero, size: size))
         glass.style = sample.style
         glass.cornerRadius = cornerRadius
-        if case .tint(let opacity) = sample.shading {
-            glass.tintColor = smoke(opacity)
+        switch sample.shading {
+        case .none: glass.tintColor = nil
+        case .tint(let opacity): glass.tintColor = smoke(opacity)
+        case .darkTint(let opacity): glass.tintColor = darkSmoke(opacity)
         }
-        let host = DraggableHostingView(rootView: SampleContent(number: number, shading: sample.shading))
+        let host = DraggableHostingView(rootView: SampleContent(label: sample.label, ink: sample.ink, textShadow: sample.textShadow))
         host.sizingOptions = []
         host.frame = NSRect(origin: .zero, size: size)
         glass.contentView = host
@@ -159,10 +179,11 @@ private final class DraggableHostingView<Content: View>: NSHostingView<Content> 
     override var mouseDownCanMoveWindow: Bool { true }
 }
 
-/// The touch-step content at a fixed moment, with the sample's number.
+/// The touch-step content at a fixed moment, with the sample's label.
 private struct SampleContent: View {
-    let number: Int
-    let shading: MaterialSamples.Shading
+    let label: String
+    let ink: MaterialSamples.Ink
+    let textShadow: Bool
 
     private static let now = Date()
     private static let wait = TouchWait(
@@ -172,16 +193,23 @@ private struct SampleContent: View {
         shownAt: now.addingTimeInterval(-4.5)
     )
 
+    /// HDR white: SDR white pushed one stop (2x linear) above SDR peak white.
+    private static let hdrWhite = Color.white.exposureAdjust(1)
+    private static let hdrBlue = Color(red: 0.62, green: 0.82, blue: 1.0).exposureAdjust(1)
+
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: MaterialSamples.cornerRadius, style: .continuous)
-        let content = VStack(spacing: 12) {
-            TouchRingStage(wait: Self.wait, completed: false, now: Self.now)
+        VStack(spacing: 12) {
+            ring
                 .scaleEffect(0.8)
                 .frame(height: 80)
-            TextBlock(presentation: PanelPresentation(.touchWait(Self.wait)))
+                .modifier(SoftShadow(enabled: textShadow))
+            text
+                .modifier(SoftShadow(enabled: textShadow))
         }
         .padding(.horizontal, 16)
         .frame(width: MaterialSamples.size.width, height: MaterialSamples.size.height)
+        // Lets the HDR colours render above SDR white on a display with headroom.
+        .allowedDynamicRange(.high)
         .overlay(alignment: .topLeading) {
             Button { NSApp.terminate(nil) } label: {
                 Image(systemName: "xmark")
@@ -195,37 +223,71 @@ private struct SampleContent: View {
             .padding(12)
         }
         .overlay(alignment: .topTrailing) {
-            Text(verbatim: "\(number)")
-                .font(.title3.weight(.semibold).monospacedDigit())
+            Text(verbatim: label)
+                .font(.title3.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .padding(.top, 10)
                 .padding(.trailing, 14)
         }
+    }
 
-        content.background { shade(in: shape) }
+    @ViewBuilder
+    private var ring: some View {
+        switch ink {
+        case .standard:
+            TouchRingStage(wait: Self.wait, completed: false, now: Self.now)
+        case .hdrWhite, .hdrBlue:
+            let accent = ink == .hdrBlue ? Self.hdrBlue : Self.hdrWhite
+            let diameter = PanelMetrics.ringDiameter - PanelMetrics.ringStroke
+            ZStack {
+                Circle()
+                    .stroke(Color.white.opacity(0.22), lineWidth: PanelMetrics.ringStroke)
+                    .frame(width: diameter, height: diameter)
+                Circle()
+                    .trim(from: 0, to: Self.wait.fractionRemaining(at: Self.now))
+                    .stroke(accent, style: StrokeStyle(lineWidth: PanelMetrics.ringStroke, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .frame(width: diameter, height: diameter)
+                Image(systemName: "hand.tap.fill")
+                    .font(.system(size: PanelMetrics.ringGlyphSize))
+                    .foregroundStyle(accent)
+            }
+            .frame(width: PanelMetrics.ringDiameter, height: PanelMetrics.ringDiameter)
+        }
+    }
+
+    @ViewBuilder
+    private var text: some View {
+        switch ink {
+        case .standard:
+            TextBlock(presentation: PanelPresentation(.touchWait(Self.wait)))
+        case .hdrWhite, .hdrBlue:
+            let presentation = PanelPresentation(.touchWait(Self.wait))
+            VStack(spacing: 4) {
+                Text(verbatim: presentation.title)
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(Self.hdrWhite)
+                Text(verbatim: presentation.detail ?? "")
+                    .font(.body)
+                    .foregroundStyle(Self.hdrWhite.opacity(0.78))
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
+            .multilineTextAlignment(.center)
+        }
     }
 }
 
-extension SampleContent {
-    @ViewBuilder
-    fileprivate func shade(in shape: RoundedRectangle) -> some View {
-        // Feathered region behind the ring and text, leaving about 20 pt of rim clear.
-        let feathered = RoundedRectangle(cornerRadius: 40, style: .continuous)
-            .padding(22)
-            .blur(radius: 14)
-        switch shading {
-        case .none, .tint:
-            Color.clear
-        case .fill(let opacity):
-            shape.fill(Color(nsColor: MaterialSamples.smoke(opacity)))
-        case .centreFill(let opacity):
-            Rectangle()
-                .fill(Color(nsColor: MaterialSamples.smoke(opacity)))
-                .mask(feathered)
-        case .centreFrost:
-            Rectangle()
-                .fill(.ultraThinMaterial)
-                .mask(feathered)
+/// A light, wide, unoffset smoky shadow behind glyphs and text, for contrast over busy content.
+private struct SoftShadow: ViewModifier {
+    let enabled: Bool
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content
+                .shadow(color: Color(white: 0.1).opacity(0.35), radius: 14, x: 0, y: 0)
+        } else {
+            content
         }
     }
 }
