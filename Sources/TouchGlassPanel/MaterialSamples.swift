@@ -3,44 +3,64 @@ import SwiftUI
 import TouchGlassCore
 
 /// Sample panels for choosing the panel material. Each sample is its own borderless window, so
-/// each one refracts or blurs the real content behind it. Drag a sample by its background.
+/// each one refracts the real content behind it. Drag a sample by its background.
+///
+/// The glass looks different in a key window: `.clear` glass gets edge refraction and almost no
+/// blur only while its window is key. Click a sample before judging it.
 @MainActor
 public enum MaterialSamples {
-    public enum Material: CaseIterable {
-        case appKitRegular
-        case appKitClear
-        case appKitRegularTinted
-        case swiftUIRegular
-        case swiftUIClear
-        case swiftUIRegularInteractive
-        case visualEffectHUD
-        case visualEffectPopover
-
-        public var summary: String {
-            switch self {
-            case .appKitRegular: "NSGlassEffectView, style .regular, no tint"
-            case .appKitClear: "NSGlassEffectView, style .clear, no tint"
-            case .appKitRegularTinted: "NSGlassEffectView, style .regular, accent tint at 8% (reference only)"
-            case .swiftUIRegular: "SwiftUI glassEffect(.regular)"
-            case .swiftUIClear: "SwiftUI glassEffect(.clear)"
-            case .swiftUIRegularInteractive: "SwiftUI glassEffect(.regular.interactive())"
-            case .visualEffectHUD: "NSVisualEffectView, material .hudWindow (pre-Liquid Glass baseline)"
-            case .visualEffectPopover: "NSVisualEffectView, material .popover (pre-Liquid Glass baseline)"
-            }
-        }
+    /// How readability is helped on top of the glass.
+    public enum Shading: Equatable {
+        case none
+        /// The glass's own `tintColor`, warm neutral, at this opacity.
+        case tint(Double)
+        /// A translucent warm-neutral fill between the glass and the content.
+        case fill(Double)
+        /// A feathered warm-neutral fill behind the text only; the rim stays clear.
+        case centreFill(Double)
+        /// A feathered thin material behind the text only; the rim stays clear.
+        case centreFrost
     }
+
+    public struct Sample {
+        public var style: NSGlassEffectView.Style
+        public var shading: Shading
+        public var summary: String
+    }
+
+    public static let samples: [Sample] = [
+        Sample(style: .clear, shading: .none, summary: "Clear glass, no shading (G, the lens reference)"),
+        Sample(style: .clear, shading: .tint(0.15), summary: "Clear glass, glass tint 15% warm neutral"),
+        Sample(style: .clear, shading: .tint(0.3), summary: "Clear glass, glass tint 30% warm neutral"),
+        Sample(style: .clear, shading: .tint(0.5), summary: "Clear glass, glass tint 50% warm neutral"),
+        Sample(style: .clear, shading: .fill(0.25), summary: "Clear glass, smoke fill layer 25% under the content"),
+        Sample(style: .clear, shading: .fill(0.45), summary: "Clear glass, smoke fill layer 45% under the content"),
+        Sample(style: .clear, shading: .centreFill(0.5), summary: "Clear glass, feathered smoke 50% behind the text only, rim clear"),
+        Sample(style: .clear, shading: .centreFrost, summary: "Clear glass, feathered thin-material frost behind the text only, rim clear"),
+        Sample(style: .regular, shading: .none, summary: "Regular glass, no shading (reference)"),
+    ]
 
     static let size = CGSize(width: 240, height: 216)
     static let cornerRadius: CGFloat = 22
     private static var windows: [NSPanel] = []
     private static var keyMonitor: Any?
 
-    /// Opens one window per material, in a grid around the centre of the main screen, and
-    /// prints which number is which. Esc or a close button quits.
+    /// Warm neutral that follows the appearance: a warm off-white in light mode, a warm
+    /// near-black in dark mode, so text contrast improves in both.
+    static func smoke(_ opacity: Double) -> NSColor {
+        NSColor(name: nil) { appearance in
+            if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                return NSColor(srgbRed: 0.13, green: 0.12, blue: 0.11, alpha: opacity)
+            }
+            return NSColor(srgbRed: 0.985, green: 0.972, blue: 0.955, alpha: opacity)
+        }
+    }
+
+    /// Opens one window per sample, in a grid around the centre of the main screen, and prints
+    /// which number is which. Esc or a close button quits.
     public static func show() {
-        let materials = Material.allCases
-        let columns = 4
-        let rows = (materials.count + columns - 1) / columns
+        let columns = 3
+        let rows = (samples.count + columns - 1) / columns
         let gap: CGFloat = 24
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let gridWidth = CGFloat(columns) * size.width + CGFloat(columns - 1) * gap
@@ -48,21 +68,34 @@ public enum MaterialSamples {
         let left = (screen.midX - gridWidth / 2).rounded()
         let top = (screen.midY + gridHeight / 2).rounded()
 
-        for (index, material) in materials.enumerated() {
+        print("Click a sample to make it key before judging it: the lens only shows on the key window.")
+        for (index, sample) in samples.enumerated() {
             let number = index + 1
-            print("\(number): \(material.summary)")
+            print("\(number): \(sample.summary)")
             let column = index % columns
             let row = index / columns
             let origin = NSPoint(
                 x: left + CGFloat(column) * (size.width + gap),
                 y: top - CGFloat(row + 1) * size.height - CGFloat(row) * gap
             )
-            let window = makeWindow(material: material, number: number)
+            let window = makeWindow(sample: sample, number: number)
             window.setFrameOrigin(origin)
             window.orderFrontRegardless()
             windows.append(window)
         }
-        windows.first?.makeKey()
+        let env = ProcessInfo.processInfo.environment
+        if let key = env["TOUCHGLASS_KEY_SAMPLE"].flatMap(Int.init), windows.indices.contains(key - 1) {
+            windows[key - 1].makeKey()
+        } else {
+            windows.first?.makeKey()
+        }
+        if env["TOUCHGLASS_DUMP_LAYERS"] != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                for (index, window) in windows.enumerated() {
+                    print("\(index + 1): key=\(window.isKeyWindow) \(glassFilterSummary(window.contentView?.layer))")
+                }
+            }
+        }
 
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             if event.keyCode == 53 { NSApp.terminate(nil) }
@@ -70,7 +103,22 @@ public enum MaterialSamples {
         }
     }
 
-    private static func makeWindow(material: Material, number: Int) -> NSPanel {
+    /// Outer refraction and blur of the first glass filter under `layer`, for checking the lens profile.
+    private static func glassFilterSummary(_ layer: CALayer?) -> String {
+        guard let layer else { return "no layer" }
+        for case let filter as NSObject in layer.filters ?? [] where "\(filter.value(forKey: "name") ?? "")" == "glassBackground" {
+            let refraction = filter.value(forKey: "inputOuterRefractionAmount").map { "\($0)" } ?? "?"
+            let blur = filter.value(forKey: "inputBlurRadius").map { "\($0)" } ?? "?"
+            return "outerRefraction=\(refraction) blur=\(blur)"
+        }
+        for sublayer in layer.sublayers ?? [] {
+            let found = glassFilterSummary(sublayer)
+            if found != "none" { return found }
+        }
+        return "none"
+    }
+
+    private static func makeWindow(sample: Sample, number: Int) -> NSPanel {
         let window = SampleWindow(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
@@ -86,53 +134,18 @@ public enum MaterialSamples {
         window.isMovableByWindowBackground = true
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
-        let content = SampleContent(number: number, glass: swiftUIGlass(material))
-        let host = DraggableHostingView(rootView: content)
+        let glass = NSGlassEffectView(frame: NSRect(origin: .zero, size: size))
+        glass.style = sample.style
+        glass.cornerRadius = cornerRadius
+        if case .tint(let opacity) = sample.shading {
+            glass.tintColor = smoke(opacity)
+        }
+        let host = DraggableHostingView(rootView: SampleContent(number: number, shading: sample.shading))
         host.sizingOptions = []
         host.frame = NSRect(origin: .zero, size: size)
-
-        switch material {
-        case .appKitRegular, .appKitClear, .appKitRegularTinted:
-            let glass = NSGlassEffectView(frame: NSRect(origin: .zero, size: size))
-            glass.style = material == .appKitClear ? .clear : .regular
-            glass.cornerRadius = cornerRadius
-            glass.tintColor = material == .appKitRegularTinted ? NSColor.controlAccentColor.withAlphaComponent(0.08) : nil
-            glass.contentView = host
-            window.contentView = glass
-        case .visualEffectHUD, .visualEffectPopover:
-            let effect = NSVisualEffectView(frame: NSRect(origin: .zero, size: size))
-            effect.material = material == .visualEffectHUD ? .hudWindow : .popover
-            effect.blendingMode = .behindWindow
-            effect.state = .active
-            effect.maskImage = roundedMask(size: size, radius: cornerRadius)
-            host.frame = effect.bounds
-            host.autoresizingMask = [.width, .height]
-            effect.addSubview(host)
-            window.contentView = effect
-        case .swiftUIRegular, .swiftUIClear, .swiftUIRegularInteractive:
-            window.contentView = host
-        }
+        glass.contentView = host
+        window.contentView = glass
         return window
-    }
-
-    private static func swiftUIGlass(_ material: Material) -> Glass? {
-        switch material {
-        case .swiftUIRegular: .regular
-        case .swiftUIClear: .clear
-        case .swiftUIRegularInteractive: .regular.interactive()
-        default: nil
-        }
-    }
-
-    private static func roundedMask(size: CGSize, radius: CGFloat) -> NSImage {
-        let image = NSImage(size: size, flipped: false) { rect in
-            NSColor.black.setFill()
-            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
-            return true
-        }
-        image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
-        image.resizingMode = .stretch
-        return image
     }
 }
 
@@ -149,7 +162,7 @@ private final class DraggableHostingView<Content: View>: NSHostingView<Content> 
 /// The touch-step content at a fixed moment, with the sample's number.
 private struct SampleContent: View {
     let number: Int
-    let glass: Glass?
+    let shading: MaterialSamples.Shading
 
     private static let now = Date()
     private static let wait = TouchWait(
@@ -189,10 +202,30 @@ private struct SampleContent: View {
                 .padding(.trailing, 14)
         }
 
-        if let glass {
-            content.glassEffect(glass, in: shape)
-        } else {
-            content
+        content.background { shade(in: shape) }
+    }
+}
+
+extension SampleContent {
+    @ViewBuilder
+    fileprivate func shade(in shape: RoundedRectangle) -> some View {
+        // Feathered region behind the ring and text, leaving about 20 pt of rim clear.
+        let feathered = RoundedRectangle(cornerRadius: 40, style: .continuous)
+            .padding(22)
+            .blur(radius: 14)
+        switch shading {
+        case .none, .tint:
+            Color.clear
+        case .fill(let opacity):
+            shape.fill(Color(nsColor: MaterialSamples.smoke(opacity)))
+        case .centreFill(let opacity):
+            Rectangle()
+                .fill(Color(nsColor: MaterialSamples.smoke(opacity)))
+                .mask(feathered)
+        case .centreFrost:
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .mask(feathered)
         }
     }
 }

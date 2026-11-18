@@ -53,7 +53,7 @@ The demo never reads, logs or prints what you type in the PIN field.
 build/TouchGlass.app/Contents/MacOS/TouchGlass --samples
 ```
 
-This opens one sample panel per material: `NSGlassEffectView` in each style, SwiftUI `glassEffect` variants, and two `NSVisualEffectView` materials as a baseline. Each sample is its own window, so it shows the real content behind it. Drag a sample to move it over busy content. The app prints which number is which material. Press Esc or click a close button to quit.
+This opens one sample panel per material variant, all built on `NSGlassEffectView`: clear glass with warm-neutral smoke as a glass tint, as a fill layer, or feathered behind the text only, plus a regular-glass reference. Each sample is its own window, so it shows the real content behind it. The glass lenses only while its window is key, so click a sample before judging it. Drag a sample to move it over busy content. The app prints which number is which material. Press Esc or click a close button to quit.
 
 ## Layout
 
