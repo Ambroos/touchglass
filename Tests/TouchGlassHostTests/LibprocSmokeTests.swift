@@ -43,6 +43,7 @@ import Testing
         let client = try Self.connect(path)
         let accepted = accept(listener, nil, nil)
         #expect(accepted >= 0)
+        _ = fcntl(accepted, F_SETFD, FD_CLOEXEC)
         defer { close(accepted) }
 
         // The accepted socket carries the listener's path; the client's side names it as its peer.
@@ -103,6 +104,7 @@ import Testing
 
     static func listen(_ path: String) throws -> Int32 {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        _ = fcntl(fd, F_SETFD, FD_CLOEXEC)
         var address = address(path)
         let bound = withUnsafePointer(to: &address) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
@@ -113,6 +115,8 @@ import Testing
 
     static func connect(_ path: String) throws -> Int32 {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        // Close-on-exec, so processes that tests running in parallel spawn don't inherit the client end.
+        _ = fcntl(fd, F_SETFD, FD_CLOEXEC)
         var address = address(path)
         let connected = withUnsafePointer(to: &address) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
