@@ -83,6 +83,14 @@ if CommandLine.arguments.dropFirst().first == "--samples" {
     exit(0)
 }
 
+if CommandLine.arguments.dropFirst().first == "--lens-test" {
+    MainActor.assumeIsolated {
+        LensTest.show(includeSPI: CommandLine.arguments.contains("--spi"))
+    }
+    app.run()
+    exit(0)
+}
+
 let (scenario, options) = parseArguments()
 
 MainActor.assumeIsolated {
