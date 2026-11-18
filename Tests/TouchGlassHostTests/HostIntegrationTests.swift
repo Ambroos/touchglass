@@ -122,7 +122,7 @@ final class PinentryProcess: @unchecked Sendable {
     private let lock = NSLock()
     private var buffer: [UInt8] = []
 
-    init(socket: String, home: String) throws {
+    init(socket: String, home: String, environment extra: [String: String] = [:]) throws {
         process.executableURL = URL(fileURLWithPath: ProxyHarness.executable("touchglass-pinentry"))
         process.environment = [
             "PATH": "/usr/bin:/bin",
@@ -131,7 +131,7 @@ final class PinentryProcess: @unchecked Sendable {
             "TOUCHGLASS_SOCKET": socket,
             "TOUCHGLASS_HOST_APP": "none",
             "TOUCHGLASS_FALLBACK_PINENTRY": "/usr/bin/false",
-        ]
+        ].merging(extra) { _, new in new }
         process.standardInput = input
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice

@@ -4,9 +4,14 @@ import TouchGlassIPC
 
 /// Accepts helper connections on the host socket and reads them on background threads.
 ///
-/// Pings are answered on the reading thread, so a busy main thread never makes a pinentry give
-/// up. Every other message, and every closed connection, is delivered to the main queue.
+/// Every message, and every closed connection, is delivered to the main queue. Pings are answered from
+/// the main queue too: the pinentry's heartbeat must prove that the panel can still show and answer a
+/// prompt, not only that a reader thread is alive.
 public final class HostServer: @unchecked Sendable {
+    /// A pong that the main queue gets to later than this after its ping is dropped, so a main thread that
+    /// stalls for longer than the pinentry's ping interval stops the pongs instead of delaying them.
+    public static let pongDeadline: TimeInterval = 1
+
     public typealias MessageHandler = @MainActor @Sendable (IPCMessage, ConnectionID) -> Void
     public typealias CloseHandler = @MainActor @Sendable (ConnectionID) -> Void
 
@@ -79,7 +84,11 @@ public final class HostServer: @unchecked Sendable {
                 break
             }
             if case .ping(let ping) = message {
-                send(.pong(ping), to: id)
+                let received = ProcessInfo.processInfo.systemUptime
+                DispatchQueue.main.async { [self] in
+                    guard ProcessInfo.processInfo.systemUptime - received <= Self.pongDeadline else { return }
+                    send(.pong(ping), to: id)
+                }
                 continue
             }
             DispatchQueue.main.async { handler(message, id) }
