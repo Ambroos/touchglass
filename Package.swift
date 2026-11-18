@@ -8,6 +8,7 @@ let package = Package(
         .executable(name: "TouchGlass", targets: ["TouchGlass"]),
         .library(name: "TouchGlassCore", targets: ["TouchGlassCore"]),
         .library(name: "TouchGlassPanel", targets: ["TouchGlassPanel"]),
+        .library(name: "TouchGlassIPC", targets: ["TouchGlassIPC"]),
     ],
     targets: [
         // Panel states, copy, timing and the state machine. Foundation and Observation only.
@@ -17,5 +18,8 @@ let package = Package(
         // The app: argument parsing and demo mode.
         .executableTarget(name: "TouchGlass", dependencies: ["TouchGlassCore", "TouchGlassPanel"]),
         .testTarget(name: "TouchGlassCoreTests", dependencies: ["TouchGlassCore"]),
+        // Messages and newline-delimited JSON transport between the helpers and the host. Foundation and Darwin only.
+        .target(name: "TouchGlassIPC"),
+        .testTarget(name: "TouchGlassIPCTests", dependencies: ["TouchGlassIPC"]),
     ]
 )
