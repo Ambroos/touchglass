@@ -4,11 +4,15 @@ import TouchGlassPanel
 
 let usage = """
     Usage: TouchGlass --demo [scenario] [options]
+           TouchGlass --samples
 
     Shows the TouchGlass panel with scripted states. No gpg and no card are involved.
 
     Scenarios:
     \(DemoScenario.allCases.map { "  \($0.rawValue.padding(toLength: 12, withPad: " ", startingAt: 0))\($0.summary)" }.joined(separator: "\n"))
+
+    --samples opens one sample panel per material, to compare them over real content.
+    It prints which number is which material. Drag a sample to move it; Esc quits.
 
     Options:
       --touch-after <seconds>   Simulate the touch after this many seconds (default 4).
@@ -67,11 +71,19 @@ func parseArguments() -> (DemoScenario, DemoOptions) {
     return (scenario, options)
 }
 
-let (scenario, options) = parseArguments()
-
 setvbuf(stdout, nil, _IOLBF, 0)
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
+
+if CommandLine.arguments.dropFirst().first == "--samples" {
+    MainActor.assumeIsolated {
+        MaterialSamples.show()
+    }
+    app.run()
+    exit(0)
+}
+
+let (scenario, options) = parseArguments()
 
 MainActor.assumeIsolated {
     let runner = DemoRunner(options: options)

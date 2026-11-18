@@ -45,6 +45,14 @@ In the demo, any text in the PIN field continues. To simulate the touch, click *
 
 The demo never reads, logs or prints what you type in the PIN field.
 
+## Compare materials
+
+```sh
+build/TouchGlass.app/Contents/MacOS/TouchGlass --samples
+```
+
+This opens one sample panel per material: `NSGlassEffectView` in each style, SwiftUI `glassEffect` variants, and two `NSVisualEffectView` materials as a baseline. Each sample is its own window, so it shows the real content behind it. Drag a sample to move it over busy content. The app prints which number is which material. Press Esc or click a close button to quit.
+
 ## Layout
 
 - `TouchGlassCore`: panel states, copy, touch timing and a pure state machine (`PanelMachine`) that turns events into effects. It depends on Foundation and Observation only.

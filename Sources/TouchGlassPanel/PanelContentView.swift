@@ -129,7 +129,7 @@ extension ColorRole {
 }
 
 /// The countdown ring with the touch glyph inside, and the ripple behind it.
-private struct TouchRingStage: View {
+struct TouchRingStage: View {
     let wait: TouchWait?
     let completed: Bool
     let now: Date
@@ -189,7 +189,7 @@ private struct TouchRingStage: View {
 
 // MARK: - Text
 
-private struct TextBlock: View {
+struct TextBlock: View {
     let presentation: PanelPresentation
 
     var body: some View {
