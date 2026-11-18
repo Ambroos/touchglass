@@ -20,8 +20,10 @@ The script builds `build/TouchGlass.app` with Swift Package Manager and signs it
 To run the unit tests:
 
 ```sh
-swift test
+scripts/test.sh
 ```
+
+The script passes the Swift Testing macro plugin path to `swift test`, because with only the Command Line Tools installed the build sometimes fails to find that plugin.
 
 ## Run the demo
 
