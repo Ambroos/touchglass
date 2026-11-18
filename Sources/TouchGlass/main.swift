@@ -1,3 +1,85 @@
+import AppKit
 import TouchGlassCore
 import TouchGlassPanel
-print("TouchGlass")
+
+let usage = """
+    Usage: TouchGlass --demo [scenario] [options]
+
+    Shows the TouchGlass panel with scripted states. No gpg and no card are involved.
+
+    Scenarios:
+    \(DemoScenario.allCases.map { "  \($0.rawValue.padding(toLength: 12, withPad: " ", startingAt: 0))\($0.summary)" }.joined(separator: "\n"))
+
+    Options:
+      --touch-after <seconds>   Simulate the touch after this many seconds (default 4).
+      --auto-submit <seconds>   Submit PIN, passphrase and confirm prompts by themselves.
+      --slow <factor>           Slow panel animations down by this factor, to review them.
+      --no-controls             Hide the demo controls window.
+      --focus-report            Print whether the PIN panel took key focus.
+
+    In the demo, any text in the PIN field continues. Press Space with the demo controls
+    window focused, or click Simulate Touch, to touch.
+    """
+
+func fail(_ message: String) -> Never {
+    FileHandle.standardError.write(Data((message + "\n\n" + usage + "\n").utf8))
+    exit(64)
+}
+
+/// Parses the command line. Exits with usage on errors.
+func parseArguments() -> (DemoScenario, DemoOptions) {
+    var arguments = Array(CommandLine.arguments.dropFirst())
+    var options = DemoOptions()
+    var scenario: DemoScenario?
+
+    func number(after flag: String) -> Double {
+        guard !arguments.isEmpty, let value = Double(arguments.removeFirst()), value >= 0 else {
+            fail("\(flag) needs a number.")
+        }
+        return value
+    }
+
+    while !arguments.isEmpty {
+        let argument = arguments.removeFirst()
+        switch argument {
+        case "--demo":
+            scenario = .all
+            if let next = arguments.first, !next.hasPrefix("--") {
+                arguments.removeFirst()
+                guard let parsed = DemoScenario(rawValue: next) else { fail("Unknown scenario: \(next)") }
+                scenario = parsed
+            }
+        case "--touch-after": options.touchAfter = number(after: argument)
+        case "--auto-submit": options.autoSubmitAfter = number(after: argument)
+        case "--slow": options.animationScale = max(1, number(after: argument))
+        case "--no-controls": options.showControls = false
+        case "--focus-report": options.focusReport = true
+        case "-h", "--help":
+            print(usage)
+            exit(0)
+        default:
+            fail("Unknown argument: \(argument)")
+        }
+    }
+
+    // The IPC host is not built yet; demo mode is the only mode.
+    guard let scenario else { fail("Nothing to do.") }
+    return (scenario, options)
+}
+
+let (scenario, options) = parseArguments()
+
+setvbuf(stdout, nil, _IOLBF, 0)
+let app = NSApplication.shared
+app.setActivationPolicy(.accessory)
+
+MainActor.assumeIsolated {
+    let runner = DemoRunner(options: options)
+    Task { @MainActor in
+        await runner.run(scenario)
+        NSApp.terminate(nil)
+    }
+    withExtendedLifetime(runner) {
+        app.run()
+    }
+}
