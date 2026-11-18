@@ -26,10 +26,9 @@ let usage = """
       --no-controls             Hide the demo controls window.
       --focus-report            Print whether the PIN panel took key focus.
       --appearance <look>       smoked (default) or readable.
-      --glass-blur <points>     Experimental: set the glass blur radius (private API).
 
     The host reads the same settings from host.conf in its support directory:
-    appearance = smoked|readable and glass-blur = default|<points>.
+    appearance = smoked|readable.
 
     In the demo, any text in the PIN field continues. Press Space with the demo controls
     window focused, or click Simulate Touch, to touch.
@@ -73,8 +72,6 @@ func parseArguments() -> (DemoScenario, DemoOptions) {
                 fail("--appearance needs smoked or readable.")
             }
             options.settings.appearance = appearance
-        case "--glass-blur":
-            options.settings.glassBlur = number(after: argument)
         case "-h", "--help":
             print(usage)
             exit(0)

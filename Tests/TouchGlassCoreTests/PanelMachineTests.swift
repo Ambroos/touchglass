@@ -92,12 +92,10 @@ import Testing
         let settings = HostSettings.parse("""
             # comment
             appearance = readable
-            glass-blur = 12.5
             unknown = 1
             """)
-        #expect(settings == HostSettings(appearance: .readable, glassBlur: 12.5))
-        #expect(HostSettings.parse("appearance = sparkly\nglass-blur = lots") == HostSettings())
-        #expect(HostSettings.parse("glass-blur = default").glassBlur == nil)
+        #expect(settings == HostSettings(appearance: .readable))
+        #expect(HostSettings.parse("appearance = sparkly") == HostSettings())
         #expect(HostSettings.load(path: "/nonexistent/host.conf") == HostSettings())
     }
 }

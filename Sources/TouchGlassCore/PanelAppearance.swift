@@ -11,12 +11,9 @@ public enum PanelAppearance: String, Sendable, Equatable, CaseIterable {
 /// Host settings from `host.conf`: one `key = value` per line, `#` starts a comment line.
 public struct HostSettings: Sendable, Equatable {
     public var appearance: PanelAppearance = .smoked
-    /// Blur radius for the glass in points, or nil for the system's own. Uses private API; see `PrivateGlassTuning`.
-    public var glassBlur: Double?
 
-    public init(appearance: PanelAppearance = .smoked, glassBlur: Double? = nil) {
+    public init(appearance: PanelAppearance = .smoked) {
         self.appearance = appearance
-        self.glassBlur = glassBlur
     }
 
     /// Parses the file's text. Unknown keys and invalid values are ignored.
@@ -30,12 +27,6 @@ public struct HostSettings: Sendable, Equatable {
             switch key {
             case "appearance":
                 if let appearance = PanelAppearance(rawValue: value) { settings.appearance = appearance }
-            case "glass-blur":
-                if value == "default" {
-                    settings.glassBlur = nil
-                } else if let points = Double(value), points >= 0, points <= 100 {
-                    settings.glassBlur = points
-                }
             default:
                 continue
             }

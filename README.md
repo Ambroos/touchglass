@@ -47,6 +47,16 @@ In the demo, any text in the PIN field continues. To simulate the touch, click *
 
 The demo never reads, logs or prints what you type in the PIN field.
 
+## Settings
+
+The host reads `~/Library/Application Support/TouchGlass/host.conf`, one `key = value` per line, with `#` for comments:
+
+| Key | Values | Effect |
+| --- | --- | --- |
+| `appearance` | `smoked` (default), `readable` | Smoked clear glass with HDR white text, or regular glass with standard label colours in light mode. |
+
+The demo takes the same setting as `--appearance`.
+
 ## Compare materials
 
 ```sh

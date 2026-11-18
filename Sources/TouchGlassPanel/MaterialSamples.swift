@@ -16,6 +16,8 @@ public enum MaterialSamples {
         case tint(Double)
         /// The glass's own `tintColor`, a warm near-black in both appearances, at this opacity.
         case darkTint(Double)
+        /// The panel's smoke: a warm near-black fill between the glass and the content.
+        case panelSmoke
     }
 
     /// How the ring, glyph and text are drawn.
@@ -53,8 +55,8 @@ public enum MaterialSamples {
                summary: "Regular glass with C's ink and soft shadow"),
         Sample(label: "G2", style: .clear, shading: .darkTint(0.62), ink: .hdrWhite, textShadow: true, backdropOpacity: 0.5,
                summary: "Behind-window blur at 50% under clear glass, with C's smoke, ink and shadow"),
-        Sample(label: "H", style: .clear, shading: .darkTint(0.65), ink: .layerHDR, textShadow: false,
-               summary: "The panel's smoked look: clear glass, dark smoke tint 65%, HDR white title, glyph and ring drawn by Core Animation"),
+        Sample(label: "H", style: .clear, shading: .panelSmoke, ink: .layerHDR, textShadow: false,
+               summary: "The panel's smoked look: clear glass, smoke fill 50% under the content (same key or not), HDR white title, glyph and ring drawn by Core Animation"),
     ]
 
     static let size = CGSize(width: 240, height: 216)
@@ -107,41 +109,12 @@ public enum MaterialSamples {
             window.orderFrontRegardless()
             windows.append(window)
         }
-        let env = ProcessInfo.processInfo.environment
-        if let key = env["TOUCHGLASS_KEY_SAMPLE"].flatMap(Int.init), windows.indices.contains(key - 1) {
-            // Diagnostics only: activate so the chosen sample reliably becomes key.
-            NSApp.activate(ignoringOtherApps: true)
-            windows[key - 1].makeKey()
-        } else {
-            windows.first?.makeKey()
-        }
-        if env["TOUCHGLASS_DUMP_LAYERS"] != nil {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                for (index, window) in windows.enumerated() {
-                    print("\(samples[index].label): key=\(window.isKeyWindow) \(glassFilterSummary(window.contentView?.layer))")
-                }
-            }
-        }
+        windows.first?.makeKey()
 
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             if event.keyCode == 53 { NSApp.terminate(nil) }
             return event
         }
-    }
-
-    /// Outer refraction and blur of the first glass filter under `layer`, for checking the lens profile.
-    private static func glassFilterSummary(_ layer: CALayer?) -> String {
-        guard let layer else { return "no layer" }
-        for case let filter as NSObject in layer.filters ?? [] where "\(filter.value(forKey: "name") ?? "")" == "glassBackground" {
-            let refraction = filter.value(forKey: "inputOuterRefractionAmount").map { "\($0)" } ?? "?"
-            let blur = filter.value(forKey: "inputBlurRadius").map { "\($0)" } ?? "?"
-            return "outerRefraction=\(refraction) blur=\(blur)"
-        }
-        for sublayer in layer.sublayers ?? [] {
-            let found = glassFilterSummary(sublayer)
-            if found != "none" { return found }
-        }
-        return "none"
     }
 
     private static func roundedMask(size: CGSize, radius: CGFloat) -> NSImage {
@@ -178,8 +151,14 @@ public enum MaterialSamples {
         case .none: glass.tintColor = nil
         case .tint(let opacity): glass.tintColor = smoke(opacity)
         case .darkTint(let opacity): glass.tintColor = darkSmoke(opacity)
+        case .panelSmoke: glass.tintColor = nil
         }
         let content = SampleContent(label: sample.label, ink: sample.ink, textShadow: sample.textShadow)
+            .background {
+                if sample.shading == .panelSmoke {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).fill(Color(nsColor: PanelMetrics.smokeColor))
+                }
+            }
             .environment(\.panelInk, sample.ink == .layerHDR ? .hdr : .standard)
             .environment(\.colorScheme, sample.ink == .layerHDR ? .dark : (NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light))
         let host = DraggableHostingView(rootView: content)

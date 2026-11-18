@@ -87,15 +87,6 @@ enum LensTest {
             windows.last?.makeKey()
         }
 
-        if ProcessInfo.processInfo.environment["TOUCHGLASS_DUMP_LAYERS"] != nil {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                for (testCase, window, _) in cases {
-                    print("== \(testCase.letter) layers")
-                    if let layer = window.contentView?.layer { dump(layer, depth: 0) }
-                }
-            }
-        }
-
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             if event.keyCode == 53 { NSApp.terminate(nil) }
             return event
@@ -170,29 +161,6 @@ enum LensTest {
         .frame(width: size.width, height: size.height)
         window.contentView = MovableHostingView(rootView: view)
         return window
-    }
-
-    /// Prints each layer's class, and its filters and backdrop settings, for the spike.
-    private static func dump(_ layer: CALayer, depth: Int) {
-        guard depth < 12 else { return }
-        var line = String(repeating: "  ", count: depth) + String(describing: type(of: layer))
-        if let filters = layer.filters, !filters.isEmpty {
-            line += " filters=" + filters.map { ($0 as? NSObject)?.value(forKey: "name").map { "\($0)" } ?? "\($0)" }.joined(separator: ",")
-        }
-        if let filters = layer.backgroundFilters, !filters.isEmpty {
-            line += " backgroundFilters=" + filters.map { ($0 as? NSObject)?.value(forKey: "name").map { "\($0)" } ?? "\($0)" }.joined(separator: ",")
-        }
-        if let filters = layer.filters {
-            for case let filter as NSObject in filters where "\(filter.value(forKey: "name") ?? "")" == "glassBackground" {
-                if let keys = filter.value(forKey: "inputKeys") as? [String] {
-                    let values = keys.map { key in "\(key)=\(filter.value(forKey: key).map { "\($0)" } ?? "nil")" }
-                    line += " [" + values.joined(separator: " ").replacingOccurrences(of: "\n", with: " ") + "]"
-                }
-            }
-        }
-        if layer.compositingFilter != nil { line += " compositingFilter=\(layer.compositingFilter!)" }
-        print(line)
-        for sublayer in layer.sublayers ?? [] { dump(sublayer, depth: depth + 1) }
     }
 }
 
