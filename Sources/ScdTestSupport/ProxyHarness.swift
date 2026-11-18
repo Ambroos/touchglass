@@ -109,6 +109,8 @@ public final class ProxyHarness: @unchecked Sendable {
         env["TOUCHGLASS_TOUCH_DELAY_MS"] = String(touchDelayMs)
         env["FAKE_SCD_CONFIG"] = configPath
         env["_assuan_pipe_connect_pid"] = String(getpid())
+        // Tests run the proxy outside an app bundle, where it would open any installed TouchGlass by name.
+        env["TOUCHGLASS_HOST_APP"] = "none"
         for (key, value) in extraEnvironment { env[key] = value }
         process.environment = env
         process.standardInput = stdinPipe

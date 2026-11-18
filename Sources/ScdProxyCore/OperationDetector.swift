@@ -77,6 +77,18 @@ public final class OperationDetector: @unchecked Sendable {
         }
     }
 
+    /// Ends every open operation and forgets all connections. Returns after the events are queued for the
+    /// sink. The proxy calls this before it exits: a relay thread that would end its own session's operation
+    /// may not get to run first.
+    public func closeAll() {
+        queue.sync {
+            for conn in connections.keys.sorted() where connections[conn]?.operation != nil {
+                sink.send(.opEnd(OpEnd(conn: conn, result: .error)))
+            }
+            connections.removeAll()
+        }
+    }
+
     /// Waits until every event observed so far has been handled. For tests and shutdown.
     public func drain() {
         queue.sync {}
