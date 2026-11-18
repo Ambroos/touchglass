@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import Synchronization
+import TouchGlassIPC
 
 /// Runs the real scdaemon as a child and relays its pipe and socket traffic.
 ///
@@ -10,6 +11,8 @@ import Synchronization
 /// - The agent waits on this process's PID, so it exits only after the child exits, with the child's status.
 /// - At end of file from the agent, the proxy closes the child's stdin and keeps forwarding its output.
 /// - `SIGTERM`, `SIGINT` and `SIGHUP` are forwarded to the child instead of ending the proxy.
+/// - `SIGUSR1` and `SIGUSR2` are ignored. scdaemon sends its event signal to the peer of a socket session,
+///   which is the proxy for a relayed one; ending the proxy would make the agent think scdaemon exited.
 public final class ScdaemonProxy: @unchecked Sendable {
     private let config: ProxyConfig
     private let detector: OperationDetector
@@ -25,7 +28,11 @@ public final class ScdaemonProxy: @unchecked Sendable {
 
     public init(config: ProxyConfig) {
         self.config = config
-        sink = HostEventSink(path: config.hostSocketPath)
+        var launch: (@Sendable () -> Bool)?
+        if let target = config.hostApp {
+            launch = { Self.launchHost(target) }
+        }
+        sink = HostEventSink(path: config.hostSocketPath, launchHost: launch)
         detector = OperationDetector(sink: sink, touchDelay: config.touchDelay)
     }
 
@@ -62,8 +69,8 @@ public final class ScdaemonProxy: @unchecked Sendable {
         let status = waitForChild(child)
         // scdaemon closes its stdout when it exits; give the output thread a moment to forward the rest.
         _ = outputDone.wait(timeout: .now() + 2)
-        detector.closed(connection: pipeSession.id)
-        detector.drain()
+        // End every open operation, the socket sessions' too: their relay threads may not finish before exit.
+        detector.closeAll()
         sink.flush(timeout: 0.3)
         if let proxySocketPath { unlink(proxySocketPath) }
         exitLike(status)
@@ -130,6 +137,18 @@ public final class ScdaemonProxy: @unchecked Sendable {
             sigemptyset(&action.sa_mask)
             sigaction(sig, &action, nil)
         }
+        signal(SIGUSR1, SIG_IGN)
+        signal(SIGUSR2, SIG_IGN)
+    }
+
+    /// Starts the host app and reaps `open` on a background thread. Runs on the sink's thread.
+    private static func launchHost(_ target: String) -> Bool {
+        guard let opener = HostLauncher.launch(target) else { return false }
+        Thread.detachNewThread {
+            var status: Int32 = 0
+            while waitpid(opener, &status, 0) < 0 && errno == EINTR {}
+        }
+        return true
     }
 
     private func waitForChild(_ child: pid_t) -> Int32 {

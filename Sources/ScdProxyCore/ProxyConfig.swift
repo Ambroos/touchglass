@@ -10,6 +10,8 @@ public struct ProxyConfig: Sendable {
     public static let runtimeDirectoryEnvironmentKey = "TOUCHGLASS_RUNTIME_DIR"
     /// Overrides the touch-wait detection delay, in milliseconds.
     public static let touchDelayEnvironmentKey = "TOUCHGLASS_TOUCH_DELAY_MS"
+    /// The host app to start when the host is not running: a bundle path, an app name, or `none`.
+    public static let hostAppEnvironmentKey = "TOUCHGLASS_HOST_APP"
     /// File in the support directory whose first line is the path of the real scdaemon. The installer
     /// writes it from `gpgconf --list-components`.
     public static let scdaemonPathFileName = "scdaemon-program"
@@ -26,6 +28,8 @@ public struct ProxyConfig: Sendable {
     public var runtimeDirectory: String?
     public var hostSocketPath: String
     public var touchDelay: TimeInterval
+    /// The app that `HostLauncher` opens when the host is down, or nil to never start it.
+    public var hostApp: String?
 
     /// Resolves the configuration from the environment, the support directory and the fallback paths.
     /// Returns nil if no executable scdaemon other than this program is found.
@@ -45,11 +49,13 @@ public struct ProxyConfig: Sendable {
         }) else { return nil }
 
         let delayMs = environment[touchDelayEnvironmentKey].flatMap { Double($0) } ?? 400
+        let hostApp = environment[hostAppEnvironmentKey].flatMap { $0.isEmpty ? nil : $0 } ?? HostLauncher.defaultTarget()
         return ProxyConfig(
             scdaemonPath: scdaemon,
             runtimeDirectory: environment[runtimeDirectoryEnvironmentKey] ?? defaultRuntimeDirectory(),
             hostSocketPath: IPCPaths.hostSocket,
-            touchDelay: delayMs / 1000
+            touchDelay: delayMs / 1000,
+            hostApp: hostApp == "none" ? nil : hostApp
         )
     }
 

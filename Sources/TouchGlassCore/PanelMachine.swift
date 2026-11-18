@@ -65,10 +65,8 @@ public struct PanelMachine: Sendable {
 
     private mutating func show(_ next: PanelState) -> [PanelEffect] {
         let previous = state
-        if previous == nil {
-            hiddenByUser = false
-            holdsKey = false
-        }
+        if previous == nil { holdsKey = false }
+        if !Self.keepsHide(from: previous, to: next) { hiddenByUser = false }
         state = next
         if next.allowsKey { holdsKey = true }
 
@@ -105,6 +103,20 @@ public struct PanelMachine: Sendable {
             effects.append(.announce(PanelPresentation(next).announcement))
         }
         return effects
+    }
+
+    /// A hide covers one touch wait and the result of its operation. Any other state, such as a PIN prompt or
+    /// the next operation's touch wait, must show, or a prompt the pinentry waits on would stay invisible.
+    private static func keepsHide(from previous: PanelState?, to next: PanelState) -> Bool {
+        guard case .touchWait(let hidden) = previous else { return false }
+        switch next {
+        case .touchWait(let wait):
+            return wait.operation == hidden.operation && wait.cardSerial == hidden.cardSerial
+        case .success, .failure:
+            return true
+        default:
+            return false
+        }
     }
 
     /// PIN to verifying changes nothing a VoiceOver user needs to hear again.

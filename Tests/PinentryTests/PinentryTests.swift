@@ -126,15 +126,18 @@ func answering(secret: String) -> @Sendable (IPCMessage) -> IPCMessage? {
         #expect(pinentry.transact("SETDESC no") == ["OK"])
         #expect(pinentry.transact("CONFIRM") == ["ERR 83886194 Not confirmed <Pinentry>"])
         #expect(pinentry.transact("SETDESC other") == ["OK"])
-        #expect(pinentry.transact("CONFIRM --one-button") == ["ERR 83886179 Operation cancelled <Pinentry>"])
+        // pinentry answers OK for a one-button dialog however it closes.
+        #expect(pinentry.transact("CONFIRM --one-button") == ["OK"])
+        #expect(pinentry.transact("CONFIRM") == ["ERR 83886179 Operation cancelled <Pinentry>"])
 
         let confirms = host.received.compactMap { if case .confirm(let r) = $0 { r } else { nil } }
-        #expect(confirms.count == 3)
+        #expect(confirms.count == 4)
         #expect(confirms.first?.ok == "Allow")
         #expect(confirms.first?.notok == "Deny")
         #expect(confirms.first?.oneButton == false)
-        #expect(confirms.last?.oneButton == true)
-        #expect(confirms.last?.notok == nil)
+        #expect(confirms[2].oneButton == true)
+        #expect(confirms[2].notok == nil)
+        #expect(confirms.last?.oneButton == false)
     }
 
     @Test func message() throws {
@@ -146,6 +149,18 @@ func answering(secret: String) -> @Sendable (IPCMessage) -> IPCMessage? {
         #expect(pinentry.transact("MESSAGE") == ["OK"])
         let message = host.received.compactMap { if case .message(let r) = $0 { r } else { nil } }.first
         #expect(message?.desc == "Push ACK button on card/token.")
+    }
+
+    @Test func dismissedMessageIsOK() throws {
+        let sandbox = Sandbox()
+        let host = try FakeHost(path: sandbox.socketPath) { message in
+            if case .message(let r) = message { return .cancelled(RequestRef(id: r.id)) }
+            return nil
+        }
+        let pinentry = try PinentryDriver(sandbox: sandbox)
+        _ = pinentry.handshake()
+        #expect(pinentry.transact("MESSAGE") == ["OK"])
+        _ = host
     }
 
     @Test func optionsAndUnknownCommands() throws {
@@ -256,13 +271,17 @@ func answering(secret: String) -> @Sendable (IPCMessage) -> IPCMessage? {
         #expect(sandbox.read(sandbox.stubLog).hasPrefix("ARGS --display :0\n"))
     }
 
-    @Test func launchesHostThenFallsBackWhenItNeverAppears() throws {
+    /// `open` fails for a missing app, so the pinentry falls back without waiting out the launch timeout.
+    @Test(arguments: ["TouchGlass Test App That Does Not Exist", "/nonexistent/TouchGlass Test.app"])
+    func failedLaunchFallsBackAtOnce(app: String) throws {
         let sandbox = Sandbox()
         let start = Date()
-        let pinentry = try PinentryDriver(sandbox: sandbox, environment: ["TOUCHGLASS_HOST_APP": "TouchGlass Test App That Does Not Exist", "TOUCHGLASS_LAUNCH_TIMEOUT_MS": "300"])
-        #expect(pinentry.readLine() == "OK stub ready")
-        #expect(Date().timeIntervalSince(start) < 3)
-        #expect(sandbox.read(sandbox.pinentryLog).contains("launching"))
+        let pinentry = try PinentryDriver(sandbox: sandbox, environment: ["TOUCHGLASS_HOST_APP": app, "TOUCHGLASS_LAUNCH_TIMEOUT_MS": "20000"])
+        #expect(pinentry.readLine(timeout: 25) == "OK stub ready")
+        #expect(Date().timeIntervalSince(start) < 10)
+        let log = sandbox.read(sandbox.pinentryLog)
+        #expect(log.contains("launching \(app)"))
+        #expect(log.contains("open exited with status"))
     }
 
     @Test func missingFallbackStillAnswers() throws {

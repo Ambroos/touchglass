@@ -7,23 +7,42 @@ import TouchGlassIPC
 /// `send(_:)` only appends to a bounded queue. The writer thread connects lazily, writes each line with a
 /// short deadline and closes the connection when the host stops reading, so a stopped host costs at most
 /// that deadline per event and never touches the forwarding threads.
+///
+/// When the host is down at an `op_start`, the writer starts it through `launchHost`, at most once per
+/// `launchInterval`, and waits up to `launchWait` for it to listen, so the touch wait that follows still
+/// reaches it.
 public final class HostEventSink: EventSink, @unchecked Sendable {
     public static let queueCapacity = 64
     /// How long one line may take to write before the connection is dropped.
     public static let writeDeadline: TimeInterval = 0.2
     /// Events older than this when the writer gets to them are dropped instead of sent.
     public static let maxEventAge: TimeInterval = 2
+    /// The shortest time between two attempts to start the host.
+    public static let launchInterval: TimeInterval = 10
+    /// How long the writer waits for a host it started to accept connections.
+    public static let launchWait: TimeInterval = 2
+
+    private struct Item {
+        var line: Data
+        var queuedAt: Double
+        var startsOperation: Bool
+    }
 
     private let path: String
+    private let launchHost: (@Sendable () -> Bool)?
     private let condition = NSCondition()
-    private var queue: [(line: Data, queuedAt: Double)] = []
+    private var queue: [Item] = []
     private var busy = false
+    // Used only on the writer thread.
     private var connection: IPCConnection?
+    private var lastLaunch = -Double.infinity
     /// Counts events dropped because the queue was full, for tests.
     public private(set) var droppedCount = 0
 
-    public init(path: String = IPCPaths.hostSocket) {
+    /// - Parameter launchHost: Starts the host app and returns whether the attempt began. Nil never starts it.
+    public init(path: String = IPCPaths.hostSocket, launchHost: (@Sendable () -> Bool)? = nil) {
         self.path = path
+        self.launchHost = launchHost
         let thread = Thread { [unowned self] in self.run() }
         thread.name = "touchglass.scdaemon.host"
         thread.start()
@@ -31,11 +50,12 @@ public final class HostEventSink: EventSink, @unchecked Sendable {
 
     public func send(_ message: IPCMessage) {
         guard let line = try? IPCLine.encode(message) else { return }
+        let startsOperation = if case .opStart = message { true } else { false }
         condition.lock()
         if queue.count >= Self.queueCapacity {
             droppedCount += 1
         } else {
-            queue.append((line, Posix.monotonicSeconds()))
+            queue.append(Item(line: line, queuedAt: Posix.monotonicSeconds(), startsOperation: startsOperation))
             condition.signal()
         }
         condition.unlock()
@@ -58,7 +78,7 @@ public final class HostEventSink: EventSink, @unchecked Sendable {
             condition.unlock()
 
             if Posix.monotonicSeconds() - item.queuedAt <= Self.maxEventAge {
-                deliver(item.line)
+                deliver(item)
             }
 
             condition.lock()
@@ -68,26 +88,47 @@ public final class HostEventSink: EventSink, @unchecked Sendable {
         }
     }
 
-    private func deliver(_ line: Data) {
-        if connection == nil {
-            guard let fresh = try? IPCClient.connect(path: path, timeout: 0.1) else { return }
-            Posix.setNonBlocking(fresh.fileDescriptor, true)
-            connection = fresh
-            if !write(.hello(Hello(role: .proxy)), to: fresh) { return }
+    private func deliver(_ item: Item) {
+        if let connection {
+            if write(item.line, to: connection) { return }
+            // The host restarted or stopped reading. The first write after a restart fails with EPIPE, so
+            // reconnect once and resend this event instead of losing it.
+            dropConnection()
         }
-        guard let connection else { return }
-        if !write(line, to: connection) {
-            connection.close()
-            self.connection = nil
-        }
+        guard let fresh = connect(launching: item.startsOperation) else { return }
+        if !write(item.line, to: fresh) { dropConnection() }
     }
 
-    private func write(_ message: IPCMessage, to connection: IPCConnection) -> Bool {
-        guard let line = try? IPCLine.encode(message) else { return false }
-        if write(line, to: connection) { return true }
-        connection.close()
-        self.connection = nil
-        return false
+    /// Connects and says hello. Starts the host first when `launching` allows it and it is not running.
+    private func connect(launching: Bool) -> IPCConnection? {
+        if let fresh = openConnection() { return fresh }
+        let now = Posix.monotonicSeconds()
+        guard launching, let launchHost, now - lastLaunch >= Self.launchInterval else { return nil }
+        lastLaunch = now
+        guard launchHost() else { return nil }
+        while Posix.monotonicSeconds() - now < Self.launchWait {
+            usleep(50_000)
+            if let fresh = openConnection() { return fresh }
+        }
+        return nil
+    }
+
+    private func openConnection() -> IPCConnection? {
+        guard let fresh = try? IPCClient.connect(path: path, timeout: 0.1),
+              let hello = try? IPCLine.encode(.hello(Hello(role: .proxy)))
+        else { return nil }
+        Posix.setNonBlocking(fresh.fileDescriptor, true)
+        guard write(hello, to: fresh) else {
+            fresh.close()
+            return nil
+        }
+        connection = fresh
+        return fresh
+    }
+
+    private func dropConnection() {
+        connection?.close()
+        connection = nil
     }
 
     /// Writes the whole line before the deadline, or returns false. A partly written line leaves the stream

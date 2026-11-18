@@ -8,6 +8,7 @@ public final class FakeHost: @unchecked Sendable {
     private let server: IPCServer
     private let condition = NSCondition()
     private var collected: [IPCMessage] = []
+    private var accepted: [Int32] = []
     private let onMessage: (@Sendable (IPCMessage) -> Void)?
 
     /// Starts listening at `path` and accepting connections on a background thread.
@@ -20,6 +21,14 @@ public final class FakeHost: @unchecked Sendable {
 
     public func close() {
         server.close()
+    }
+
+    /// Shuts down every accepted connection, as a host that quits does. Call after `close()`.
+    public func dropConnections() {
+        condition.lock()
+        let fds = accepted
+        condition.unlock()
+        for fd in fds { shutdown(fd, SHUT_RDWR) }
     }
 
     /// Every message received so far, excluding `hello`.
@@ -52,6 +61,9 @@ public final class FakeHost: @unchecked Sendable {
     private func acceptLoop() {
         while let accepted = try? server.accept() {
             nonisolated(unsafe) let connection = accepted
+            condition.lock()
+            self.accepted.append(connection.fileDescriptor)
+            condition.unlock()
             Thread.detachNewThread { [self] in
                 defer { connection.close() }
                 while let message = try? connection.receive() {

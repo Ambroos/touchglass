@@ -84,18 +84,33 @@ final class PinentryServer {
             return nil
         }
         log("host not reachable; launching \(app)")
-        let opener = spawn("/usr/bin/open", ["-g", "-a", app], stdin: nil, stdout: nil, stderr: nil)
-        let deadline = now() + config.launchTimeout
+        var opener = HostLauncher.launch(app)
         defer {
             if let opener {
                 var status: Int32 = 0
                 waitpid(opener, &status, WNOHANG)
             }
         }
+        guard opener != nil else {
+            log("cannot run open")
+            return nil
+        }
+        let deadline = now() + config.launchTimeout
         while now() < deadline {
             if let connection = try? IPCClient.connect(path: config.socketPath, timeout: config.connectTimeout) {
                 log("connected to host after launch")
                 return connection
+            }
+            if let pid = opener {
+                var status: Int32 = 0
+                if waitpid(pid, &status, WNOHANG) == pid {
+                    opener = nil
+                    // `open` failed, so the host is not coming: don't wait out the launch timeout.
+                    if status != 0 {
+                        log("open exited with status \(status)")
+                        return nil
+                    }
+                }
             }
             usleep(50_000)
         }
@@ -238,7 +253,7 @@ final class PinentryServer {
             let (text, fields) = CardDescription.parse(settings.desc ?? "")
             message = .getPin(GetPin(id: id, title: settings.title, desc: settings.desc == nil ? nil : text, prompt: settings.prompt, fields: fields, error: settings.error, ok: settings.ok, cancel: settings.cancel, keyinfo: settings.keyinfo, owner: settings.owner))
         case "CONFIRM":
-            let oneButton = arguments.split(separator: " ").contains("--one-button")
+            let oneButton = isOneButton(keyword, arguments)
             message = .confirm(Confirm(id: id, title: settings.title, desc: settings.desc.map { CardDescription.parse($0).text }, ok: settings.ok, cancel: oneButton ? nil : settings.cancel, notok: oneButton ? nil : settings.notok, oneButton: oneButton, owner: settings.owner))
         default:
             message = .message(MessageRequest(id: id, title: settings.title, desc: settings.desc.map { CardDescription.parse($0).text }, ok: settings.ok))
@@ -257,6 +272,9 @@ final class PinentryServer {
             reply("OK")
         case .reply(.notConfirmed) where keyword == "CONFIRM":
             reply(Assuan.notConfirmed)
+        case .reply(.cancelled) where keyword == "MESSAGE" || isOneButton(keyword, arguments):
+            // A dialog with one button succeeds however it closes, like pinentry.
+            reply("OK")
         case .reply:
             reply(Assuan.cancelled)
         case .timedOut:
@@ -265,6 +283,10 @@ final class PinentryServer {
             log("falling back: \(reason)")
             handoff(line)
         }
+    }
+
+    func isOneButton(_ keyword: String, _ arguments: String) -> Bool {
+        keyword == "CONFIRM" && arguments.split(separator: " ").contains("--one-button")
     }
 
     enum Outcome {
