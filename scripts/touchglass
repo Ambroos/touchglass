@@ -1,0 +1,504 @@
+#!/bin/sh
+# Installs TouchGlass into gpg-agent, removes it again, and reports its state.
+# Run `scripts/touchglass help` for usage.
+#
+# Install edits only the pinentry-program and scdaemon-program lines of gpg-agent.conf. It comments
+# out the effective line with a "# touchglass: " prefix and adds the TouchGlass line right after it,
+# or, if the option is not set, adds a "# touchglass: added <option>" marker and the TouchGlass line at
+# the top of the file. gpg-agent uses the last occurrence of an option, so earlier duplicates stay as
+# they are. Uninstall reverses exactly these edits, so the rest of the file stays byte-identical.
+set -eu
+
+prog=touchglass
+marker='# touchglass: '
+gnupg_home="${GNUPGHOME:-$HOME/.gnupg}"
+conf="$gnupg_home/gpg-agent.conf"
+support_dir="$HOME/Library/Application Support/TouchGlass"
+scd_path_file="$support_dir/scdaemon-program"
+pinentry_conf="$support_dir/pinentry.conf"
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+
+die() { printf '%s: %s\n' "$prog" "$*" >&2; exit 1; }
+say() { printf '%s\n' "$*"; }
+warn() { printf '%s: warning: %s\n' "$prog" "$*" >&2; }
+
+usage() {
+    cat <<'EOF'
+Usage:
+  touchglass install [--app-dir DIR] [--from APP] [--dry-run]
+  touchglass uninstall [--remove-app] [--dry-run]
+  touchglass status
+
+install    Copies TouchGlass.app to DIR (default ~/Applications), building it first
+           if needed, and points gpg-agent's pinentry-program and scdaemon-program
+           at the bundled helpers. Backs up gpg-agent.conf first.
+           --from APP uses an already built TouchGlass.app instead of building.
+uninstall  Restores the original pinentry-program and scdaemon-program lines.
+           --remove-app also deletes the installed TouchGlass.app.
+status     Shows what gpg-agent.conf points at and whether the host runs.
+
+--dry-run prints the change to gpg-agent.conf as a diff and writes nothing.
+GNUPGHOME selects the GnuPG home directory (default ~/.gnupg).
+EOF
+}
+
+# Shared awk helpers: option name and value of a gpg-agent.conf line, and whether a value is ours.
+awk_lib='
+function keyof(line,   t) {
+    t = line; sub(/^[ \t]+/, "", t)
+    if (t ~ /^pinentry-program([ \t\r]|$)/) return "pinentry-program"
+    if (t ~ /^scdaemon-program([ \t\r]|$)/) return "scdaemon-program"
+    return ""
+}
+function valof(line,   t) {
+    t = line; sub(/^[ \t]*[a-z-]+/, "", t); sub(/^[ \t]+/, "", t); sub(/[ \t\r]+$/, "", t)
+    if (t ~ /^".*"$/) t = substr(t, 2, length(t) - 2)
+    return t
+}
+function ours(line, k,   v) {
+    v = valof(line)
+    return (k == "pinentry-program" && v ~ /\/touchglass-pinentry$/) || (k == "scdaemon-program" && v ~ /\/touchglass-scdaemon$/)
+}
+function out(s) { if (nout++) printf "\n"; printf "%s", s }
+'
+
+# Prints "1" if the file does not end with a newline. An empty file counts as ending with one.
+no_eol() {
+    if [ -s "$1" ] && [ -n "$(tail -c 1 "$1")" ]; then echo 1; else echo 0; fi
+}
+
+# Prints the value the option had before TouchGlass: from a marker, else from the last line that isn't ours.
+previous_value() { # file key
+    [ -f "$1" ] || return 0
+    TG_KEY="$2" awk "$awk_lib"'
+    { L[NR] = $0 }
+    END {
+        k = ENVIRON["TG_KEY"]; found = ""
+        for (i = 1; i <= NR; i++) {
+            if (index(L[i], "# touchglass: ") == 1) {
+                body = substr(L[i], 15)
+                if (keyof(body) == k) { print valof(body); exit }
+                if (body == "added " k) exit
+                continue
+            }
+            if (keyof(L[i]) == k && !ours(L[i], k)) found = valof(L[i])
+        }
+        if (found != "") print found
+    }' "$1"
+}
+
+# Prints the value of the last line for the option, whoever wrote it.
+current_value() { # file key
+    [ -f "$1" ] || return 0
+    TG_KEY="$2" awk "$awk_lib"'
+    keyof($0) == ENVIRON["TG_KEY"] { v = valof($0) }
+    END { if (v != "") print v }' "$1"
+}
+
+# True if the file holds a TouchGlass marker or a line that points at a TouchGlass helper.
+touched() { # file
+    [ -f "$1" ] || return 1
+    awk "$awk_lib"'
+    index($0, "# touchglass: ") == 1 { t = 1 }
+    { k = keyof($0); if (k != "" && ours($0, k)) t = 1 }
+    END { exit t ? 0 : 1 }' "$1"
+}
+
+newest_backup() {
+    # Backup names end in a sortable timestamp; print the last one.
+    ls -1 "$conf".touchglass-backup-* 2>/dev/null | LC_ALL=C sort | tail -n 1
+}
+
+# The scdaemon that gpgconf knows about. Homebrew reports a versioned Cellar path that disappears on
+# upgrade, so prefer the stable prefix path when it resolves to the same file.
+gpgconf_scdaemon() {
+    command -v gpgconf >/dev/null 2>&1 || return 0
+    path="$(gpgconf --list-components 2>/dev/null | awk -F: '$1 == "scdaemon" { print $3; exit }' | sed 's/%3[aA]/:/g')"
+    [ -n "$path" ] || return 0
+    case "$path" in
+        */Cellar/*)
+            prefix="${path%%/Cellar/*}"
+            for stable in "$prefix/libexec/scdaemon" "$prefix/opt/gnupg/libexec/scdaemon"; do
+                if [ -x "$stable" ] && [ "$(realpath "$stable" 2>/dev/null)" = "$(realpath "$path" 2>/dev/null)" ]; then
+                    path="$stable"; break
+                fi
+            done
+            ;;
+    esac
+    printf '%s\n' "$path"
+}
+
+find_pinentry_mac() {
+    for p in "$(command -v pinentry-mac 2>/dev/null || true)" /opt/homebrew/bin/pinentry-mac /usr/local/bin/pinentry-mac; do
+        if [ -n "$p" ] && [ -x "$p" ]; then printf '%s\n' "$p"; return 0; fi
+    done
+}
+
+# The installed app's path, derived from the helper path in gpg-agent.conf.
+app_from_conf() {
+    v="$(current_value "$conf" pinentry-program)"
+    case "$v" in
+        */Contents/MacOS/touchglass-pinentry) printf '%s\n' "${v%/Contents/MacOS/touchglass-pinentry}" ;;
+    esac
+}
+
+reload_agent() {
+    if command -v gpgconf >/dev/null 2>&1; then
+        gpgconf --kill gpg-agent
+        say "Stopped gpg-agent with 'gpgconf --kill gpg-agent'; it restarts with the new settings on next use."
+        say "gpg-agent forgot its cached PINs and passphrases, so the next card operation asks for the PIN again."
+    else
+        warn "gpgconf not found; restart gpg-agent yourself to apply the change"
+    fi
+}
+
+show_diff() { # old new label
+    if [ -f "$1" ]; then old="$1"; else old=/dev/null; fi
+    diff -u -L "a/$3" -L "b/$3" "$old" "$2" || true
+}
+
+# Writes new content over the conf in place, so symlinks, owner and mode stay.
+replace_conf() { # tmpfile
+    mkdir -p "$gnupg_home"
+    cat "$1" > "$conf"
+}
+
+cmd_install() {
+    app_dir="$HOME/Applications"
+    from=""
+    dry_run=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --app-dir) [ $# -ge 2 ] || die "--app-dir needs a directory"; app_dir="$2"; shift 2 ;;
+            --app-dir=*) app_dir="${1#--app-dir=}"; shift ;;
+            --from) [ $# -ge 2 ] || die "--from needs a path to TouchGlass.app"; from="$2"; shift 2 ;;
+            --from=*) from="${1#--from=}"; shift ;;
+            --dry-run) dry_run=1; shift ;;
+            *) die "install: unknown option $1" ;;
+        esac
+    done
+    case "$app_dir" in /*) ;; *) app_dir="$(pwd)/$app_dir" ;; esac
+    app_dir="${app_dir%/}"
+    app="$app_dir/TouchGlass.app"
+    # gpg-agent reads the rest of the line as the path; keep it free of characters it could misread.
+    case "$app" in
+        *[[:space:]]* | *'"'* | *'#'*) die "the app path must not contain spaces, quotes or '#': $app" ;;
+    esac
+
+    # Which bundle to install, building it if it is missing or older than the sources.
+    build=0
+    if [ -n "$from" ]; then
+        source_app="$from"
+        [ -x "$source_app/Contents/MacOS/TouchGlass" ] || die "$source_app is not a TouchGlass.app"
+    else
+        [ -f "$repo_root/Package.swift" ] || die "no Package.swift next to this script; pass --from with a built TouchGlass.app"
+        source_app="$repo_root/build/TouchGlass.app"
+        if [ ! -f "$source_app/Contents/Info.plist" ] ||
+            [ -n "$(find "$repo_root/Sources" "$repo_root/Package.swift" -newer "$source_app/Contents/Info.plist" -print 2>/dev/null | head -n 1)" ]; then
+            build=1
+        fi
+    fi
+
+    # The real scdaemon: the one gpg-agent.conf named before TouchGlass, else the one gpgconf reports.
+    real_scd="$(previous_value "$conf" scdaemon-program)"
+    [ -n "$real_scd" ] || real_scd="$(gpgconf_scdaemon)"
+    [ -n "$real_scd" ] || die "could not find scdaemon; is GnuPG installed and gpgconf on PATH?"
+    [ -x "$real_scd" ] || warn "scdaemon at $real_scd is not executable"
+
+    # The fallback pinentry: the one gpg-agent.conf named before TouchGlass, else pinentry-mac.
+    fallback="$(previous_value "$conf" pinentry-program)"
+    [ -n "$fallback" ] || fallback="$(find_pinentry_mac)"
+    if [ -z "$fallback" ]; then
+        fallback=/opt/homebrew/bin/pinentry-mac
+        warn "pinentry-mac not found; the fallback pinentry is set to $fallback, which does not exist"
+    fi
+
+    new_pinentry="$app/Contents/MacOS/touchglass-pinentry"
+    new_scd="$app/Contents/MacOS/touchglass-scdaemon"
+
+    tmp="$(mktemp "${TMPDIR:-/tmp}/touchglass.XXXXXX")"
+    trap 'rm -f "$tmp"' EXIT
+    if [ -f "$conf" ]; then created=0; input="$conf"; else created=1; input=/dev/null; fi
+    TG_PINENTRY="$new_pinentry" TG_SCD="$new_scd" TG_CREATED="$created" TG_NOEOL="$(no_eol "$input")" \
+        awk "$awk_lib"'
+    { L[NR] = $0; k = keyof($0); if (k != "") last[k] = NR }
+    END {
+        new["pinentry-program"] = ENVIRON["TG_PINENTRY"]; new["scdaemon-program"] = ENVIRON["TG_SCD"]
+        keys[1] = "pinentry-program"; keys[2] = "scdaemon-program"
+        if (ENVIRON["TG_CREATED"] == "1") out("# touchglass: created gpg-agent.conf")
+        for (j = 1; j <= 2; j++) {
+            k = keys[j]
+            if (!(k in last)) { out("# touchglass: added " k); out(k " " new[k]) }
+        }
+        for (i = 1; i <= NR; i++) {
+            k = keyof(L[i])
+            if (k == "" || i != last[k]) { out(L[i]); continue }
+            cr = (L[i] ~ /\r$/) ? "\r" : ""
+            if (ours(L[i], k)) {
+                if (valof(L[i]) == new[k]) out(L[i]); else out(k " " new[k] cr)
+            } else {
+                out("# touchglass: " L[i]); out(k " " new[k] cr)
+            }
+        }
+        if (nout && ENVIRON["TG_NOEOL"] != "1") printf "\n"
+    }' "$input" > "$tmp"
+
+    conf_changed=1
+    if [ -f "$conf" ] && cmp -s "$conf" "$tmp"; then conf_changed=0; fi
+
+    # Back up only the original file: never a file TouchGlass already edited, never a second identical copy.
+    backup=""
+    if [ "$conf_changed" = 1 ] && [ -f "$conf" ] && ! touched "$conf"; then
+        last_backup="$(newest_backup)"
+        if [ -z "$last_backup" ] || ! cmp -s "$conf" "$last_backup"; then
+            stamp="$conf.touchglass-backup-$(date +%Y%m%d-%H%M%S)"
+            backup="$stamp"
+            n=1
+            while [ -e "$backup" ]; do backup="$stamp-$n"; n=$((n + 1)); done
+        fi
+    fi
+
+    if [ "$dry_run" = 1 ]; then
+        say "Dry run: nothing is written."
+        if [ "$build" = 1 ]; then say "Would build TouchGlass.app with scripts/build-app.sh."; fi
+        say "Would copy $source_app to $app."
+        say "Would write the real scdaemon path to $scd_path_file: $real_scd"
+        if [ -f "$pinentry_conf" ]; then
+            say "Would keep the existing $pinentry_conf."
+        else
+            say "Would write $pinentry_conf with fallback-pinentry = $fallback"
+        fi
+        if [ "$conf_changed" = 1 ]; then
+            if [ -n "$backup" ]; then say "Would back up $conf to $backup."; fi
+            say "Would change $conf:"
+            show_diff "$conf" "$tmp" gpg-agent.conf
+            say "Would then stop gpg-agent with 'gpgconf --kill gpg-agent', which forgets cached PINs and passphrases."
+        else
+            say "$conf already points at TouchGlass; no change."
+        fi
+        return 0
+    fi
+
+    if [ "$build" = 1 ]; then
+        say "Building TouchGlass.app..."
+        "$repo_root/scripts/build-app.sh"
+    fi
+
+    # Copy the app. Skip it when installing over the same bundle.
+    if [ "$(cd "$source_app" && pwd -P)" != "$( (cd "$app" 2>/dev/null && pwd -P) || true)" ]; then
+        mkdir -p "$app_dir"
+        rm -rf "$app"
+        ditto "$source_app" "$app"
+        say "Copied TouchGlass.app to $app."
+        if pgrep -x TouchGlass >/dev/null 2>&1; then
+            say "The TouchGlass host is running an older copy; quit it from Activity Monitor or 'pkill -x TouchGlass', and the helpers start the new one on demand."
+        fi
+    fi
+
+    mkdir -p "$support_dir"
+    chmod 700 "$support_dir"
+    printf '%s\n' "$real_scd" > "$scd_path_file"
+    say "Wrote the real scdaemon path to $scd_path_file: $real_scd"
+    if [ -f "$pinentry_conf" ]; then
+        say "Kept the existing $pinentry_conf."
+    else
+        cat > "$pinentry_conf" <<EOF
+# touchglass-pinentry settings. One "key = value" per line.
+# The pinentry that takes over when the TouchGlass host is not reachable.
+fallback-pinentry = $fallback
+# The app the pinentry starts when the host is not running; "none" disables starting it.
+host-app = $app
+EOF
+        say "Wrote $pinentry_conf with fallback-pinentry = $fallback"
+    fi
+
+    if [ "$conf_changed" = 0 ]; then
+        say "$conf already points at TouchGlass; no change."
+        return 0
+    fi
+    if [ -n "$backup" ]; then
+        cp -p "$conf" "$backup"
+        say "Backed up $conf to $backup."
+    fi
+    replace_conf "$tmp"
+    say "Set pinentry-program and scdaemon-program in $conf:"
+    say "  pinentry-program $new_pinentry"
+    say "  scdaemon-program $new_scd"
+    reload_agent
+}
+
+cmd_uninstall() {
+    remove_app=0
+    dry_run=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --remove-app) remove_app=1; shift ;;
+            --dry-run) dry_run=1; shift ;;
+            *) die "uninstall: unknown option $1" ;;
+        esac
+    done
+
+    app="$(app_from_conf)"
+    [ -n "$app" ] || app="$HOME/Applications/TouchGlass.app"
+
+    tmp="$(mktemp "${TMPDIR:-/tmp}/touchglass.XXXXXX")"
+    notes="$(mktemp "${TMPDIR:-/tmp}/touchglass.XXXXXX")"
+    trap 'rm -f "$tmp" "$notes"' EXIT
+
+    conf_changed=0
+    if [ -f "$conf" ]; then
+        # Lines to restore when a TouchGlass line has no marker: the option's last line in the newest backup.
+        backup="$(newest_backup)"
+        fb_p=""; fb_s=""
+        if [ -n "$backup" ]; then
+            fb_p="$(TG_KEY=pinentry-program awk "$awk_lib"'keyof($0) == ENVIRON["TG_KEY"] && !ours($0, ENVIRON["TG_KEY"]) { l = $0 } END { if (l != "") print l }' "$backup")"
+            fb_s="$(TG_KEY=scdaemon-program awk "$awk_lib"'keyof($0) == ENVIRON["TG_KEY"] && !ours($0, ENVIRON["TG_KEY"]) { l = $0 } END { if (l != "") print l }' "$backup")"
+        fi
+        TG_HAVE_BACKUP="$([ -n "$backup" ] && echo 1 || echo 0)" TG_FB_P="$fb_p" TG_FB_S="$fb_s" \
+            TG_NOEOL="$(no_eol "$conf")" TG_NOTES="$notes" awk "$awk_lib"'
+        { L[NR] = $0 }
+        END {
+            fb["pinentry-program"] = ENVIRON["TG_FB_P"]; fb["scdaemon-program"] = ENVIRON["TG_FB_S"]
+            notes = ENVIRON["TG_NOTES"]
+            i = 1
+            while (i <= NR) {
+                line = L[i]
+                if (index(line, "# touchglass: ") == 1) {
+                    body = substr(line, 15)
+                    if (body == "created gpg-agent.conf") { print "created" > notes; i++; continue }
+                    if (body ~ /^added (pinentry|scdaemon)-program$/) { k = substr(body, 7); orig = ""; restore = 0 }
+                    else { k = keyof(body); orig = body; restore = 1 }
+                    if (k != "" && i < NR && keyof(L[i + 1]) == k && ours(L[i + 1], k)) {
+                        if (restore) out(orig)
+                        i += 2; continue
+                    }
+                    print "orphan " line > notes
+                    out(line); i++; continue
+                }
+                k = keyof(line)
+                if (k != "" && ours(line, k)) {
+                    if (fb[k] != "") { out(fb[k]); print "from-backup " k > notes }
+                    else if (ENVIRON["TG_HAVE_BACKUP"] == "1") print "removed-per-backup " k > notes
+                    else print "removed-no-backup " k > notes
+                    i++; continue
+                }
+                out(line); i++
+            }
+            if (nout && ENVIRON["TG_NOEOL"] != "1") printf "\n"
+        }' "$conf" > "$tmp"
+        if ! cmp -s "$conf" "$tmp"; then conf_changed=1; fi
+    fi
+
+    delete_conf=0
+    if grep -qx created "$notes" && [ ! -s "$tmp" ]; then delete_conf=1; fi
+
+    explain_notes() { # verb prefix ("Would " or "")
+        while IFS= read -r note; do
+            case "$note" in
+                "from-backup "*) say "No marker for ${note#from-backup }; $1restore it from $backup." ;;
+                "removed-per-backup "*) say "No marker for ${note#removed-per-backup }; $backup does not set it, so $1remove the TouchGlass line." ;;
+                "removed-no-backup "*) warn "no marker and no backup for ${note#removed-no-backup }; $1remove the TouchGlass line, so gpg-agent uses its default." ;;
+                "orphan "*) warn "kept '${note#orphan }': the line after it is not a TouchGlass line" ;;
+            esac
+        done < "$notes"
+    }
+
+    if [ "$dry_run" = 1 ]; then
+        say "Dry run: nothing is written."
+        explain_notes "would "
+        if [ "$conf_changed" = 1 ]; then
+            say "Would change $conf:"
+            if [ "$delete_conf" = 1 ]; then
+                show_diff "$conf" /dev/null gpg-agent.conf
+                say "Would delete $conf, which install created."
+            else
+                show_diff "$conf" "$tmp" gpg-agent.conf
+            fi
+            say "Would then stop gpg-agent with 'gpgconf --kill gpg-agent', which forgets cached PINs and passphrases."
+        else
+            say "$conf has no TouchGlass lines; no change."
+        fi
+        if [ "$remove_app" = 1 ]; then say "Would remove $app."; fi
+        return 0
+    fi
+
+    explain_notes ""
+    if [ "$conf_changed" = 1 ]; then
+        if [ "$delete_conf" = 1 ]; then
+            rm -f "$conf"
+            say "Removed $conf, which install created."
+        else
+            replace_conf "$tmp"
+            say "Restored pinentry-program and scdaemon-program in $conf."
+        fi
+        reload_agent
+    else
+        say "$conf has no TouchGlass lines; no change."
+    fi
+    if ls "$conf".touchglass-backup-* >/dev/null 2>&1; then
+        say "Kept the backups of gpg-agent.conf next to it."
+    fi
+
+    if [ "$remove_app" = 1 ]; then
+        if [ -x "$app/Contents/MacOS/TouchGlass" ] && [ "${app##*/}" = TouchGlass.app ]; then
+            rm -rf "$app"
+            say "Removed $app."
+            if pgrep -x TouchGlass >/dev/null 2>&1; then say "The TouchGlass host is still running; quit it with 'pkill -x TouchGlass'."; fi
+        else
+            say "No TouchGlass.app at $app; nothing to remove."
+        fi
+    fi
+}
+
+cmd_status() {
+    [ $# -eq 0 ] || die "status takes no options"
+    say "GnuPG home:        $gnupg_home"
+    if [ -f "$conf" ]; then
+        p="$(current_value "$conf" pinentry-program)"
+        s="$(current_value "$conf" scdaemon-program)"
+    else
+        say "gpg-agent.conf:    missing"
+        p=""; s=""
+    fi
+    label() { # value helper-name
+        if [ -z "$1" ]; then printf '(not set; gpg-agent default)'
+        else
+            printf '%s' "$1"
+            case "$1" in */"$2") printf ' (TouchGlass%s)' "$([ -x "$1" ] || echo ', missing')" ;; esac
+        fi
+    }
+    say "pinentry-program:  $(label "$p" touchglass-pinentry)"
+    say "scdaemon-program:  $(label "$s" touchglass-scdaemon)"
+
+    app="$(app_from_conf)"
+    [ -n "$app" ] || app="$HOME/Applications/TouchGlass.app"
+    if [ -d "$app" ]; then
+        version="$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist" 2>/dev/null || echo unknown)"
+        say "App:               $app (version $version)"
+    else
+        say "App:               not found at $app"
+    fi
+    if pgrep -x TouchGlass >/dev/null 2>&1; then say "Host:              running"; else say "Host:              not running"; fi
+    if [ -f "$scd_path_file" ]; then say "Real scdaemon:     $(head -n 1 "$scd_path_file")"; else say "Real scdaemon:     not configured"; fi
+    if [ -f "$pinentry_conf" ]; then
+        fb="$(awk -F= '/^[ \t]*fallback-pinentry[ \t]*=/ { v = $2; sub(/^[ \t]+/, "", v); sub(/[ \t]+$/, "", v) } END { print v }' "$pinentry_conf")"
+        say "Fallback pinentry: ${fb:-(default)}"
+    fi
+    backups="$(ls -1 "$conf".touchglass-backup-* 2>/dev/null | LC_ALL=C sort || true)"
+    if [ -n "$backups" ]; then
+        say "Backups:"
+        printf '%s\n' "$backups" | sed 's/^/  /'
+    else
+        say "Backups:           none"
+    fi
+}
+
+[ $# -ge 1 ] || { usage >&2; exit 2; }
+command="$1"; shift
+case "$command" in
+    install) cmd_install "$@" ;;
+    uninstall) cmd_uninstall "$@" ;;
+    status) cmd_status "$@" ;;
+    help | -h | --help) usage ;;
+    *) usage >&2; exit 2 ;;
+esac
