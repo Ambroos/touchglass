@@ -8,7 +8,7 @@ import TouchGlassIPC
 /// | Key | Environment | Default |
 /// |---|---|---|
 /// | `fallback-pinentry` | `TOUCHGLASS_FALLBACK_PINENTRY` | first of `/opt/homebrew/bin/pinentry-mac`, `/usr/local/bin/pinentry-mac` that exists |
-/// | `host-app` | `TOUCHGLASS_HOST_APP` | `TouchGlass`; `none` disables launching |
+/// | `host-app` | `TOUCHGLASS_HOST_APP` | the `TouchGlass.app` that contains this executable, else the app named `TouchGlass`; an absolute path opens that bundle; `none` disables launching |
 /// | `connect-timeout-ms` | `TOUCHGLASS_CONNECT_TIMEOUT_MS` | 300 |
 /// | `launch-timeout-ms` | `TOUCHGLASS_LAUNCH_TIMEOUT_MS` | 2000 |
 /// | `ping-interval-ms` | `TOUCHGLASS_PING_INTERVAL_MS` | 1000 |
@@ -43,7 +43,7 @@ struct Config {
         let fallback = value("fallback-pinentry", "TOUCHGLASS_FALLBACK_PINENTRY")
             ?? defaultFallbacks.first { FileManager.default.isExecutableFile(atPath: $0) }
             ?? defaultFallbacks[0]
-        let app = value("host-app", "TOUCHGLASS_HOST_APP") ?? "TouchGlass"
+        let app = value("host-app", "TOUCHGLASS_HOST_APP") ?? HostLauncher.defaultTarget()
 
         return Config(
             fallbackPinentry: fallback,
