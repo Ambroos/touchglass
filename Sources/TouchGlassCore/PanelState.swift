@@ -33,14 +33,18 @@ public struct PinRequest: Sendable, Equatable {
     public var minimumLengthOverride: Int?
     /// What asked for the operation, such as "git commit · touchglass". It can arrive after the panel shows.
     public var client: String?
+    /// Identifies the prompt. The secure field starts empty for each prompt, so text typed for one request
+    /// can't go to the next one.
+    public var promptID: String?
 
-    public init(operation: OperationKind, pin: PinKind = .user, cardSerial: String, attemptsLeft: Int? = nil, minimumLengthOverride: Int? = nil, client: String? = nil) {
+    public init(operation: OperationKind, pin: PinKind = .user, cardSerial: String, attemptsLeft: Int? = nil, minimumLengthOverride: Int? = nil, client: String? = nil, promptID: String? = nil) {
         self.operation = operation
         self.pin = pin
         self.cardSerial = cardSerial
         self.attemptsLeft = attemptsLeft
         self.minimumLengthOverride = minimumLengthOverride
         self.client = client
+        self.promptID = promptID
     }
 
     public var minimumLength: Int { minimumLengthOverride ?? pin.minimumLength }
@@ -53,11 +57,14 @@ public struct PassphraseRequest: Sendable, Equatable {
     public var error: String?
     /// What asked for the passphrase.
     public var client: String?
+    /// Identifies the prompt, as in `PinRequest`. A retry after a rejected passphrase keeps it.
+    public var promptID: String?
 
-    public init(description: String, error: String? = nil, client: String? = nil) {
+    public init(description: String, error: String? = nil, client: String? = nil, promptID: String? = nil) {
         self.description = description
         self.error = error
         self.client = client
+        self.promptID = promptID
     }
 }
 

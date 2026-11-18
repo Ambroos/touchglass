@@ -320,8 +320,10 @@ private struct ControlsView: View {
         switch controls {
         case .none:
             EmptyView()
-        case .secureField(let placeholder, let minimumLength, let cancel, let submit, let busy):
+        case .secureField(let placeholder, let minimumLength, let cancel, let submit, let busy, let prompt):
+            // A new identity per prompt gives the field new, empty state.
             SecureEntry(model: model, placeholder: placeholder, minimumLength: minimumLength, cancelLabel: cancel, submitLabel: submit, busy: busy)
+                .id(prompt)
         case .countdown(let wait):
             CountdownLine(wait: wait, now: now)
         case .countdownPlaceholder:

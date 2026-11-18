@@ -38,11 +38,11 @@ import TouchGlassIPC
         _ = coordinator.handle(.pinNeeded(ConnRef(conn: "100:p")), from: proxy, now: now)
         let desc = cardDescription + "\nRemaining attempts: 2"
         let prompt = panelEvents(coordinator.handle(.getPin(GetPin(id: "r1", desc: desc, fields: CardFields(number: "12 345 678"))), from: pinentry, now: now))
-        #expect(prompt == [.show(.pinEntry(PinRequest(operation: .sshLogin, cardSerial: "12345678", attemptsLeft: 2)))])
+        #expect(prompt == [.show(.pinEntry(PinRequest(operation: .sshLogin, cardSerial: "12345678", attemptsLeft: 2, promptID: "r1")))])
 
         let submitted = coordinator.handle(.submit("975310"))
         #expect(submitted.contains(.reply(pinentry, .pin(PinReply(id: "r1", secret: Data("975310".utf8))))))
-        #expect(panelEvents(submitted) == [.show(.verifying(PinRequest(operation: .sshLogin, cardSerial: "12345678", attemptsLeft: 2)))])
+        #expect(panelEvents(submitted) == [.show(.verifying(PinRequest(operation: .sshLogin, cardSerial: "12345678", attemptsLeft: 2, promptID: "r1")))])
         // The secret never shows up in a printed output.
         #expect(!"\(submitted)".contains("975310"))
 
@@ -84,7 +84,7 @@ import TouchGlassIPC
         _ = coordinator.handle(.touchWait(TouchGlassIPC.TouchWait(conn: "100:p", at: now.timeIntervalSince1970)), from: proxy, now: now)
         _ = coordinator.handle(.pinNeeded(ConnRef(conn: "100:p")), from: proxy, now: now)
         let prompt = panelEvents(coordinator.handle(.getPin(GetPin(id: "r1", desc: cardDescription, fields: CardFields(number: "12 345 678"))), from: pinentry, now: now))
-        #expect(prompt == [.show(.pinEntry(PinRequest(operation: .sign, cardSerial: "12345678")))])
+        #expect(prompt == [.show(.pinEntry(PinRequest(operation: .sign, cardSerial: "12345678", promptID: "r1")))])
     }
 
     @Test func queuedTouchWaitRearmsAfterTheFirstOperation() throws {
@@ -116,10 +116,10 @@ import TouchGlassIPC
     @Test func passphraseRetryShakesAndDismissCloses() {
         var coordinator = HostCoordinator()
         let first = panelEvents(coordinator.handle(.getPin(GetPin(id: "p1", desc: "Unlock key")), from: pinentry, now: now))
-        #expect(first == [.show(.passphrase(PassphraseRequest(description: "Unlock key")))])
+        #expect(first == [.show(.passphrase(PassphraseRequest(description: "Unlock key", promptID: "p1")))])
         #expect(coordinator.handle(.submit("wrong")) == [.reply(pinentry, .pin(PinReply(id: "p1", secret: Data("wrong".utf8))))])
         let retry = coordinator.handle(.getPin(GetPin(id: "p2", desc: "Unlock key", error: "Bad Passphrase (try 2 of 3)")), from: pinentry, now: now)
-        #expect(retry == [.panel(.show(.passphrase(PassphraseRequest(description: "Unlock key", error: "Bad Passphrase (try 2 of 3)")))), .shakeField])
+        #expect(retry == [.panel(.show(.passphrase(PassphraseRequest(description: "Unlock key", error: "Bad Passphrase (try 2 of 3)", promptID: "p1")))), .shakeField])
         _ = coordinator.handle(.submit("right"))
         #expect(coordinator.handle(.dismiss(RequestRef(id: "p2")), from: pinentry, now: now) == [.panel(.dismiss)])
     }

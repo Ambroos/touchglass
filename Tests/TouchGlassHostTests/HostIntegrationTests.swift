@@ -150,9 +150,10 @@ struct HostIntegrationTests {
         #expect(result.pinentry.contains("D 123456"))
         #expect(await waitUntil { panel.contains { $0 == .show(.success(.sign)) } })
 
+        // The prompt ID is the pinentry's request ID, which the test doesn't know.
         let request = PinRequest(operation: .sign, cardSerial: "12345678")
-        let pinIndex = panel.events.firstIndex(of: .show(.pinEntry(request)))
-        let verifyingIndex = panel.events.firstIndex(of: .show(.verifying(request)))
+        let pinIndex = panel.events.firstIndex { if case .show(.pinEntry(var shown)) = $0 { shown.promptID = nil; return shown == request } else { return false } }
+        let verifyingIndex = panel.events.firstIndex { if case .show(.verifying(var shown)) = $0 { shown.promptID = nil; return shown == request } else { return false } }
         let touchIndex = panel.events.firstIndex { if case .show(.touchWait(let wait)) = $0 { wait.operation == .sign } else { false } }
         let successIndex = panel.events.firstIndex(of: .show(.success(.sign)))
         #expect(pinIndex != nil && verifyingIndex != nil && touchIndex != nil && successIndex != nil, "events: \(panel.events)")
@@ -189,7 +190,13 @@ struct HostIntegrationTests {
         #expect(await pinentry.readLine() == "OK")
         pinentry.send("BYE")
 
-        #expect(panel.events.first == .show(.pinEntry(PinRequest(operation: .unknown, cardSerial: "12345678"))))
+        guard case .show(.pinEntry(var shown)) = panel.events.first else {
+            Issue.record("no PIN prompt: \(panel.events)")
+            return
+        }
+        #expect(shown.promptID != nil)
+        shown.promptID = nil
+        #expect(shown == PinRequest(operation: .unknown, cardSerial: "12345678"))
         #expect(await waitUntil { panel.events.last == .dismiss })
     }
 }

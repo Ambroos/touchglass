@@ -455,7 +455,7 @@ public struct HostCoordinator: Sendable {
         // A retry of the passphrase that is showing: same prompt, with the agent's error. Only the pinentry
         // that owns the prompt may retry it; another connection must not receive the typed secret.
         if case .passphrase(_, let shownConnection, let previous, _) = shown, shownConnection == connection {
-            let next = PassphraseRequest(description: request.desc ?? "", error: request.error, client: previous.client)
+            let next = PassphraseRequest(description: request.desc ?? "", error: request.error, client: previous.client, promptID: previous.promptID)
             shown = .passphrase(requestID: request.id, connection: connection, request: next, submitted: false)
             return [.panel(.show(.passphrase(next))), .shakeField]
         }
@@ -478,7 +478,7 @@ public struct HostCoordinator: Sendable {
         } ?? []
 
         guard isCard else {
-            let passphrase = PassphraseRequest(description: request.desc ?? "", error: request.error)
+            let passphrase = PassphraseRequest(description: request.desc ?? "", error: request.error, promptID: request.id)
             shown = .passphrase(requestID: request.id, connection: connection, request: passphrase, submitted: false)
             return [.panel(.show(.passphrase(passphrase)))] + resolve
         }
@@ -490,7 +490,8 @@ public struct HostCoordinator: Sendable {
             pin: text.localizedCaseInsensitiveContains("admin") ? .admin : .user,
             cardSerial: serial,
             attemptsLeft: Self.attemptsLeft(in: request.desc),
-            client: operation?.client
+            client: operation?.client,
+            promptID: request.id
         )
         shown = .cardPIN(requestID: request.id, connection: connection, operation: operationID, request: pin, submitted: false)
         return [.panel(.show(.pinEntry(pin)))] + resolve

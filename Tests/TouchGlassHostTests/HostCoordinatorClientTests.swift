@@ -97,13 +97,13 @@ import TouchGlassIPC
         #expect(queries(prompt) == [.resolveClient(.request(id: "r1", operation: first()), .owner(4242))])
 
         let filled = panelEvents(coordinator.clientResolved(.request(id: "r1", operation: first()), label: "git tag · example"))
-        #expect(filled == [.show(.pinEntry(PinRequest(operation: .sign, cardSerial: "12345678", client: "git tag · example")))])
+        #expect(filled == [.show(.pinEntry(PinRequest(operation: .sign, cardSerial: "12345678", client: "git tag · example", promptID: "r1")))])
 
         // The guess among the agent's clients arrives later and loses to the owner's answer.
         #expect(coordinator.clientResolved(.operation(first()), label: "gpg").isEmpty)
 
         let submitted = panelEvents(coordinator.handle(.submit("975310")))
-        #expect(submitted == [.show(.verifying(PinRequest(operation: .sign, cardSerial: "12345678", client: "git tag · example")))])
+        #expect(submitted == [.show(.verifying(PinRequest(operation: .sign, cardSerial: "12345678", client: "git tag · example", promptID: "r1")))])
         #expect(try #require(touch(&coordinator)).client == "git tag · example")
     }
 
@@ -111,7 +111,7 @@ import TouchGlassIPC
         var coordinator = HostCoordinator()
         let prompt = coordinator.handle(.getPin(GetPin(id: "p1", desc: "Please enter the passphrase", owner: "77/501 example-host")), from: pinentry, now: now)
         #expect(queries(prompt) == [.resolveClient(.request(id: "p1", operation: nil), .owner(77))])
-        #expect(panelEvents(coordinator.clientResolved(.request(id: "p1", operation: nil), label: "gpg")) == [.show(.passphrase(PassphraseRequest(description: "Please enter the passphrase", client: "gpg")))])
+        #expect(panelEvents(coordinator.clientResolved(.request(id: "p1", operation: nil), label: "gpg")) == [.show(.passphrase(PassphraseRequest(description: "Please enter the passphrase", client: "gpg", promptID: "p1")))])
     }
 
     @Test func touchTimeoutSettingOverridesTheProxy() throws {

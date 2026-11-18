@@ -13,7 +13,8 @@ public final class PanelController {
     /// User actions from the panel. `hide` and `dismiss` are handled here first.
     public var actions = PanelActions()
 
-    private let panel = PanelWindow()
+    /// Internal so that tests can inspect the window.
+    let panel = PanelWindow()
     private let sounds = Sounds()
     /// Tests set this, so they make no sound.
     var muted = false

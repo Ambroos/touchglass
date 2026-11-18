@@ -34,7 +34,8 @@ public enum Stage: Sendable, Equatable {
 
 public enum Controls: Sendable, Equatable {
     case none
-    case secureField(placeholder: String, minimumLength: Int, cancel: String, submit: String, busy: Bool)
+    /// `prompt` is the request's `promptID`: the field starts empty when it changes.
+    case secureField(placeholder: String, minimumLength: Int, cancel: String, submit: String, busy: Bool, prompt: String?)
     case countdown(TouchWait)
     /// Keeps the countdown slot's height in the success state, so the ring does not move.
     case countdownPlaceholder
@@ -147,7 +148,8 @@ extension PanelPresentation {
                     minimumLength: request.minimumLength,
                     cancel: "Cancel",
                     submit: "Unlock",
-                    busy: busy
+                    busy: busy,
+                    prompt: request.promptID
                 ),
                 layoutGroup: "pin"
             )
@@ -161,7 +163,7 @@ extension PanelPresentation {
                 clientLine: request.client,
                 reservesClientLine: true,
                 attemptsLine: nil,
-                controls: .secureField(placeholder: "Passphrase", minimumLength: 1, cancel: "Cancel", submit: "Unlock", busy: false),
+                controls: .secureField(placeholder: "Passphrase", minimumLength: 1, cancel: "Cancel", submit: "Unlock", busy: false, prompt: request.promptID),
                 layoutGroup: "pin"
             )
         case .touchWait(let wait):
