@@ -1,0 +1,12 @@
+TouchGlass
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+touchglass-scdaemon was written for this project. Its design draws on:
+
+- gpg-tap-notifier-macos, Apache License 2.0: the idea of wrapping scdaemon as gpg-agent's
+  scdaemon-program and inferring touch waits from response timing.
+  https://github.com/palantir/gpg-tap-notifier-macos
+- scdaemon-proxy by klali: an earlier scdaemon wrapper for touch notifications.
+  https://github.com/klali/scdaemon-proxy
+
+No code from either project is included.
