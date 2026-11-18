@@ -3,10 +3,11 @@ import TouchGlassCore
 
 /// The window's root view: a fixed-size transparent canvas holding the glass panel.
 ///
-/// The glass and the content are separate layers. The glass is inserted and removed inside a
-/// `GlassEffectContainer` with the system `materialize` glass transition and a centre-anchored
-/// scale. The content is laid out once, with animations off, and only its opacity and a small
-/// centre-anchored scale animate, so nothing on the panel moves.
+/// The content is the glass view's own content, so it always renders on top of the glass and
+/// stays sharp. (Inside a `GlassEffectContainer`, glass is lifted above sibling views, so the
+/// content must not be a sibling.) The surface is inserted with the system `materialize` glass
+/// transition and a centre-anchored scale; the content's opacity and a small centre-anchored
+/// scale animate separately, after the glass on the way in and before it on the way out.
 public struct PanelSurfaceView: View {
     @Bindable var model: PanelModel
 
@@ -25,41 +26,19 @@ public struct PanelSurfaceView: View {
     public var body: some View {
         GlassEffectContainer {
             ZStack {
-                if model.surfaceShown {
-                    surface
-                        .transition(surfaceTransition)
-                }
-                if let state = model.state {
+                if model.surfaceShown, let state = model.state {
                     PanelContentView(model: model, state: state)
                         .opacity(model.contentShown ? 1 : 0)
                         .scaleEffect(model.contentShown || reduceMotion ? 1 : 0.96, anchor: .center)
                         .allowsHitTesting(model.contentShown)
+                        .frame(width: PanelMetrics.size.width, height: PanelMetrics.size.height)
+                        .modifier(SurfaceMaterial(shape: shape, opaque: reduceTransparency, reduceMotion: reduceMotion, increasedContrast: contrast == .increased))
+                        .transition(surfaceTransition)
                 }
             }
             .frame(width: PanelMetrics.size.width, height: PanelMetrics.size.height)
         }
         .frame(width: PanelMetrics.windowSize.width, height: PanelMetrics.windowSize.height)
-    }
-
-    /// Liquid Glass alone, or an opaque window-coloured surface when Reduce Transparency is on.
-    @ViewBuilder
-    private var surface: some View {
-        if reduceTransparency {
-            shape
-                .fill(Color(nsColor: .windowBackgroundColor))
-                .overlay(shape.strokeBorder(Color(nsColor: .separatorColor), lineWidth: contrast == .increased ? 1 : 0.5))
-                .frame(width: PanelMetrics.size.width, height: PanelMetrics.size.height)
-        } else {
-            Color.clear
-                .frame(width: PanelMetrics.size.width, height: PanelMetrics.size.height)
-                .glassEffect(.regular, in: shape)
-                .glassEffectTransition(reduceMotion ? .identity : .materialize)
-                .overlay {
-                    if contrast == .increased {
-                        shape.strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
-                    }
-                }
-        }
     }
 
     private var surfaceTransition: AnyTransition {
@@ -68,5 +47,31 @@ public struct PanelSurfaceView: View {
             insertion: .scale(scale: 0.9, anchor: .center).combined(with: .opacity),
             removal: .scale(scale: 0.94, anchor: .center).combined(with: .opacity)
         )
+    }
+}
+
+/// Liquid Glass behind the content, or an opaque window-coloured surface when Reduce
+/// Transparency is on. Nothing else: no blur, tint or shadow of our own.
+private struct SurfaceMaterial: ViewModifier {
+    let shape: RoundedRectangle
+    let opaque: Bool
+    let reduceMotion: Bool
+    let increasedContrast: Bool
+
+    func body(content: Content) -> some View {
+        if opaque {
+            content
+                .background(shape.fill(Color(nsColor: .windowBackgroundColor)))
+                .overlay(shape.strokeBorder(Color(nsColor: .separatorColor), lineWidth: increasedContrast ? 1 : 0.5))
+        } else {
+            content
+                .glassEffect(.regular, in: shape)
+                .glassEffectTransition(reduceMotion ? .identity : .materialize)
+                .overlay {
+                    if increasedContrast {
+                        shape.strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
+                    }
+                }
+        }
     }
 }
