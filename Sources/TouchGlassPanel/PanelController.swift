@@ -69,7 +69,8 @@ public final class PanelController {
         case .open(let state):
             open(state)
         case .update(let state):
-            model.state = state
+            // No animation in this transaction: the content view's crossfade transitions carry their own.
+            withTransaction(Transaction(animation: nil)) { model.state = state }
         case .close:
             close()
         case .setKey(let allowsKey):
@@ -111,6 +112,9 @@ public final class PanelController {
             model.state = state
         }
 
+        // Resolve the layout now, with animations off, so the entrance only animates opacity and scale.
+        panel.contentView?.layoutSubtreeIfNeeded()
+
         if let screen = Placement.targetScreen() {
             panel.setFrameOrigin(Placement.origin(on: screen))
         }
@@ -128,8 +132,8 @@ public final class PanelController {
                     model.contentShown = true
                 }
             } else {
-                // The glass springs up from 0.9 while the system materialize transition
-                // brings in its refraction; the content follows once the glass has body.
+                // The glass springs up from 0.9 around its centre while the system materialize
+                // transition brings in its refraction; the content follows once the glass has body.
                 withAnimation(.spring(duration: 0.5 * scale, bounce: 0.2)) {
                     model.surfaceShown = true
                 }

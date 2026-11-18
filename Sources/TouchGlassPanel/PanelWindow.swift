@@ -18,8 +18,8 @@ final class PanelWindow: NSPanel {
         hidesOnDeactivate = false
         isOpaque = false
         backgroundColor = .clear
-        // The shadow is drawn in SwiftUI so it can animate with the glass; a window-server
-        // shadow is computed from the window's alpha and would pop in after the entrance.
+        // The glass draws its own edge and depth. A window-server shadow is computed from the
+        // window's alpha at order-in, while the window is still empty, so it would not match.
         hasShadow = false
         isMovableByWindowBackground = true
         isReleasedWhenClosed = false

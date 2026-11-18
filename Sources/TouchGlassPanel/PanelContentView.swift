@@ -32,34 +32,33 @@ struct PanelContentView: View {
 
     private func content(now: Date) -> some View {
         let presentation = PanelPresentation(state)
-        let fade = Animation.easeInOut(duration: 0.2 * model.animationScale)
+        // State changes crossfade in place. The transitions carry their own animation, and the
+        // state itself changes without one, so layout never animates and nothing slides.
+        let crossfade = AnyTransition.opacity.animation(.easeInOut(duration: 0.2 * model.animationScale))
         let textKey = presentation.title + "\n" + (presentation.detail ?? "") + (presentation.attemptsLine ?? "")
 
         return VStack(spacing: 0) {
             ZStack {
                 StageView(stage: presentation.stage, now: now)
                     .id(presentation.layoutGroup)
-                    .transition(.opacity)
+                    .transition(crossfade)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .animation(fade, value: presentation.layoutGroup)
 
             ZStack {
                 TextBlock(presentation: presentation)
                     .id(textKey)
-                    .transition(.opacity)
+                    .transition(crossfade)
             }
             .padding(.top, 16)
-            .animation(fade, value: textKey)
 
             if presentation.controls != .none {
                 ZStack {
                     ControlsView(model: model, controls: presentation.controls, now: now)
                         .id(presentation.layoutGroup)
-                        .transition(.opacity)
+                        .transition(crossfade)
                 }
                 .padding(.top, 16)
-                .animation(fade, value: presentation.layoutGroup)
             }
         }
         .padding(.top, 24)
