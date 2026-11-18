@@ -210,8 +210,31 @@ final class FakeProcesses: ProcessSource, @unchecked Sendable {
         #expect(git("push", "-o", "ci.skip", "--force-with-lease", "upstream") == "git push upstream · touchglass")
         #expect(git("push") == "git push · touchglass")
         #expect(git("pull", "--rebase") == "git pull · touchglass")
+        #expect(git("pull", "upstream", "main") == "git pull upstream · touchglass")
+        #expect(git("fetch", "origin") == "git fetch origin · touchglass")
         #expect(git("fetch", "--all") == "git fetch · touchglass")
         #expect(git() == "git")
+    }
+
+    @Test func remoteURLsShowOnlyTheHost() {
+        func remote(_ operand: String) -> String? { GitArguments.remoteLabel(operand) }
+        #expect(remote("origin") == "origin")
+        #expect(remote("https://user:token@example.com/team/repo.git") == "example.com")
+        #expect(remote("https://example.com:8443/team/repo.git?x=1") == "example.com")
+        #expect(remote("ssh://git@example.com:2222/team/repo.git") == "example.com")
+        #expect(remote("ssh://git@[2001:db8::1]:22/repo.git") == "2001:db8::1")
+        #expect(remote("git@example.com:team/repo.git") == "example.com")
+        #expect(remote("example.com:repo.git") == "example.com")
+        #expect(remote("git@[2001:db8::1]:repo.git") == "2001:db8::1")
+        // Local paths and file URLs show nothing.
+        #expect(remote("/srv/git/repo.git") == nil)
+        #expect(remote("../repo") == nil)
+        #expect(remote("./a:b") == nil)
+        #expect(remote("file:///srv/git/repo.git") == nil)
+
+        let push = label([.init(name: "git", argv: ["git", "push", "--signed", "https://user:token@example.com/team/repo.git", "main"], cwd: "/src/touchglass")])
+        #expect(push == "git push example.com · touchglass")
+        #expect(label([.init(name: "git", argv: ["git", "fetch", "/srv/git/repo.git"], cwd: "/src/touchglass")]) == "git fetch · touchglass")
     }
 
     @Test func gitCloneNamesTheNewDirectory() {

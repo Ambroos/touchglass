@@ -110,7 +110,7 @@ The demo takes `appearance` as `--appearance`, and `show-client = no` as `--no-c
 
 gpg-agent doesn't tell scdaemon or the pinentry which command needs the card, so the host infers it, best effort. For a PIN prompt, it uses the client PID that gpg-agent passes to the pinentry. For a touch without a PIN prompt, it lists gpg-agent's connected clients by matching the agent's Unix sockets with the sockets of your other processes: an ssh client on the agent's ssh socket for an SSH login, any other client for a signature or decryption. From that process it walks up a few parents and reads their arguments and working directory:
 
-- Under git, the label is the git subcommand and the repository's directory name, such as `git commit · touchglass`. `git push` adds the remote. The repository name comes from the directory that git runs in, which is the top level of the working tree or worktree; TouchGlass reads no files in the repository.
+- Under git, the label is the git subcommand and the repository's directory name, such as `git commit · touchglass`. `git push`, `git pull` and `git fetch` add the remote name, or only the host when the command names a URL. The repository name comes from the directory that git runs in, which is the top level of the working tree or worktree; TouchGlass reads no files in the repository.
 - An ssh client outside git shows its destination host.
 - Anything else shows its executable name, such as `gpg`.
 

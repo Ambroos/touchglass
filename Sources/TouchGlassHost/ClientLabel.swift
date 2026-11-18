@@ -51,7 +51,7 @@ public enum ClientLabel {
         guard let command = invocation.command else { return "git" }
 
         var words = "git \(command)"
-        if command == "push", let remote = invocation.operands.first {
+        if ["push", "pull", "fetch"].contains(command), let remote = invocation.operands.first.flatMap(GitArguments.remoteLabel) {
             words += " \(remote)"
         }
 
@@ -116,6 +116,42 @@ struct GitArguments: Equatable {
             result.operands.append(argument)
         }
         return result
+    }
+
+    /// What the label shows for the repository operand of `git push`, `git pull` or `git fetch`: a remote
+    /// name as written, or only the host of a URL. A URL can carry a user name, a token or a private path,
+    /// and the panel shows on every Space and in screen shares. A local path shows nothing.
+    static func remoteLabel(_ operand: String) -> String? {
+        // A remote name has no slash, colon or at sign.
+        guard operand.contains(where: { "/:@".contains($0) }) else { return operand }
+        var rest = Substring(operand)
+        if let scheme = rest.range(of: "://") {
+            guard rest[..<scheme.lowerBound] != "file" else { return nil }
+            rest = rest[scheme.upperBound...]
+            if let end = rest.firstIndex(where: { "/?#".contains($0) }) { rest = rest[..<end] }
+            if let at = rest.lastIndex(of: "@") { rest = rest[rest.index(after: at)...] }
+        } else {
+            // git reads "[user@]host:path" as scp-like syntax only when no slash comes before the colon.
+            let colon = rest.hasPrefix("[") || rest.contains("@[")
+                ? rest.firstIndex(of: "]").flatMap { rest[$0...].firstIndex(of: ":") }
+                : rest.firstIndex(of: ":")
+            guard let colon, !rest[..<colon].contains("/") else { return nil }
+            rest = rest[..<colon]
+            if let at = rest.lastIndex(of: "@") { rest = rest[rest.index(after: at)...] }
+            return Self.bareHost(rest, hasPort: false)
+        }
+        return Self.bareHost(rest, hasPort: true)
+    }
+
+    /// A host without IPv6 brackets or, when `hasPort`, a port.
+    private static func bareHost(_ authority: Substring, hasPort: Bool) -> String? {
+        var host = authority
+        if host.hasPrefix("["), let close = host.firstIndex(of: "]") {
+            host = host[host.index(after: host.startIndex)..<close]
+        } else if hasPort, let colon = host.lastIndex(of: ":") {
+            host = host[..<colon]
+        }
+        return host.isEmpty ? nil : String(host)
     }
 
     /// The directory `git clone` creates: the second operand, or the last path component of the URL
