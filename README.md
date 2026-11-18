@@ -2,7 +2,7 @@
 
 TouchGlass is a macOS panel for YubiKey operations through gpg-agent. When a signature, SSH login or decryption needs the card, one floating Liquid Glass panel asks for the PIN, then shows "Touch your YubiKey" with a countdown to the card's touch timeout, then confirms and closes itself.
 
-Run without arguments, the app is the host: it listens on a Unix socket for `touchglass-pinentry` and `touchglass-scdaemon` and shows the panel for their prompts and card operations. Installing those helpers into a gpg setup is not automated yet.
+Run without arguments, the app is the host: it listens on a Unix socket for `touchglass-pinentry` and `touchglass-scdaemon` and shows the panel for their prompts and card operations. To connect the helpers to gpg-agent, see [Install](#install).
 
 ## Requirements
 
@@ -24,6 +24,49 @@ scripts/test.sh
 ```
 
 The script passes the Swift Testing macro plugin path to `swift test`, because with only the Command Line Tools installed the build sometimes fails to find that plugin.
+
+## Install
+
+`scripts/touchglass install` connects TouchGlass to gpg-agent. Preview the change first; `--dry-run` prints the edit to `gpg-agent.conf` as a diff and writes nothing:
+
+```sh
+scripts/touchglass install --dry-run
+scripts/touchglass install
+```
+
+Install does the following:
+
+1. Builds `build/TouchGlass.app` if it is missing or older than the sources, and copies it to `~/Applications`. To install somewhere else, pass `--app-dir <directory>`; to install a bundle you built yourself, pass `--from <path to TouchGlass.app>`.
+2. Writes the path of the real scdaemon to `~/Library/Application Support/TouchGlass/scdaemon-program`. The path comes from the `scdaemon-program` line that `gpg-agent.conf` already has, or else from `gpgconf --list-components`. For Homebrew, install prefers a stable path such as `/opt/homebrew/opt/gnupg/libexec/scdaemon` over the versioned `Cellar` path, which a GnuPG upgrade removes.
+3. If `~/Library/Application Support/TouchGlass/pinentry.conf` doesn't exist, writes it with `fallback-pinentry` set to the pinentry that `gpg-agent.conf` named before, or to `pinentry-mac`. `touchglass-pinentry` hands prompts to that pinentry when the TouchGlass host isn't reachable.
+4. Backs up `gpg-agent.conf` to `gpg-agent.conf.touchglass-backup-<timestamp>` next to it.
+5. Points `pinentry-program` and `scdaemon-program` in `gpg-agent.conf` at the helpers in the app bundle. It comments out the effective line with a `# touchglass: ` prefix and adds the TouchGlass line after it. If an option isn't set, it adds a `# touchglass: added <option>` marker and the TouchGlass line at the top of the file. It changes no other line.
+6. Stops gpg-agent with `gpgconf --kill gpg-agent`, so it reads the new settings on next use. gpg-agent forgets its cached PINs and passphrases, so the next card operation asks for the PIN again.
+
+Running install again changes nothing, and adds no second backup or marker. Install uses `GNUPGHOME` if it is set, and `~/.gnupg` otherwise.
+
+To see what gpg-agent uses, whether the host is running, the installed app version and the backups:
+
+```sh
+scripts/touchglass status
+```
+
+## Uninstall
+
+```sh
+scripts/touchglass uninstall --dry-run
+scripts/touchglass uninstall
+```
+
+Uninstall restores the original `pinentry-program` and `scdaemon-program` lines from the `# touchglass: ` markers, so the file matches what it was before install, and stops gpg-agent. If the markers are missing, it takes the original lines from the newest backup. It works when the app was moved or deleted, and it keeps the backups. To also delete the installed app, pass `--remove-app`.
+
+To test the installer:
+
+```sh
+scripts/test-installer.sh
+```
+
+The tests run each case with a temporary `HOME` and `GNUPGHOME` and a stub `gpgconf`, so they don't touch your GnuPG setup or stop your gpg-agent.
 
 ## Run the demo
 
