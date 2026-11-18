@@ -53,13 +53,22 @@ public struct OpStart: Codable, Sendable, Equatable {
     public var serial: String?
     /// Unix time in seconds when the operation command reached scdaemon.
     public var at: Double?
+    /// The gpg-agent that runs the proxy, which is the agent whose client asked for the operation. Optional,
+    /// so hosts and proxies of different versions understand each other.
+    public var agentPid: Int32?
 
-    public init(conn: String, op: OperationKind, slot: Int? = nil, serial: String? = nil, at: Double? = nil) {
+    public init(conn: String, op: OperationKind, slot: Int? = nil, serial: String? = nil, at: Double? = nil, agentPid: Int32? = nil) {
         self.conn = conn
         self.op = op
         self.slot = slot
         self.serial = serial
         self.at = at
+        self.agentPid = agentPid
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case conn, op, slot, serial, at
+        case agentPid = "agent_pid"
     }
 }
 

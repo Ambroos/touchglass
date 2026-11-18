@@ -128,6 +128,23 @@ final class FakeProcesses: ProcessSource, @unchecked Sendable {
         #expect(resolver(table).label(for: .agentClient(ssh: true)) == "git push origin · touchglass")
     }
 
+    @Test func theReportedAgentIsTheOnlyOneSearched() {
+        let table = FakeProcesses()
+        agent(table, connections: [(301, 300, false)])
+        commitTree(table)
+        // A second agent with its own GnuPG home, such as one a test suite started, and a newer client.
+        table.add(900, ppid: 1, name: "gpg-agent", argv: ["gpg-agent", "--homedir", "/tmp/example"], start: 10, sockets: [UnixSocketRecord(pcb: 901, peerPCB: 902, path: "/tmp/example/S.gpg-agent")])
+        table.add(902, ppid: 50, name: "gpg", argv: ["gpg", "--decrypt"], start: 2_001, sockets: [UnixSocketRecord(pcb: 902, peerPCB: 901)])
+
+        // Without the agent, the two clients are ambiguous.
+        #expect(resolver(table).label(for: .agentClient(ssh: false)) == nil)
+        #expect(resolver(table).label(for: .agentClient(ssh: false, agent: Self.agentPID)) == "git commit · touchglass")
+        #expect(resolver(table).label(for: .agentClient(ssh: false, agent: 900)) == "gpg")
+        // A PID that isn't one of the user's gpg-agents gives no label.
+        #expect(resolver(table).label(for: .agentClient(ssh: false, agent: 300)) == nil)
+        #expect(resolver(table).label(for: .agentClient(ssh: false, agent: 12345)) == nil)
+    }
+
     @Test func expiredBudgetGivesNoLabel() {
         let table = FakeProcesses()
         agent(table, connections: [(301, 300, false)])

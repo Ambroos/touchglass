@@ -28,6 +28,7 @@ public final class OperationDetector: @unchecked Sendable {
     private let queue = DispatchQueue(label: "touchglass.scdaemon.detector")
     private let sink: EventSink
     private let touchDelay: TimeInterval
+    private let agentPID: Int32?
 
     // Accessed only on `queue`.
     private var keys: [String: (slot: Int, serial: String)] = [:]
@@ -49,9 +50,12 @@ public final class OperationDetector: @unchecked Sendable {
         var inquiry: Inquiry?
     }
 
-    public init(sink: EventSink, touchDelay: TimeInterval = 0.4) {
+    /// `agentPID` is the gpg-agent that started the proxy. Each `op_start` carries it, so the host looks for
+    /// the requesting client among that agent's connections only.
+    public init(sink: EventSink, touchDelay: TimeInterval = 0.4, agentPID: Int32? = nil) {
         self.sink = sink
         self.touchDelay = touchDelay
+        self.agentPID = agentPID
     }
 
     /// Handles lines seen on `connection`. `time` is when the forwarding thread passed them on, in Unix seconds.
@@ -116,7 +120,7 @@ public final class OperationDetector: @unchecked Sendable {
             case "PKAUTH": kind = .auth
             default: kind = .decrypt
             }
-            sink.send(.opStart(OpStart(conn: conn, op: kind, slot: key?.slot, serial: key?.serial, at: time)))
+            sink.send(.opStart(OpStart(conn: conn, op: kind, slot: key?.slot, serial: key?.serial, at: time, agentPid: agentPID)))
             state.operation = Operation()
             state.inquiry = nil
             armTouchTimer(conn, &state, from: time)

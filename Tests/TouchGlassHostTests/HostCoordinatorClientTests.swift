@@ -18,8 +18,13 @@ import TouchGlassIPC
         outputs.filter { if case .resolveClient = $0 { true } else { false } }
     }
 
-    func start(_ coordinator: inout HostCoordinator, conn: String = "100:p", op: TouchGlassIPC.OperationKind = .sign) -> [HostOutput] {
-        coordinator.handle(.opStart(OpStart(conn: conn, op: op, slot: 1, serial: "D2760001240103040006123456780000", at: now.timeIntervalSince1970)), from: proxy, now: now)
+    func start(_ coordinator: inout HostCoordinator, conn: String = "100:p", op: TouchGlassIPC.OperationKind = .sign, agent: Int32? = nil) -> [HostOutput] {
+        coordinator.handle(.opStart(OpStart(conn: conn, op: op, slot: 1, serial: "D2760001240103040006123456780000", at: now.timeIntervalSince1970, agentPid: agent)), from: proxy, now: now)
+    }
+
+    /// The first operation a coordinator starts is number 1.
+    func first(_ conn: String = "100:p") -> OperationRef {
+        OperationRef(conn: conn, number: 1)
     }
 
     func touch(_ coordinator: inout HostCoordinator, conn: String = "100:p", timeoutMs: Int = 15_000) -> TouchGlassCore.TouchWait? {
@@ -30,9 +35,9 @@ import TouchGlassIPC
 
     @Test func operationStartAsksForTheMatchingKindOfClient() {
         var coordinator = HostCoordinator()
-        #expect(start(&coordinator, conn: "a", op: .sign) == [.resolveClient(.operation("a"), .agentClient(ssh: false))])
-        #expect(start(&coordinator, conn: "b", op: .decrypt) == [.resolveClient(.operation("b"), .agentClient(ssh: false))])
-        #expect(start(&coordinator, conn: "c", op: .auth) == [.resolveClient(.operation("c"), .agentClient(ssh: true))])
+        #expect(start(&coordinator, conn: "a", op: .sign) == [.resolveClient(.operation(OperationRef(conn: "a", number: 1)), .agentClient(ssh: false))])
+        #expect(start(&coordinator, conn: "b", op: .decrypt) == [.resolveClient(.operation(OperationRef(conn: "b", number: 2)), .agentClient(ssh: false))])
+        #expect(start(&coordinator, conn: "c", op: .auth, agent: 4321) == [.resolveClient(.operation(OperationRef(conn: "c", number: 3)), .agentClient(ssh: true, agent: 4321))])
     }
 
     @Test func aLateLabelFillsInTheTouchStepInPlace() throws {
@@ -41,19 +46,19 @@ import TouchGlassIPC
         let wait = try #require(touch(&coordinator))
         #expect(wait.client == nil)
 
-        let updated = panelEvents(coordinator.clientResolved(.operation("100:p"), label: "git commit · example"))
+        let updated = panelEvents(coordinator.clientResolved(.operation(first()), label: "git commit · example"))
         var expected = wait
         expected.client = "git commit · example"
         // Same deadline and start, so the countdown and escalation carry on.
         #expect(updated == [.show(.touchWait(expected))])
         // The same label again changes nothing.
-        #expect(coordinator.clientResolved(.operation("100:p"), label: "git commit · example").isEmpty)
+        #expect(coordinator.clientResolved(.operation(first()), label: "git commit · example").isEmpty)
     }
 
     @Test func aLabelThatArrivesFirstShowsWithTheTouchStep() throws {
         var coordinator = HostCoordinator()
         _ = start(&coordinator)
-        #expect(coordinator.clientResolved(.operation("100:p"), label: "ssh example-host").isEmpty)
+        #expect(coordinator.clientResolved(.operation(first()), label: "ssh example-host").isEmpty)
         #expect(try #require(touch(&coordinator)).client == "ssh example-host")
     }
 
@@ -61,9 +66,27 @@ import TouchGlassIPC
         var coordinator = HostCoordinator()
         _ = start(&coordinator)
         _ = try #require(touch(&coordinator))
-        #expect(coordinator.clientResolved(.operation("100:p"), label: nil).isEmpty)
+        #expect(coordinator.clientResolved(.operation(first()), label: nil).isEmpty)
         _ = coordinator.handle(.opEnd(OpEnd(conn: "100:p", result: .ok)), from: proxy, now: now)
-        #expect(coordinator.clientResolved(.operation("100:p"), label: "git commit · example").isEmpty)
+        #expect(coordinator.clientResolved(.operation(first()), label: "git commit · example").isEmpty)
+    }
+
+    @Test func aLabelForAnEndedOperationSkipsTheNextOneOnTheSameConnection() throws {
+        var coordinator = HostCoordinator()
+        _ = start(&coordinator)
+        _ = coordinator.handle(.opEnd(OpEnd(conn: "100:p", result: .ok)), from: proxy, now: now)
+        // The pipe session reuses its connection ID for the next operation.
+        #expect(queries(start(&coordinator)) == [.resolveClient(.operation(OperationRef(conn: "100:p", number: 2)), .agentClient(ssh: false))])
+        _ = try #require(touch(&coordinator))
+
+        #expect(coordinator.clientResolved(.operation(first()), label: "git commit · stale").isEmpty)
+        #expect(coordinator.clientResolved(.request(id: "gone", operation: first()), label: "git tag · stale").isEmpty)
+        let current = panelEvents(coordinator.clientResolved(.operation(OperationRef(conn: "100:p", number: 2)), label: "ssh example-host"))
+        guard case .show(.touchWait(let wait)) = current.first else {
+            Issue.record("no update for the current operation")
+            return
+        }
+        #expect(wait.client == "ssh example-host")
     }
 
     @Test func ownerLabelFillsThePINPromptAndCarriesToTheTouch() throws {
@@ -71,13 +94,13 @@ import TouchGlassIPC
         _ = start(&coordinator)
         _ = coordinator.handle(.pinNeeded(ConnRef(conn: "100:p")), from: proxy, now: now)
         let prompt = coordinator.handle(.getPin(GetPin(id: "r1", desc: cardDescription, fields: CardFields(number: "12 345 678"), owner: "4242/501 example-host")), from: pinentry, now: now)
-        #expect(queries(prompt) == [.resolveClient(.request(id: "r1", operation: "100:p"), .owner(4242))])
+        #expect(queries(prompt) == [.resolveClient(.request(id: "r1", operation: first()), .owner(4242))])
 
-        let filled = panelEvents(coordinator.clientResolved(.request(id: "r1", operation: "100:p"), label: "git tag · example"))
+        let filled = panelEvents(coordinator.clientResolved(.request(id: "r1", operation: first()), label: "git tag · example"))
         #expect(filled == [.show(.pinEntry(PinRequest(operation: .sign, cardSerial: "12345678", client: "git tag · example")))])
 
         // The guess among the agent's clients arrives later and loses to the owner's answer.
-        #expect(coordinator.clientResolved(.operation("100:p"), label: "gpg").isEmpty)
+        #expect(coordinator.clientResolved(.operation(first()), label: "gpg").isEmpty)
 
         let submitted = panelEvents(coordinator.handle(.submit("975310")))
         #expect(submitted == [.show(.verifying(PinRequest(operation: .sign, cardSerial: "12345678", client: "git tag · example")))])

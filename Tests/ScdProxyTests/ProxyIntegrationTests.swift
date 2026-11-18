@@ -121,6 +121,8 @@ struct ProxyIntegrationTests {
         #expect(summaries(host, waitingFor: 5) == ["op_start p sign slot=1", "pin_needed p", "pin_sent p", "touch_wait p", "op_end p ok"])
         if case let .opStart(start) = host?.messages.first {
             #expect(start.serial == ProxyHarness.serial)
+            // The proxy's parent stands in for gpg-agent here: the test process.
+            #expect(start.agentPid == getpid())
         }
         if case let .touchWait(wait) = host?.messages[3] {
             #expect(wait.timeoutMs == 15_000)

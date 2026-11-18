@@ -14,6 +14,7 @@ import Testing
         let messages: [IPCMessage] = [
             .hello(Hello(role: .proxy, pid: 42, version: "1")),
             .opStart(OpStart(conn: "123:s3", op: .sign, slot: 1, serial: "D2760001240100000000000000000000", at: 1_800_000_000.5)),
+            .opStart(OpStart(conn: "123:p", op: .auth, at: 1, agentPid: 4321)),
             .pinNeeded(ConnRef(conn: "123:p0")),
             .pinSent(ConnRef(conn: "123:p0")),
             .touchWait(TouchWait(conn: "123:p0", timeoutMs: 15_000, at: 1.25)),
@@ -48,6 +49,14 @@ import Testing
 
         let end = String(decoding: try IPCLine.encode(.opEnd(OpEnd(conn: "c", result: .badPin))), as: UTF8.self)
         #expect(end.contains(#""result":"bad_pin""#))
+    }
+
+    @Test func opStartAgentPIDIsOptional() throws {
+        let start = String(decoding: try IPCLine.encode(.opStart(OpStart(conn: "c", op: .sign, agentPid: 77))), as: UTF8.self)
+        #expect(start.contains(#""agent_pid":77"#))
+        // A proxy from before the field existed.
+        let old = try IPCLine.decode(Data(#"{"type":"op_start","conn":"c","op":"sign","slot":1}"#.utf8))
+        #expect(old == .opStart(OpStart(conn: "c", op: .sign, slot: 1)))
     }
 
     @Test func unknownTypeDecodesAsUnknown() throws {

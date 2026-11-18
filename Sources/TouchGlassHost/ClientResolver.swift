@@ -5,8 +5,9 @@ public enum ClientQuery: Sendable, Equatable {
     /// The client PID from the agent's `OPTION owner`, which a pinentry request carries.
     case owner(Int32)
     /// One of the agent's connected clients: an ssh client for an SSH login, any other client for a
-    /// signature or decryption.
-    case agentClient(ssh: Bool)
+    /// signature or decryption. `agent` is the gpg-agent the proxy reported; a proxy that doesn't report
+    /// one leaves it `nil`, and the lookup then searches every gpg-agent of the user.
+    case agentClient(ssh: Bool, agent: Int32? = nil)
 
     /// The PID in an `owner` value, "<pid>/<uid> <host>" or "<pid> <host>". `nil` for PID 0 or garbage.
     public static func ownerPID(_ owner: String?) -> Int32? {
@@ -54,8 +55,8 @@ public final class ClientResolver: ClientResolving, @unchecked Sendable {
         case .owner(let pid):
             guard processes.record(pid)?.uid == uid else { return nil }
             return label(startingAt: pid, deadline: deadline)
-        case .agentClient(let ssh):
-            return labelForAgentClient(ssh: ssh, deadline: deadline)
+        case .agentClient(let ssh, let agent):
+            return labelForAgentClient(ssh: ssh, agent: agent, deadline: deadline)
         }
     }
 
@@ -67,8 +68,8 @@ public final class ClientResolver: ClientResolving, @unchecked Sendable {
         var ssh: Bool
     }
 
-    private func labelForAgentClient(ssh: Bool, deadline: ContinuousClock.Instant) -> String? {
-        guard let clients = agentClients(deadline: deadline) else { return nil }
+    private func labelForAgentClient(ssh: Bool, agent: Int32?, deadline: ContinuousClock.Instant) -> String? {
+        guard let clients = agentClients(agent: agent, deadline: deadline) else { return nil }
         let candidates = clients.filter { $0.ssh == ssh }.sorted { $0.startTime > $1.startTime }
         guard let newest = candidates.first else { return nil }
         let recent = candidates.filter { newest.startTime - $0.startTime < Self.recentWindow }
@@ -84,9 +85,16 @@ public final class ClientResolver: ClientResolving, @unchecked Sendable {
         return label
     }
 
-    /// The agent's connected clients, or `nil` if the budget ran out before the scan finished.
-    func agentClients(deadline: ContinuousClock.Instant) -> [AgentClient]? {
-        let agents = agentPIDs()
+    /// The agent's connected clients, or `nil` if the budget ran out before the scan finished. With `agent`,
+    /// only that gpg-agent's clients count, and none if the PID doesn't name one of the user's gpg-agents.
+    func agentClients(agent: Int32? = nil, deadline: ContinuousClock.Instant) -> [AgentClient]? {
+        let agents: [Int32]
+        if let agent {
+            guard isAgent(processes.record(agent)) else { return [] }
+            agents = [agent]
+        } else {
+            agents = agentPIDs()
+        }
         // Peer protocol control block → whether the client came in on the ssh socket.
         var peers: [UInt64: Bool] = [:]
         for agent in agents {
@@ -112,7 +120,7 @@ public final class ClientResolver: ClientResolving, @unchecked Sendable {
         (path as NSString).lastPathComponent.hasPrefix("S.gpg-agent")
     }
 
-    /// The user's gpg-agent processes. The cached PIDs are reused while they still name a gpg-agent.
+    /// The user's gpg-agent processes, for a proxy that doesn't report its agent. The cached PIDs are reused while they still name a gpg-agent.
     func agentPIDs() -> [Int32] {
         lock.lock()
         defer { lock.unlock() }

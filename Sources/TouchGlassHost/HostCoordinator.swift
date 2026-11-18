@@ -26,12 +26,26 @@ public enum HostTimer: Sendable, Equatable {
     case touchExpired(operation: String, deadline: Date)
 }
 
+/// One card operation. A proxy connection runs its operations one after another under the same ID, so the
+/// coordinator numbers them, and a label that arrives after its operation ended can't land on the next one.
+public struct OperationRef: Sendable, Equatable {
+    /// The proxy connection ID.
+    public var conn: String
+    /// The coordinator's number for the operation, unique for the host's lifetime.
+    public var number: Int
+
+    public init(conn: String, number: Int) {
+        self.conn = conn
+        self.number = number
+    }
+}
+
 /// What a client label is for.
 public enum ClientSubject: Sendable, Equatable {
-    /// A card operation, by its proxy connection ID.
-    case operation(String)
+    /// A card operation.
+    case operation(OperationRef)
     /// A pinentry request, and the card operation it unlocks if the coordinator knows it.
-    case request(id: String, operation: String?)
+    case request(id: String, operation: OperationRef?)
 }
 
 /// What the coordinator wants done.
@@ -60,6 +74,8 @@ public struct HostCoordinator: Sendable {
     public static let touchExpiryGrace: TimeInterval = 2
 
     struct CardOperation: Sendable, Equatable {
+        /// See `OperationRef.number`.
+        var number = 0
         var kind: TouchGlassCore.OperationKind
         var serial: String
         var pinNeeded = false
@@ -93,6 +109,8 @@ public struct HostCoordinator: Sendable {
     private(set) var shown: Shown?
     /// The state last sent to the panel, so a late client label can update it in place.
     private(set) var panelState: PanelState?
+    /// The number of operations started, for `OperationRef.number`.
+    private(set) var operationCount = 0
 
     /// Overrides the touch timeout that the proxy reports, in seconds.
     public var touchTimeout: TimeInterval?
@@ -110,12 +128,14 @@ public struct HostCoordinator: Sendable {
     private mutating func handleMessage(_ message: IPCMessage, from connection: ConnectionID, now: Date) -> [HostOutput] {
         switch message {
         case .opStart(let start):
-            operations[start.conn] = CardOperation(kind: Self.kind(start.op), serial: Self.displaySerial(start.serial), reporter: connection)
+            let number = nextOperationNumber()
+            operations[start.conn] = CardOperation(number: number, kind: Self.kind(start.op), serial: Self.displaySerial(start.serial), reporter: connection)
             operationOrder.removeAll { $0 == start.conn }
             operationOrder.append(start.conn)
             // PKAUTH comes from an ssh client on the agent's ssh socket; signatures and decryptions come
             // from gpg and the like on its other sockets.
-            return [.resolveClient(.operation(start.conn), .agentClient(ssh: start.op == .auth))]
+            let ref = OperationRef(conn: start.conn, number: number)
+            return [.resolveClient(.operation(ref), .agentClient(ssh: start.op == .auth, agent: start.agentPid))]
         case .pinNeeded(let ref):
             // The touch wait, if any, was a false start: the card asks for the PIN first.
             operations[ref.conn]?.pinNeeded = true
@@ -245,20 +265,22 @@ public struct HostCoordinator: Sendable {
         let operationID: String?
         let requestID: String?
         switch subject {
-        case .operation(let conn):
+        case .operation(let ref):
             // A label from the owner PID is exact; a guess that arrives later must not replace it.
-            guard var operation = operations[conn], !operation.clientIsExact else { return [] }
+            guard var operation = operations[ref.conn], operation.number == ref.number, !operation.clientIsExact else { return [] }
             operation.client = label
-            operations[conn] = operation
-            operationID = conn
+            operations[ref.conn] = operation
+            operationID = ref.conn
             requestID = nil
-        case .request(let id, let conn):
-            if let conn, var operation = operations[conn] {
+        case .request(let id, let ref):
+            if let ref, var operation = operations[ref.conn], operation.number == ref.number {
                 operation.client = label
                 operation.clientIsExact = true
-                operations[conn] = operation
+                operations[ref.conn] = operation
+                operationID = ref.conn
+            } else {
+                operationID = nil
             }
-            operationID = conn
             requestID = id
         }
         return tracking(refreshClient(label, operation: operationID, request: requestID))
@@ -300,7 +322,7 @@ public struct HostCoordinator: Sendable {
     // MARK: Card events
 
     private mutating func touchWait(_ wait: TouchGlassIPC.TouchWait, from connection: ConnectionID, now: Date) -> [HostOutput] {
-        var operation = operations[wait.conn] ?? CardOperation(kind: .unknown, serial: "")
+        var operation = operations[wait.conn] ?? CardOperation(number: nextOperationNumber(), kind: .unknown, serial: "")
         operation.reporter = connection
         if operations[wait.conn] == nil {
             operationOrder.append(wait.conn)
@@ -450,8 +472,9 @@ public struct HostCoordinator: Sendable {
         let isCard = operationID != nil || request.fields != nil
         // The agent names its client in the owner option: an exact answer, where the proxy's operation
         // only allows a guess among the agent's clients.
+        let operationRef = operationID.flatMap { conn in operations[conn].map { OperationRef(conn: conn, number: $0.number) } }
         let resolve: [HostOutput] = ClientQuery.ownerPID(request.owner).map {
-            [.resolveClient(.request(id: request.id, operation: operationID), .owner($0))]
+            [.resolveClient(.request(id: request.id, operation: operationRef), .owner($0))]
         } ?? []
 
         guard isCard else {
@@ -533,6 +556,11 @@ public struct HostCoordinator: Sendable {
     }
 
     // MARK: Helpers
+
+    private mutating func nextOperationNumber() -> Int {
+        operationCount += 1
+        return operationCount
+    }
 
     static func kind(_ kind: TouchGlassIPC.OperationKind) -> TouchGlassCore.OperationKind {
         switch kind {

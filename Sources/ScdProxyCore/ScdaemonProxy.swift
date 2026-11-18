@@ -33,7 +33,8 @@ public final class ScdaemonProxy: @unchecked Sendable {
             launch = { Self.launchHost(target) }
         }
         sink = HostEventSink(path: config.hostSocketPath, launchHost: launch)
-        detector = OperationDetector(sink: sink, touchDelay: config.touchDelay)
+        // gpg-agent starts the proxy as its scdaemon, so the parent is the agent that owns this card session.
+        detector = OperationDetector(sink: sink, touchDelay: config.touchDelay, agentPID: getppid())
     }
 
     /// Starts the child, forwards traffic until it exits, then exits with its status.
