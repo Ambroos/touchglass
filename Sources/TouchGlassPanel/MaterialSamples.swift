@@ -26,6 +26,10 @@ public enum MaterialSamples {
         case hdrWhite
         /// HDR light blue for glyph and ring, HDR white text.
         case hdrBlue
+        /// SDR pure white for glyph, ring and text.
+        case white
+        /// Core Animation layers with headroom-tagged colours and `preferredDynamicRange = .high`.
+        case layerHDR
     }
 
     public struct Sample {
@@ -41,22 +45,16 @@ public enum MaterialSamples {
     }
 
     public static let samples: [Sample] = [
-        Sample(label: "A", style: .clear, shading: .tint(0.62), ink: .standard, textShadow: false,
-               summary: "Clear glass, glass tint 62% warm neutral (sample 4, smokier)"),
-        Sample(label: "B", style: .clear, shading: .tint(0.62), ink: .standard, textShadow: true,
-               summary: "A plus a wide soft shadow behind the glyph and text"),
         Sample(label: "C", style: .clear, shading: .darkTint(0.62), ink: .hdrWhite, textShadow: true,
-               summary: "Clear glass, dark smoke tint 62%, HDR white glyph, ring and text, wide soft shadow"),
-        Sample(label: "D", style: .clear, shading: .darkTint(0.62), ink: .hdrBlue, textShadow: true,
-               summary: "C with an HDR light-blue glyph and ring, HDR white text"),
+               summary: "Clear glass, dark smoke tint 62%, SwiftUI exposureAdjust HDR white ink, soft shadow (did not show HDR)"),
+        Sample(label: "C2", style: .clear, shading: .darkTint(0.72), ink: .white, textShadow: true,
+               summary: "C with SDR pure white glyph, ring and text, and dark smoke tint 72%"),
         Sample(label: "E", style: .regular, shading: .none, ink: .hdrWhite, textShadow: true,
-               summary: "Regular glass (sample 9) with C's HDR white text and wide soft shadow"),
-        Sample(label: "F", style: .regular, shading: .tint(0.62), ink: .hdrWhite, textShadow: true,
-               summary: "E plus A's smoke: regular glass, glass tint 62% warm neutral, HDR white text, wide soft shadow"),
-        Sample(label: "G", style: .clear, shading: .darkTint(0.62), ink: .hdrWhite, textShadow: true, backdropOpacity: 1,
-               summary: "Stacked: behind-window blur (NSVisualEffectView, 30 pt) under clear glass, with C's smoke, HDR text and shadow"),
+               summary: "Regular glass with C's ink and soft shadow"),
         Sample(label: "G2", style: .clear, shading: .darkTint(0.62), ink: .hdrWhite, textShadow: true, backdropOpacity: 0.5,
-               summary: "G with the blur layer at 50% opacity, so the backdrop is only slightly blurred"),
+               summary: "Behind-window blur at 50% under clear glass, with C's smoke, ink and shadow"),
+        Sample(label: "H", style: .clear, shading: .darkTint(0.72), ink: .layerHDR, textShadow: true,
+               summary: "C2's glass with HDR white drawn by Core Animation: CAShapeLayer ring stroke, and text and glyph as layers filled with NSColor(exposure: 1) and masked by the text and symbol shape, each layer with preferredDynamicRange = .high"),
     ]
 
     static let size = CGSize(width: 240, height: 216)
@@ -181,10 +179,14 @@ public enum MaterialSamples {
         case .tint(let opacity): glass.tintColor = smoke(opacity)
         case .darkTint(let opacity): glass.tintColor = darkSmoke(opacity)
         }
-        let host = DraggableHostingView(rootView: SampleContent(label: sample.label, ink: sample.ink, textShadow: sample.textShadow))
-        host.sizingOptions = []
-        host.frame = NSRect(origin: .zero, size: size)
-        glass.contentView = host
+        if sample.ink == .layerHDR {
+            glass.contentView = HDRLayerSampleView(frame: NSRect(origin: .zero, size: size), label: sample.label)
+        } else {
+            let host = DraggableHostingView(rootView: SampleContent(label: sample.label, ink: sample.ink, textShadow: sample.textShadow))
+            host.sizingOptions = []
+            host.frame = NSRect(origin: .zero, size: size)
+            glass.contentView = host
+        }
 
         if let opacity = sample.backdropOpacity {
             // The blur sits under the glass in the same window, so the glass refracts the blurred image.
@@ -233,6 +235,8 @@ private struct SampleContent: View {
     private static let hdrWhite = Color.white.exposureAdjust(1)
     private static let hdrBlue = Color(red: 0.62, green: 0.82, blue: 1.0).exposureAdjust(1)
 
+    private var textColor: Color { ink == .white ? .white : Self.hdrWhite }
+
     var body: some View {
         VStack(spacing: 12) {
             ring
@@ -272,8 +276,8 @@ private struct SampleContent: View {
         switch ink {
         case .standard:
             TouchRingStage(wait: Self.wait, completed: false, now: Self.now)
-        case .hdrWhite, .hdrBlue:
-            let accent = ink == .hdrBlue ? Self.hdrBlue : Self.hdrWhite
+        case .hdrWhite, .hdrBlue, .white, .layerHDR:
+            let accent = ink == .hdrBlue ? Self.hdrBlue : textColor
             let diameter = PanelMetrics.ringDiameter - PanelMetrics.ringStroke
             ZStack {
                 Circle()
@@ -297,15 +301,15 @@ private struct SampleContent: View {
         switch ink {
         case .standard:
             TextBlock(presentation: PanelPresentation(.touchWait(Self.wait)))
-        case .hdrWhite, .hdrBlue:
+        case .hdrWhite, .hdrBlue, .white, .layerHDR:
             let presentation = PanelPresentation(.touchWait(Self.wait))
             VStack(spacing: 4) {
                 Text(verbatim: presentation.title)
                     .font(.title2.weight(.semibold))
-                    .foregroundStyle(Self.hdrWhite)
+                    .foregroundStyle(textColor)
                 Text(verbatim: presentation.detail ?? "")
                     .font(.body)
-                    .foregroundStyle(Self.hdrWhite.opacity(0.78))
+                    .foregroundStyle(textColor.opacity(0.78))
             }
             .lineLimit(1)
             .minimumScaleFactor(0.85)
@@ -326,4 +330,106 @@ private struct SoftShadow: ViewModifier {
             content
         }
     }
+}
+
+
+/// Sample H: the touch-step content drawn with Core Animation layers so that HDR colours can
+/// exceed SDR white. `preferredDynamicRange` applies only to a layer's own CGColors and contents,
+/// so every coloured layer sets it. Text and the symbol are not drawn in colour: a layer filled
+/// with the HDR colour is masked by them, because a text or image bitmap would be SDR.
+private final class HDRLayerSampleView: NSView {
+    override var mouseDownCanMoveWindow: Bool { true }
+    override var isFlipped: Bool { true }
+
+    init(frame: NSRect, label: String) {
+        super.init(frame: frame)
+        let root = CALayer()
+        layer = root
+        wantsLayer = true
+        root.isGeometryFlipped = true
+
+        let white = NSColor(red: 1, green: 1, blue: 1, alpha: 1, exposure: 1).cgColor
+        let dimWhite = NSColor(red: 1, green: 1, blue: 1, alpha: 0.8, exposure: 1).cgColor
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+
+        // Ring: 76.8 pt to match the other samples' 0.8 scale of the 96 pt ring.
+        let ringDiameter: CGFloat = 76.8 - 3.2
+        let ringFrame = CGRect(x: (frame.width - ringDiameter) / 2, y: 22, width: ringDiameter, height: ringDiameter)
+        let track = CAShapeLayer()
+        track.path = CGPath(ellipseIn: ringFrame, transform: nil)
+        track.fillColor = nil
+        track.strokeColor = NSColor.white.withAlphaComponent(0.22).cgColor
+        track.lineWidth = 3.2
+        root.addSublayer(track)
+
+        let progress = CAShapeLayer()
+        let center = CGPoint(x: ringFrame.midX, y: ringFrame.midY)
+        let path = CGMutablePath()
+        path.addArc(center: center, radius: ringDiameter / 2, startAngle: -.pi / 2, endAngle: -.pi / 2 + 2 * .pi * 0.7, clockwise: false)
+        progress.path = path
+        progress.fillColor = nil
+        progress.strokeColor = white
+        progress.lineWidth = 3.2
+        progress.lineCap = .round
+        progress.preferredDynamicRange = .high
+        root.addSublayer(progress)
+
+        // Glyph: an HDR-filled layer masked by the symbol.
+        let symbolConfig = NSImage.SymbolConfiguration(pointSize: 28.8, weight: .regular)
+        if let symbol = NSImage(systemSymbolName: "hand.tap.fill", accessibilityDescription: nil)?.withSymbolConfiguration(symbolConfig) {
+            let glyph = CALayer()
+            glyph.frame = CGRect(x: center.x - symbol.size.width / 2, y: center.y - symbol.size.height / 2, width: symbol.size.width, height: symbol.size.height)
+            glyph.backgroundColor = white
+            glyph.preferredDynamicRange = .high
+            let mask = CALayer()
+            mask.frame = glyph.bounds
+            mask.contents = symbol
+            mask.contentsGravity = .resizeAspect
+            mask.contentsScale = scale
+            glyph.mask = mask
+            root.addSublayer(glyph)
+        }
+
+        func textLayer(_ text: String, font: NSFont, color: CGColor, y: CGFloat) -> CALayer {
+            let height = ceil(font.ascender - font.descender + font.leading) + 2
+            let fill = CALayer()
+            fill.frame = CGRect(x: 8, y: y, width: frame.width - 16, height: height)
+            fill.backgroundColor = color
+            fill.preferredDynamicRange = .high
+            let mask = CATextLayer()
+            mask.frame = fill.bounds
+            mask.string = text
+            mask.font = font
+            mask.fontSize = font.pointSize
+            mask.alignmentMode = .center
+            mask.foregroundColor = NSColor.black.cgColor
+            mask.contentsScale = scale
+            fill.mask = mask
+            return fill
+        }
+
+        let presentation = PanelPresentation(.touchWait(TouchWait.detected(operation: .sign, cardSerial: "12345678")))
+        let titleFont = NSFont.systemFont(ofSize: 17, weight: .semibold)
+        let title = textLayer(presentation.title, font: titleFont, color: white, y: 116)
+        let detail = textLayer(presentation.detail ?? "", font: .systemFont(ofSize: 13), color: dimWhite, y: 142)
+        for text in [title, detail] {
+            text.shadowColor = NSColor(white: 0.1, alpha: 1).cgColor
+            text.shadowOpacity = 0.35
+            text.shadowRadius = 14
+            text.shadowOffset = .zero
+            root.addSublayer(text)
+        }
+
+        let labelLayer = CATextLayer()
+        labelLayer.string = label
+        labelLayer.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
+        labelLayer.fontSize = 15
+        labelLayer.alignmentMode = .right
+        labelLayer.foregroundColor = NSColor.secondaryLabelColor.cgColor
+        labelLayer.contentsScale = scale
+        labelLayer.frame = CGRect(x: frame.width - 60, y: 10, width: 46, height: 20)
+        root.addSublayer(labelLayer)
+    }
+
+    required init?(coder: NSCoder) { nil }
 }
