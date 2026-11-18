@@ -29,16 +29,7 @@ public final class PanelModel {
     /// Multiplies every panel animation duration. Demo mode uses it to slow animations down for review.
     public var animationScale: Double = 1
 
-    /// The secure field's text. Never log, print or persist it.
-    @ObservationIgnored public var secret = ""
     @ObservationIgnored public var actions = PanelActions()
 
     public init() {}
-
-    /// Hands the secret to `actions.submitSecret` and clears the field.
-    public func submitSecret() {
-        let value = secret
-        secret = ""
-        actions.submitSecret(value)
-    }
 }
