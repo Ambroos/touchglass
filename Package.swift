@@ -23,6 +23,7 @@ let package = Package(
         // The app: the host with its panel, plus demo and sample modes.
         .executableTarget(name: "TouchGlass", dependencies: ["TouchGlassCore", "TouchGlassPanel", "TouchGlassHost", "TouchGlassIPC"]),
         .testTarget(name: "TouchGlassCoreTests", dependencies: ["TouchGlassCore"]),
+        .testTarget(name: "TouchGlassPanelTests", dependencies: ["TouchGlassPanel"]),
         .testTarget(
             name: "TouchGlassHostTests",
             dependencies: ["TouchGlassHost", "TouchGlassCore", "TouchGlassIPC", "ScdTestSupport", "touchglass-scdaemon", "fake-scdaemon", "touchglass-pinentry"]

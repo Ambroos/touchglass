@@ -30,4 +30,29 @@ final class PanelWindow: NSPanel {
 
     override var canBecomeKey: Bool { allowsKey }
     override var canBecomeMain: Bool { false }
+
+    /// The host has no main menu, so standard edit shortcuts have nothing to dispatch them.
+    /// Send them down the responder chain from here instead. A secure field's editor refuses
+    /// copy and cut itself.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if let action = Self.editAction(for: event), let responder = firstResponder, responder.tryToPerform(action, with: self) {
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    /// The standard edit selector for Cmd-Z, Shift-Cmd-Z, Cmd-X, Cmd-C, Cmd-V and Cmd-A.
+    static func editAction(for event: NSEvent) -> Selector? {
+        guard event.type == .keyDown, let key = event.charactersIgnoringModifiers?.lowercased() else { return nil }
+        let modifiers = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        switch (modifiers, key) {
+        case ([.command], "z"): return Selector(("undo:"))
+        case ([.command, .shift], "z"): return Selector(("redo:"))
+        case ([.command], "x"): return #selector(NSText.cut(_:))
+        case ([.command], "c"): return #selector(NSText.copy(_:))
+        case ([.command], "v"): return #selector(NSText.paste(_:))
+        case ([.command], "a"): return #selector(NSText.selectAll(_:))
+        default: return nil
+        }
+    }
 }
