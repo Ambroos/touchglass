@@ -36,6 +36,10 @@ public struct PanelMachine: Sendable {
     public private(set) var state: PanelState?
     /// The user hid the panel for the current operation.
     public private(set) var hiddenByUser = false
+    /// The panel took keyboard focus for a prompt since it opened. It then keeps focus through
+    /// the touch, success and error states that follow: the user just typed in it, so keeping
+    /// it takes nothing from the frontmost app. A touch-only panel never takes focus.
+    public private(set) var holdsKey = false
 
     public init() {}
 
@@ -54,20 +58,25 @@ public struct PanelMachine: Sendable {
             let wasVisible = isVisible
             state = nil
             hiddenByUser = false
+            holdsKey = false
             return [.cancelAutoClose, .stopEscalation] + (wasVisible ? [.close] : [])
         }
     }
 
     private mutating func show(_ next: PanelState) -> [PanelEffect] {
         let previous = state
-        if previous == nil { hiddenByUser = false }
+        if previous == nil {
+            hiddenByUser = false
+            holdsKey = false
+        }
         state = next
+        if next.allowsKey { holdsKey = true }
 
         var effects: [PanelEffect] = [.cancelAutoClose]
 
         if !hiddenByUser {
             effects.append(previous == nil ? .open(next) : .update(next))
-            effects.append(.setKey(next.allowsKey))
+            effects.append(.setKey(holdsKey))
         }
 
         switch next {

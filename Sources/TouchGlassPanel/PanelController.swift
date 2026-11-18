@@ -76,7 +76,10 @@ public final class PanelController {
             close()
         case .setKey(let allowsKey):
             panel.allowsKey = allowsKey
-            if allowsKey, panel.isVisible { panel.makeKey() }
+            if allowsKey, panel.isVisible {
+                panel.makeKey()
+                guardKeyAfterOwnChange()
+            }
             // Handing key status back to the frontmost app without a flicker needs a spike;
             // until then the panel stays key until it closes.
         case .play(let cue):
@@ -95,6 +98,27 @@ public final class PanelController {
         case .stopEscalation:
             escalation.forEach { $0.cancel() }
             escalation = []
+        }
+    }
+
+    // MARK: Key status
+
+    /// Until this time, a resign of key status is taken to come from our own content change and is undone.
+    private var keyGuardUntil = Date.distantPast
+    private var resignObserver: NSObjectProtocol?
+
+    /// Disabling the secure field for "verifying", or removing it for the touch step, takes
+    /// first responder away, and AppKit then resigns the panel's key status. Re-take key status
+    /// if that happens within half a second of our own change. Later resigns come from the user
+    /// clicking elsewhere and are left alone.
+    private func guardKeyAfterOwnChange() {
+        keyGuardUntil = Date().addingTimeInterval(0.5)
+        guard resignObserver == nil else { return }
+        resignObserver = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.panel.allowsKey, self.panel.isVisible, Date() < self.keyGuardUntil else { return }
+                DispatchQueue.main.async { self.panel.makeKey() }
+            }
         }
     }
 
@@ -121,7 +145,10 @@ public final class PanelController {
         }
         panel.allowsKey = state.allowsKey
         panel.orderFrontRegardless()
-        if state.allowsKey { panel.makeKey() }
+        if state.allowsKey {
+            panel.makeKey()
+            guardKeyAfterOwnChange()
+        }
 
         // Let the empty, transparent window reach the screen first, so the glass visibly
         // materialises in place instead of appearing with the window.

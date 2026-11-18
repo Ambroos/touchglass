@@ -9,8 +9,9 @@ public enum PanelMetrics {
     public static let margin: CGFloat = 64
     public static let windowSize = CGSize(width: size.width + 2 * margin, height: size.height + 2 * margin)
 
-    /// The smoked glass tint: a warm near-black at 65%.
-    static let smokeColor = NSColor(srgbRed: 0.13, green: 0.12, blue: 0.11, alpha: 0.65)
+    /// The smoke over the clear glass: a warm near-black. A plain fill reads darker than the
+    /// same opacity as a glass tint, so it is lighter than sample H's 65% tint.
+    static let smokeColor = NSColor(srgbRed: 0.13, green: 0.12, blue: 0.11, alpha: 0.5)
 
     static let ringDiameter: CGFloat = 96
     static let ringStroke: CGFloat = 4

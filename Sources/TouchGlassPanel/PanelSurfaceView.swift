@@ -72,10 +72,12 @@ private struct SurfaceMaterial: ViewModifier {
     let reduceMotion: Bool
     let increasedContrast: Bool
 
-    /// Smoked: clear glass, which lenses at its rim when the panel is key, tinted with dark smoke.
+    /// Smoked: clear glass, which lenses at its rim when the panel is key. The smoke is our own
+    /// fill between the glass and the content, not a glass tint: the system folds a tint into the
+    /// glass's key-dependent rendering, so a tinted panel lost its smoke when not key.
     private var glass: Glass {
         switch appearance {
-        case .smoked: .clear.tint(Color(nsColor: PanelMetrics.smokeColor))
+        case .smoked: .clear
         case .readable: .regular
         }
     }
@@ -87,6 +89,11 @@ private struct SurfaceMaterial: ViewModifier {
                 .overlay(shape.strokeBorder(Color(nsColor: .separatorColor), lineWidth: increasedContrast ? 1 : 0.5))
         } else {
             content
+                .background {
+                    if appearance == .smoked {
+                        shape.fill(Color(nsColor: PanelMetrics.smokeColor))
+                    }
+                }
                 .glassEffect(glass, in: shape)
                 .glassEffectTransition(reduceMotion ? .identity : .materialize)
                 .overlay {

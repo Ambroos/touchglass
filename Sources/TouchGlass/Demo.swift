@@ -219,6 +219,7 @@ final class DemoRunner {
     private func touchStep(_ operation: OperationKind, outcome: TouchOutcome = .touched) async {
         let wait = TouchWait.detected(operation: operation, cardSerial: Self.serial)
         controller.send(.show(.touchWait(wait)))
+        if options.focusReport { reportFocus(after: 1.0, label: "touch") }
         controls.touchEnabled = true
         if let controlsWindow, controlsWindow.isVisible { controlsWindow.makeKey() }
         defer { controls.touchEnabled = false }
@@ -295,10 +296,10 @@ final class DemoRunner {
     }
 
     /// Prints whether the panel took key focus while another app stays frontmost. Never prints field content.
-    private func reportFocus(after delay: TimeInterval) {
+    private func reportFocus(after delay: TimeInterval, label: String = "prompt") {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [controller] in
             let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown"
-            print("focus: panelKey=\(controller.isPanelKey) appActive=\(NSApp.isActive) frontmostApp=\(frontmost) firstResponder=\(controller.firstResponderDescription)")
+            print("focus (\(label)): panelKey=\(controller.isPanelKey) appActive=\(NSApp.isActive) frontmostApp=\(frontmost) firstResponder=\(controller.firstResponderDescription)")
         }
     }
 

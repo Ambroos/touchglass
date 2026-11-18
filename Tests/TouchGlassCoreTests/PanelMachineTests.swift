@@ -12,12 +12,22 @@ import Testing
         #expect(effects.contains(.setKey(true)))
     }
 
-    @Test func pinToTouchUpdatesInPlaceAndGivesUpKey() {
+    @Test func touchOnlyPanelNeverTakesKey() {
+        var machine = PanelMachine()
+        #expect(machine.handle(.show(.touchWait(wait))).contains(.setKey(false)))
+        #expect(machine.handle(.show(.success(.sign))).contains(.setKey(false)))
+    }
+
+    @Test func pinToTouchUpdatesInPlaceAndKeepsKey() {
         var machine = PanelMachine()
         _ = machine.handle(.show(.pinEntry(PinRequest(operation: .sign, cardSerial: "12345678"))))
         let effects = machine.handle(.show(.touchWait(wait)))
         #expect(effects.contains(.update(.touchWait(wait))))
-        #expect(effects.contains(.setKey(false)))
+        #expect(effects.contains(.setKey(true)))
+        #expect(machine.handle(.show(.failure(.touchTimeout))).contains(.setKey(true)))
+        _ = machine.handle(.dismiss)
+        // A new panel starts without focus again.
+        #expect(machine.handle(.show(.touchWait(wait))).contains(.setKey(false)))
         #expect(effects.contains(.play(.touchStart)))
         #expect(effects.contains(.startEscalation(wait)))
     }
