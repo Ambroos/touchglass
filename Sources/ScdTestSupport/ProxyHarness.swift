@@ -59,10 +59,12 @@ public final class ProxyHarness: @unchecked Sendable {
         if let dir = ProcessInfo.processInfo.environment["TOUCHGLASS_PRODUCTS_DIR"] {
             return URL(fileURLWithPath: dir)
         }
-        for bundle in Bundle.allBundles where bundle.bundlePath.hasSuffix(".xctest") {
+        // The test bundle, or the executable, that this code is linked into sits next to the other products.
+        let bundle = Bundle(for: ProxyHarness.self)
+        if bundle.bundlePath.hasSuffix(".xctest") {
             return bundle.bundleURL.deletingLastPathComponent()
         }
-        return Bundle.main.bundleURL
+        return bundle.bundleURL
     }
 
     public static func executable(_ name: String) -> String {
@@ -76,7 +78,7 @@ public final class ProxyHarness: @unchecked Sendable {
     ///   - touchDelayMs: The proxy's touch-wait detection delay.
     ///   - hostPath: Host socket path; defaults to `<dir>/host/host.sock`.
     ///   - extraEnvironment: Added to the proxy's environment, to check that it reaches scdaemon.
-    public init(card: Card = Card(), withSocket: Bool = true, touchDelayMs: Int = 100, hostPath: String? = nil, extraEnvironment: [String: String] = [:]) throws {
+    public init(card: Card = Card(), withSocket: Bool = true, touchDelayMs: Int = 250, hostPath: String? = nil, extraEnvironment: [String: String] = [:]) throws {
         let base = NSTemporaryDirectory() + "tg-\(getpid())-\(UInt32.random(in: 0...UInt32.max))"
         directory = base
         recordDirectory = base + "/rec"
