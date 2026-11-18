@@ -18,13 +18,16 @@ public enum EscalationPhase: Int, Sendable, Comparable, CaseIterable {
     case reminder = 2
     case urgent = 3
 
-    /// Seconds after the panel appears at which each phase starts.
-    public var startsAt: TimeInterval {
-        switch self {
+    /// Seconds after the panel appears at which each phase starts, for a touch timeout of `duration`
+    /// seconds. With the card's 15 s, the reminder phase starts at 5 s and the urgent phase at 10 s;
+    /// other timeouts keep those proportions.
+    public func startsAt(duration: TimeInterval = TouchTiming.cardTimeout) -> TimeInterval {
+        let seconds: TimeInterval = switch self {
         case .calm: 0
         case .reminder: 5
         case .urgent: 10
         }
+        return Escalation.scaled(seconds, to: duration)
     }
 
     /// Seconds between ripples.
@@ -36,9 +39,9 @@ public enum EscalationPhase: Int, Sendable, Comparable, CaseIterable {
         }
     }
 
-    public static func at(elapsed: TimeInterval) -> EscalationPhase {
-        if elapsed >= EscalationPhase.urgent.startsAt { return .urgent }
-        if elapsed >= EscalationPhase.reminder.startsAt { return .reminder }
+    public static func at(elapsed: TimeInterval, duration: TimeInterval = TouchTiming.cardTimeout) -> EscalationPhase {
+        if elapsed >= EscalationPhase.urgent.startsAt(duration: duration) { return .urgent }
+        if elapsed >= EscalationPhase.reminder.startsAt(duration: duration) { return .reminder }
         return .calm
     }
 
@@ -70,19 +73,28 @@ public struct EscalationCue: Sendable, Equatable {
 }
 
 public enum Escalation {
-    /// Cues after entry. The Tink at 0 s is part of entering the state, not listed here.
-    public static let cues: [EscalationCue] = [
-        EscalationCue(at: 5, action: .sound(.reminder)),
-        EscalationCue(at: 10, action: .sound(.reminder)),
-        EscalationCue(at: 10, action: .announceTimeLeft),
-        EscalationCue(at: 12.5, action: .sound(.reminder)),
-    ]
+    /// Cues after entry, for a touch timeout of `duration` seconds. The Tink at 0 s is part of entering
+    /// the state, not listed here. The times are for the card's 15 s and scale with `duration`.
+    public static func cues(duration: TimeInterval = TouchTiming.cardTimeout) -> [EscalationCue] {
+        [
+            EscalationCue(at: scaled(5, to: duration), action: .sound(.reminder)),
+            EscalationCue(at: scaled(10, to: duration), action: .sound(.reminder)),
+            EscalationCue(at: scaled(10, to: duration), action: .announceTimeLeft),
+            EscalationCue(at: scaled(12.5, to: duration), action: .sound(.reminder)),
+        ]
+    }
+
+    /// `seconds` of the card's 15 s timeout, scaled to a timeout of `duration`.
+    static func scaled(_ seconds: TimeInterval, to duration: TimeInterval) -> TimeInterval {
+        seconds * duration / TouchTiming.cardTimeout
+    }
 
     /// Ripple progress at `elapsed`: `nil` between ripples, otherwise 0...1 through one ripple.
-    public static func rippleProgress(elapsed: TimeInterval, duration: TimeInterval = 1.2) -> Double? {
+    /// `touchDuration` is the touch timeout, which sets when each phase starts.
+    public static func rippleProgress(elapsed: TimeInterval, touchDuration: TimeInterval = TouchTiming.cardTimeout, duration: TimeInterval = 1.2) -> Double? {
         guard elapsed >= 0 else { return nil }
-        let phase = EscalationPhase.at(elapsed: elapsed)
-        let sincePhase = elapsed - phase.startsAt
+        let phase = EscalationPhase.at(elapsed: elapsed, duration: touchDuration)
+        let sincePhase = elapsed - phase.startsAt(duration: touchDuration)
         let t = sincePhase.truncatingRemainder(dividingBy: phase.rippleInterval) / duration
         return t < 1 ? t : nil
     }

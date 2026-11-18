@@ -220,9 +220,9 @@ public final class PanelController {
         escalation.forEach { $0.cancel() }
         escalation = []
         let elapsed = Date().timeIntervalSince(wait.shownAt)
-        // A shorter touch-timeout ends the countdown before the last cues.
+        // No cue plays after the countdown ends.
         let end = wait.deadline.timeIntervalSince(wait.shownAt)
-        for cue in Escalation.cues where cue.at > elapsed && cue.at < end {
+        for cue in Escalation.cues(duration: wait.duration) where cue.at > elapsed && cue.at < end {
             let item = DispatchWorkItem { [weak self] in
                 guard let self else { return }
                 switch cue.action {

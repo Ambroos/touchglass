@@ -160,7 +160,7 @@ struct TouchRingStage: View {
 
     var body: some View {
         let elapsed = wait.map { now.timeIntervalSince($0.shownAt) } ?? 0
-        let phase = EscalationPhase.at(elapsed: elapsed)
+        let phase = EscalationPhase.at(elapsed: elapsed, duration: touchDuration)
         let progress = completed ? 1 : (wait?.fractionRemaining(at: now) ?? 0)
 
         Group {
@@ -176,6 +176,10 @@ struct TouchRingStage: View {
         .accessibilityAddTraits(.updatesFrequently)
     }
 
+    private var touchDuration: TimeInterval {
+        wait?.duration ?? TouchTiming.cardTimeout
+    }
+
     private var touchSymbol: String {
         Symbols.resolve("hand.tap.fill", fallback: "dot.circle.and.hand.point.up.left.fill")
     }
@@ -185,7 +189,7 @@ struct TouchRingStage: View {
     private func hdr(elapsed: TimeInterval, phase: EscalationPhase, progress: Double) -> some View {
         let role: ColorRole = completed ? .success : (phase == .urgent ? .warning : .accent)
         ZStack {
-            if !completed, !reduceMotion, let ripple = Escalation.rippleProgress(elapsed: elapsed) {
+            if !completed, !reduceMotion, let ripple = Escalation.rippleProgress(elapsed: elapsed, touchDuration: touchDuration) {
                 Circle()
                     .stroke(phase == .urgent ? Color.orange : Color.white, lineWidth: 1.5)
                     .frame(width: PanelMetrics.ringDiameter, height: PanelMetrics.ringDiameter)
@@ -223,7 +227,7 @@ struct TouchRingStage: View {
         let diameter = PanelMetrics.ringDiameter - PanelMetrics.ringStroke
 
         ZStack {
-            if !completed, !reduceMotion, let ripple = Escalation.rippleProgress(elapsed: elapsed) {
+            if !completed, !reduceMotion, let ripple = Escalation.rippleProgress(elapsed: elapsed, touchDuration: touchDuration) {
                 Circle()
                     .stroke(ringColor, lineWidth: 1.5)
                     .frame(width: PanelMetrics.ringDiameter, height: PanelMetrics.ringDiameter)
@@ -352,7 +356,7 @@ private struct CountdownLine: View {
     let now: Date
 
     var body: some View {
-        let urgent = EscalationPhase.at(elapsed: now.timeIntervalSince(wait.shownAt)) == .urgent
+        let urgent = EscalationPhase.at(elapsed: now.timeIntervalSince(wait.shownAt), duration: wait.duration) == .urgent
         Text(verbatim: Copy.countdown(remaining: wait.remaining(at: now)))
             .font(.callout.monospacedDigit().weight(urgent ? .medium : .regular))
             .foregroundStyle(urgent ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))

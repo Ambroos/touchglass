@@ -80,8 +80,10 @@ public struct HostCoordinator: Sendable {
         var serial: String
         var pinNeeded = false
         var touchDeadline: Date?
-        /// The card's touch timeout for this operation, in seconds.
+        /// The countdown length for this operation, in seconds: the `touch-timeout` setting, or else the card's.
         var touchTimeout: TimeInterval?
+        /// The card's touch timeout as the proxy reports it, in seconds.
+        var cardTimeout: TimeInterval?
         /// The host connection of the proxy that reports this operation. Its operations end when it closes.
         var reporter: ConnectionID?
         /// What asked for the operation.
@@ -328,10 +330,12 @@ public struct HostCoordinator: Sendable {
             operationOrder.append(wait.conn)
         }
         let start = wait.at.map { Date(timeIntervalSince1970: $0) } ?? now.addingTimeInterval(-TouchTiming.detectionThreshold)
-        let timeout = touchTimeout ?? Double(wait.timeoutMs) / 1000
+        let cardTimeout = Double(wait.timeoutMs) / 1000
+        let timeout = touchTimeout ?? cardTimeout
         let deadline = start.addingTimeInterval(timeout)
         operation.touchDeadline = deadline
         operation.touchTimeout = timeout
+        operation.cardTimeout = cardTimeout
         operation.pinNeeded = false
         operations[wait.conn] = operation
 
@@ -359,7 +363,10 @@ public struct HostCoordinator: Sendable {
             duration: operation.touchTimeout ?? touchTimeout ?? TouchTiming.cardTimeout,
             client: operation.client
         )
-        let expiry = max(0, deadline.timeIntervalSince(now)) + Self.touchExpiryGrace
+        // A touch-timeout shorter than the card's ends the countdown while the card still waits: keep the
+        // panel until the card's own timeout has passed too.
+        let cardWaitsLonger = max(0, (operation.cardTimeout ?? 0) - (operation.touchTimeout ?? 0))
+        let expiry = max(0, deadline.timeIntervalSince(now)) + cardWaitsLonger + Self.touchExpiryGrace
         return [.panel(.show(.touchWait(wait))), .schedule(after: expiry, .touchExpired(operation: conn, deadline: deadline))]
     }
 

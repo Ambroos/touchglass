@@ -121,6 +121,16 @@ import Testing
         #expect(Escalation.rippleProgress(elapsed: 5.6)! > 0.49)
     }
 
+    @Test func escalationScalesWithTheTouchTimeout() {
+        #expect(Escalation.cues().map(\.at) == [5, 10, 10, 12.5])
+        #expect(Escalation.cues(duration: 60).map(\.at) == [20, 40, 40, 50])
+        #expect(Escalation.cues(duration: 6).map(\.at) == [2, 4, 4, 5])
+        #expect(EscalationPhase.at(elapsed: 10, duration: 60) == .calm)
+        #expect(EscalationPhase.at(elapsed: 20, duration: 60) == .reminder)
+        #expect(EscalationPhase.at(elapsed: 45, duration: 60) == .urgent)
+        #expect(Escalation.rippleProgress(elapsed: 20, touchDuration: 60) == 0)
+    }
+
     @Test func touchWaitStartsSlightlyBelowFull() {
         let now = Date()
         let wait = TouchWait.detected(operation: .decrypt, cardSerial: "12345678", now: now)

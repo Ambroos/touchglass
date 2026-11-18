@@ -124,6 +124,17 @@ import TouchGlassIPC
         #expect(end == [.show(.failure(.touchTimeout(seconds: 25)))])
     }
 
+    @Test func aShortTouchTimeoutKeepsThePanelUntilTheCardAnswers() throws {
+        var coordinator = HostCoordinator(touchTimeout: 5)
+        _ = start(&coordinator)
+        let outputs = coordinator.handle(.touchWait(TouchGlassIPC.TouchWait(conn: "100:p", timeoutMs: 15_000, at: now.timeIntervalSince1970)), from: proxy, now: now)
+        let expiry = outputs.compactMap { output -> TimeInterval? in
+            if case .schedule(let delay, .touchExpired) = output { delay } else { nil }
+        }
+        // The countdown ends at 5 s, but the card waits 15 s; the panel stays for the card's answer.
+        #expect(expiry == [15 + HostCoordinator.touchExpiryGrace])
+    }
+
     @Test func withoutTheSettingTheProxyTimeoutCounts() throws {
         var coordinator = HostCoordinator()
         _ = start(&coordinator)
