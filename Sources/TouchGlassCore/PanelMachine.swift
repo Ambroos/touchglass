@@ -37,8 +37,10 @@ public struct PanelMachine: Sendable {
     /// The user hid the panel for the current operation.
     public private(set) var hiddenByUser = false
     /// The panel took keyboard focus for a prompt since it opened. It then keeps focus through
-    /// the touch, success and error states that follow: the user just typed in it, so keeping
-    /// it takes nothing from the frontmost app. A touch-only panel never takes focus.
+    /// the touch and success states that follow: the user just typed in it, so keeping it takes
+    /// nothing from the frontmost app. An error state releases it, because the user's next keys,
+    /// such as Up Arrow and Return to retry, belong to the terminal. A touch-only panel never
+    /// takes focus.
     public private(set) var holdsKey = false
 
     public init() {}
@@ -65,6 +67,8 @@ public struct PanelMachine: Sendable {
 
     private mutating func show(_ next: PanelState) -> [PanelEffect] {
         let previous = state
+        // Only the client label changed: the state is the same, so focus, sounds and announcements stay as they are.
+        let labelOnly = previous.map { $0 != next && $0.withoutClient == next.withoutClient } ?? false
         // A hidden panel was closed on screen, so a state that ends the hide opens it again.
         let wasHidden = previous != nil && hiddenByUser
         if !Self.keepsHide(from: previous, to: next) { hiddenByUser = false }
@@ -72,12 +76,13 @@ public struct PanelMachine: Sendable {
         if opens { holdsKey = false }
         state = next
         if next.allowsKey { holdsKey = true }
+        if case .failure = next { holdsKey = false }
 
         var effects: [PanelEffect] = [.cancelAutoClose]
 
         if !hiddenByUser {
             effects.append(opens ? .open(next) : .update(next))
-            effects.append(.setKey(holdsKey))
+            if opens || !labelOnly { effects.append(.setKey(holdsKey)) }
         }
 
         switch next {
@@ -97,7 +102,7 @@ public struct PanelMachine: Sendable {
             effects.append(.play(failure == .wrongPIN ? .rejected : .failure))
             effects.append(.scheduleAutoClose(after: TouchTiming.errorHold))
         case .passphrase(let request) where request.error != nil:
-            effects.append(.play(.rejected))
+            if !labelOnly { effects.append(.play(.rejected)) }
         default:
             effects.append(.stopEscalation)
         }

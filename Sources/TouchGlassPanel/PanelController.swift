@@ -83,9 +83,9 @@ public final class PanelController {
             if allowsKey, panel.isVisible {
                 panel.makeKey()
                 guardKeyAfterOwnChange()
+            } else if !allowsKey, panel.isKeyWindow {
+                releaseKey()
             }
-            // Handing key status back to the frontmost app without a flicker needs a spike;
-            // until then the panel stays key until it closes.
         case .play(let cue):
             if !muted { sounds.play(cue) }
         case .announce(let text):
@@ -124,6 +124,15 @@ public final class PanelController {
                 DispatchQueue.main.async { self.panel.makeKey() }
             }
         }
+    }
+
+    /// Gives key status back to the frontmost app's window. A window that orders out resigns key, and the
+    /// window server then makes the active app's key window key again; ordering the panel straight back
+    /// in, now unable to become key, keeps it on screen.
+    private func releaseKey() {
+        keyGuardUntil = .distantPast
+        panel.orderOut(nil)
+        panel.orderFrontRegardless()
     }
 
     // MARK: Entrance and exit

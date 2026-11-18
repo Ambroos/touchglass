@@ -165,6 +165,26 @@ public enum PanelState: Sendable, Equatable {
     case confirm(ConfirmRequest)
     case message(MessageRequest)
 
+    /// The state without its client label, to tell a label update from a change of state.
+    public var withoutClient: PanelState {
+        switch self {
+        case .pinEntry(var request):
+            request.client = nil
+            return .pinEntry(request)
+        case .verifying(var request):
+            request.client = nil
+            return .verifying(request)
+        case .passphrase(var request):
+            request.client = nil
+            return .passphrase(request)
+        case .touchWait(var wait):
+            wait.client = nil
+            return .touchWait(wait)
+        case .success, .failure, .confirm, .message:
+            return self
+        }
+    }
+
     /// Whether the panel takes keyboard focus in this state.
     public var allowsKey: Bool {
         switch self {

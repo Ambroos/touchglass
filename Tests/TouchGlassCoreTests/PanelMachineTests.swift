@@ -24,7 +24,8 @@ import Testing
         let effects = machine.handle(.show(.touchWait(wait)))
         #expect(effects.contains(.update(.touchWait(wait))))
         #expect(effects.contains(.setKey(true)))
-        #expect(machine.handle(.show(.failure(.touchTimeout(seconds: 15)))).contains(.setKey(true)))
+        _ = machine.handle(.show(.success(.sign)))
+        #expect(machine.holdsKey)
         _ = machine.handle(.dismiss)
         // A new panel starts without focus again.
         #expect(machine.handle(.show(.touchWait(wait))).contains(.setKey(false)))
@@ -48,6 +49,37 @@ import Testing
         let effects = machine.handle(.show(.failure(.wrongPIN)))
         #expect(effects.contains(.play(.rejected)))
         #expect(effects.contains(.scheduleAutoClose(after: TouchTiming.errorHold)))
+    }
+
+    @Test func failureReleasesTheKeyboard() {
+        var machine = PanelMachine()
+        let request = PinRequest(operation: .sign, cardSerial: "12345678")
+        _ = machine.handle(.show(.pinEntry(request)))
+        _ = machine.handle(.show(.verifying(request)))
+        let effects = machine.handle(.show(.failure(.wrongPIN)))
+        #expect(effects.contains(.setKey(false)))
+        #expect(effects.contains(.scheduleAutoClose(after: TouchTiming.errorHold)))
+        #expect(!machine.holdsKey)
+        // The next prompt takes the keyboard again.
+        #expect(machine.handle(.show(.pinEntry(request))).contains(.setKey(true)))
+    }
+
+    @Test func labelUpdateLeavesFocusAndSoundsAlone() {
+        var machine = PanelMachine()
+        let pin = PinRequest(operation: .sign, cardSerial: "12345678", promptID: "r1")
+        _ = machine.handle(.show(.pinEntry(pin)))
+        var labelled = pin
+        labelled.client = "git commit · example"
+        #expect(machine.handle(.show(.pinEntry(labelled))) == [.cancelAutoClose, .update(.pinEntry(labelled)), .stopEscalation])
+
+        // A passphrase error plays the alert once, not again when the label arrives.
+        let rejected = PassphraseRequest(description: "Unlock key", error: "Bad passphrase", promptID: "p1")
+        #expect(machine.handle(.show(.passphrase(rejected))).contains(.play(.rejected)))
+        var rejectedLabelled = rejected
+        rejectedLabelled.client = "gpg"
+        let effects = machine.handle(.show(.passphrase(rejectedLabelled)))
+        #expect(!effects.contains(.play(.rejected)))
+        #expect(!effects.contains { if case .setKey = $0 { true } else { false } })
     }
 
     @Test func successAutoClosesAndRearmsWithTink() {

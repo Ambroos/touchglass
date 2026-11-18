@@ -131,4 +131,20 @@ import TouchGlassCore
         #expect(await fieldText(controller) == "")
         controller.send(.dismiss)
     }
+
+    // MARK: Keyboard
+
+    /// A test process can't take key status, so this checks that the window may no longer become key; the
+    /// hand-back of key status itself needs a manual check.
+    @Test func aFailedPINLetsGoOfTheKeyboardAndStaysOnScreen() async {
+        let controller = makeController()
+        let request = PinRequest(operation: .sign, cardSerial: "12345678", promptID: "r1")
+        controller.send(.show(.pinEntry(request)))
+        #expect(controller.panel.allowsKey)
+        controller.send(.show(.verifying(request)))
+        controller.send(.show(.failure(.wrongPIN)))
+        #expect(!controller.panel.allowsKey)
+        #expect(controller.isPanelVisible)
+        controller.send(.dismiss)
+    }
 }
