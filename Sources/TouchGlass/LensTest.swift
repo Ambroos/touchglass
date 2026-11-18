@@ -3,6 +3,11 @@ import SwiftUI
 
 /// Spike: does Liquid Glass lens (warp at its edges) content behind it?
 ///
+/// Finding: the glass filter depends on whether its window is key. In a key window the glass
+/// gets outer edge refraction; with style `.clear` its blur also drops to under 1 pt, which
+/// reads as a lens. A window that only claims to be key (case K) does not get this.
+/// Set TOUCHGLASS_KEY_CASE=<letter> to choose which case's window is key.
+///
 /// Opens a high-contrast "target" window and glass windows arranged over it, plus windows where
 /// the same high-contrast content sits inside the glass's own window. Compare the edges of each
 /// glass: lensing bends the stripes and letters near the rim; plain blur only softens them.
@@ -15,7 +20,7 @@ enum LensTest {
         let summary: String
     }
 
-    static func show(includeSPI: Bool) {
+    static func show() {
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let targetSize = CGSize(width: 560, height: 380)
         let targetOrigin = NSPoint(x: (screen.midX - targetSize.width - 40).rounded(), y: (screen.midY - targetSize.height / 2).rounded())
@@ -48,21 +53,26 @@ enum LensTest {
         let inWindowSize = CGSize(width: 320, height: 230)
         let right = targetOrigin.x + targetSize.width + 140
         cases.append((Case(letter: "D", summary: "In-window: NSGlassEffectView .clear as a sibling above stripes in the same window"),
-                      appKitInWindow(size: inWindowSize, glassSize: glassSize, letter: "D", spiLensing: nil),
+                      appKitInWindow(size: inWindowSize, glassSize: glassSize, letter: "D"),
                       NSPoint(x: right, y: targetOrigin.y + targetSize.height - inWindowSize.height + 60)))
         cases.append((Case(letter: "E", summary: "In-window: SwiftUI glassEffect(.clear) over stripes in the same view tree"),
                       swiftUIInWindow(size: inWindowSize, glassSize: glassSize, letter: "E"),
                       NSPoint(x: right, y: targetOrigin.y - 60)))
 
-        if includeSPI {
-            // F, G: private, undocumented `_contentLensing` on NSGlassEffectView. Spike only; never ship.
-            cases.append((Case(letter: "F", summary: "SPI experiment: cross-window NSGlassEffectView with _contentLensing = 1"),
-                          appKitGlassWindow(size: glassSize, letter: "F", style: .clear, spiLensing: 1),
-                          NSPoint(x: targetOrigin.x + 260, y: targetOrigin.y + targetSize.height - 70)))
-            cases.append((Case(letter: "G", summary: "SPI experiment: in-window NSGlassEffectView .clear with _contentLensing = 1"),
-                          appKitInWindow(size: inWindowSize, glassSize: glassSize, letter: "G", spiLensing: 1),
-                          NSPoint(x: right + inWindowSize.width + 30, y: targetOrigin.y + 80)))
-        }
+            // K: public API only, in a window that claims to be key without taking focus.
+            let k = FakeKeyPanel(contentRect: NSRect(origin: .zero, size: glassSize), styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView], backing: .buffered, defer: false)
+            k.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
+            k.isOpaque = false
+            k.backgroundColor = .clear
+            k.hasShadow = false
+            k.isMovableByWindowBackground = true
+            let glassK = NSGlassEffectView(frame: NSRect(origin: .zero, size: glassSize))
+            glassK.style = .regular
+            glassK.cornerRadius = 26
+            glassK.contentView = MovableHostingView(rootView: Label(letter: "K"))
+            k.contentView = glassK
+            cases.append((Case(letter: "K", summary: "Experiment: public .regular glass in a window whose isKeyWindow returns true while it is not key"),
+                          k, NSPoint(x: targetOrigin.x + 300, y: targetOrigin.y + 120)))
 
         for (testCase, window, origin) in cases {
             print("\(testCase.letter): \(testCase.summary)")
@@ -70,7 +80,12 @@ enum LensTest {
             window.orderFrontRegardless()
             windows.append(window)
         }
-        windows.last?.makeKey()
+        if let letter = ProcessInfo.processInfo.environment["TOUCHGLASS_KEY_CASE"],
+           let match = cases.first(where: { $0.0.letter == letter }) {
+            match.1.makeKey()
+        } else {
+            windows.last?.makeKey()
+        }
 
         if ProcessInfo.processInfo.environment["TOUCHGLASS_DUMP_LAYERS"] != nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
@@ -107,12 +122,11 @@ enum LensTest {
         return window
     }
 
-    private static func appKitGlassWindow(size: CGSize, letter: String, style: NSGlassEffectView.Style, spiLensing: Int? = nil) -> NSWindow {
+    private static func appKitGlassWindow(size: CGSize, letter: String, style: NSGlassEffectView.Style) -> NSWindow {
         let window = makeWindow(size: size, opaque: false)
         let glass = NSGlassEffectView(frame: NSRect(origin: .zero, size: size))
         glass.style = style
         glass.cornerRadius = 26
-        applySPI(spiLensing, to: glass)
         glass.contentView = MovableHostingView(rootView: Label(letter: letter))
         window.contentView = glass
         return window
@@ -127,7 +141,7 @@ enum LensTest {
         return window
     }
 
-    private static func appKitInWindow(size: CGSize, glassSize: CGSize, letter: String, spiLensing: Int?) -> NSWindow {
+    private static func appKitInWindow(size: CGSize, glassSize: CGSize, letter: String) -> NSWindow {
         let window = makeWindow(size: size, opaque: true)
         let root = NSView(frame: NSRect(origin: .zero, size: size))
         let stripes = MovableHostingView(rootView: HighContrast().frame(width: size.width, height: size.height))
@@ -139,7 +153,6 @@ enum LensTest {
         ))
         glass.style = .clear
         glass.cornerRadius = 26
-        applySPI(spiLensing, to: glass)
         glass.contentView = MovableHostingView(rootView: Label(letter: letter))
         root.addSubview(glass)
         window.contentView = root
@@ -181,12 +194,11 @@ enum LensTest {
         print(line)
         for sublayer in layer.sublayers ?? [] { dump(sublayer, depth: depth + 1) }
     }
+}
 
-    /// Sets the private `_contentLensing` property if the class has it. Spike only.
-    private static func applySPI(_ value: Int?, to glass: NSGlassEffectView) {
-        guard let value, glass.responds(to: NSSelectorFromString("set_contentLensing:")) else { return }
-        glass.setValue(value, forKey: "_contentLensing")
-    }
+private final class FakeKeyPanel: NSPanel {
+    override var isKeyWindow: Bool { true }
+    override var canBecomeKey: Bool { false }
 }
 
 private final class KeyablePanel: NSPanel {

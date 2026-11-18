@@ -85,7 +85,7 @@ if CommandLine.arguments.dropFirst().first == "--samples" {
 
 if CommandLine.arguments.dropFirst().first == "--lens-test" {
     MainActor.assumeIsolated {
-        LensTest.show(includeSPI: CommandLine.arguments.contains("--spi"))
+        LensTest.show()
     }
     app.run()
     exit(0)
