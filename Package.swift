@@ -20,7 +20,7 @@ let package = Package(
         .target(name: "TouchGlassPanel", dependencies: ["TouchGlassCore"]),
         // The host: merges proxy and pinentry messages into panel events. Foundation only, no UI.
         .target(name: "TouchGlassHost", dependencies: ["TouchGlassCore", "TouchGlassIPC"]),
-        // The app: the host with its panel, plus demo and sample modes.
+        // The app: the host with its panel, plus a demo mode.
         .executableTarget(name: "TouchGlass", dependencies: ["TouchGlassCore", "TouchGlassPanel", "TouchGlassHost", "TouchGlassIPC"]),
         .testTarget(name: "TouchGlassCoreTests", dependencies: ["TouchGlassCore"]),
         .testTarget(name: "TouchGlassPanelTests", dependencies: ["TouchGlassPanel"]),

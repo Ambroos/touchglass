@@ -5,21 +5,17 @@ import TouchGlassPanel
 let usage = """
     Usage: TouchGlass
            TouchGlass --demo [scenario] [options]
-           TouchGlass --samples
-           TouchGlass --lens-test
 
     Without arguments, TouchGlass runs as the host: it listens for touchglass-pinentry and
     touchglass-scdaemon on its socket and shows the panel for their prompts and card operations.
 
-    Shows the TouchGlass panel with scripted states. No gpg and no card are involved.
+    --demo shows the panel with scripted states. No gpg and no card are involved. Without a
+    scenario, it runs all of them in turn.
 
     Scenarios:
     \(DemoScenario.allCases.map { "  \($0.rawValue.padding(toLength: 12, withPad: " ", startingAt: 0))\($0.summary)" }.joined(separator: "\n"))
 
-    --samples opens one sample panel per material, to compare them over real content.
-    It prints which number is which material. Drag a sample to move it; Esc quits.
-
-    Options:
+    Demo options:
       --touch-after <seconds>   Simulate the touch after this many seconds (default 4).
       --auto-submit <seconds>   Submit PIN, passphrase and confirm prompts by themselves.
       --slow <factor>           Slow panel animations down by this factor, to review them.
@@ -97,22 +93,6 @@ app.setActivationPolicy(.accessory)
 if CommandLine.arguments.count == 1 || CommandLine.arguments.dropFirst().first == "--host" {
     MainActor.assumeIsolated {
         runHost()
-    }
-    app.run()
-    exit(0)
-}
-
-if CommandLine.arguments.dropFirst().first == "--samples" {
-    MainActor.assumeIsolated {
-        MaterialSamples.show()
-    }
-    app.run()
-    exit(0)
-}
-
-if CommandLine.arguments.dropFirst().first == "--lens-test" {
-    MainActor.assumeIsolated {
-        LensTest.show()
     }
     app.run()
     exit(0)

@@ -116,21 +116,13 @@ gpg-agent doesn't tell scdaemon or the pinentry which command needs the card, so
 
 The panel opens without waiting for the label, which fills in when the lookup finishes. The lookup gives up after about 50 ms. If several clients could be the one, and they don't give the same label, the panel shows none.
 
-## Compare materials
-
-```sh
-build/TouchGlass.app/Contents/MacOS/TouchGlass --samples
-```
-
-This opens one sample panel per material variant, each in its own window, so each shows the real content behind it. Click a sample before judging it: the glass refracts at its edges only while its window is key. Drag a sample to move it over busy content. The app prints which label is which variant and each display's current and potential HDR headroom. Press Esc or click a close button to quit.
-
 ## Layout
 
 - `TouchGlassCore`: panel states, copy, touch timing and a pure state machine (`PanelMachine`) that turns events into effects. It depends on Foundation and Observation only.
 - `TouchGlassPanel`: the SwiftUI views and the AppKit panel window. `PanelController` performs the state machine's effects.
 - `TouchGlassHost`: `HostCoordinator`, which merges proxy events and pinentry prompts into panel events and replies, and `HostServer`, which accepts helper connections.
 - `TouchGlassIPC`: the messages and socket transport shared with the helpers.
-- `TouchGlass`: the app: the host, plus the demo and sample modes.
+- `TouchGlass`: the app: the host, plus the demo mode.
 
 ## License
 
