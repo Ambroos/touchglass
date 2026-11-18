@@ -15,6 +15,8 @@ public final class PanelController {
 
     private let panel = PanelWindow()
     private let sounds = Sounds()
+    /// Tests set this, so they make no sound.
+    var muted = false
     /// Incremented on every entrance and exit, so a stale exit completion cannot order out a re-opened panel.
     private var generation = 0
     private var autoClose: DispatchWorkItem?
@@ -84,7 +86,7 @@ public final class PanelController {
             // Handing key status back to the frontmost app without a flicker needs a spike;
             // until then the panel stays key until it closes.
         case .play(let cue):
-            sounds.play(cue)
+            if !muted { sounds.play(cue) }
         case .announce(let text):
             announce(text)
         case .scheduleAutoClose(let delay):
@@ -215,7 +217,7 @@ public final class PanelController {
                 guard let self else { return }
                 switch cue.action {
                 case .sound(let sound):
-                    self.sounds.play(sound)
+                    if !self.muted { self.sounds.play(sound) }
                 case .announceTimeLeft:
                     self.announce(Copy.timeLeftAnnouncement(remaining: wait.remaining(at: Date())))
                 }

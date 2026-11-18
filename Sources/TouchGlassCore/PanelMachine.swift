@@ -65,15 +65,18 @@ public struct PanelMachine: Sendable {
 
     private mutating func show(_ next: PanelState) -> [PanelEffect] {
         let previous = state
-        if previous == nil { holdsKey = false }
+        // A hidden panel was closed on screen, so a state that ends the hide opens it again.
+        let wasHidden = previous != nil && hiddenByUser
         if !Self.keepsHide(from: previous, to: next) { hiddenByUser = false }
+        let opens = previous == nil || (wasHidden && !hiddenByUser)
+        if opens { holdsKey = false }
         state = next
         if next.allowsKey { holdsKey = true }
 
         var effects: [PanelEffect] = [.cancelAutoClose]
 
         if !hiddenByUser {
-            effects.append(previous == nil ? .open(next) : .update(next))
+            effects.append(opens ? .open(next) : .update(next))
             effects.append(.setKey(holdsKey))
         }
 
