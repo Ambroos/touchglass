@@ -8,6 +8,9 @@
 # the top of the file. gpg-agent uses the last occurrence of an option, so earlier duplicates stay as
 # they are. Uninstall reverses exactly these edits, so the rest of the file stays byte-identical.
 set -eu
+# Byte-wise text handling: awk in a UTF-8 locale stops at a byte that isn't valid UTF-8, such as a
+# Latin-1 character in a comment.
+export LC_ALL=C
 
 prog=touchglass
 marker='# touchglass: '
@@ -17,6 +20,10 @@ support_dir="$HOME/Library/Application Support/TouchGlass"
 scd_path_file="$support_dir/scdaemon-program"
 pinentry_conf="$support_dir/pinentry.conf"
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+# Where install looks for pinentry-mac besides PATH. The tests point it at their sandbox.
+pinentry_mac_dirs="${TOUCHGLASS_PINENTRY_MAC_DIRS:-/opt/homebrew/bin /usr/local/bin}"
+# Becomes 1 when a step fails after gpg-agent.conf was written; the script then exits with status 1.
+exit_status=0
 
 die() { printf '%s: %s\n' "$prog" "$*" >&2; exit 1; }
 say() { printf '%s\n' "$*"; }
@@ -31,10 +38,13 @@ Usage:
 
 install    Copies TouchGlass.app to DIR (default ~/Applications), building it first
            if needed, and points gpg-agent's pinentry-program and scdaemon-program
-           at the bundled helpers. Backs up gpg-agent.conf first.
+           at the bundled helpers. Backs up gpg-agent.conf first. When it replaces
+           the app, it quits the running host and stops scdaemon so that the new
+           helpers take over; the next card operation asks for the PIN again.
            --from APP uses an already built TouchGlass.app instead of building.
 uninstall  Restores the original pinentry-program and scdaemon-program lines.
-           --remove-app also deletes the installed TouchGlass.app.
+           --remove-app also deletes the installed TouchGlass.app. Keeps the
+           gpg-agent.conf backups and ~/Library/Application Support/TouchGlass.
 status     Shows what gpg-agent.conf points at and whether the host runs.
 
 --dry-run prints the change to gpg-agent.conf as a diff and writes nothing.
@@ -129,9 +139,18 @@ gpgconf_scdaemon() {
 }
 
 find_pinentry_mac() {
-    for p in "$(command -v pinentry-mac 2>/dev/null || true)" /opt/homebrew/bin/pinentry-mac /usr/local/bin/pinentry-mac; do
-        if [ -n "$p" ] && [ -x "$p" ]; then printf '%s\n' "$p"; return 0; fi
+    p="$(command -v pinentry-mac 2>/dev/null || true)"
+    if [ -n "$p" ] && [ -x "$p" ]; then printf '%s\n' "$p"; return 0; fi
+    for dir in $pinentry_mac_dirs; do
+        if [ -x "$dir/pinentry-mac" ]; then printf '%s\n' "$dir/pinentry-mac"; return 0; fi
     done
+}
+
+# The pinentry that gpgconf reports, which gpg-agent uses when gpg-agent.conf names none.
+gpgconf_pinentry() {
+    command -v gpgconf >/dev/null 2>&1 || return 0
+    path="$(gpgconf --list-components 2>/dev/null | awk -F: '$1 == "pinentry" { print $3; exit }' | sed 's/%3[aA]/:/g')"
+    if [ -n "$path" ] && [ -x "$path" ]; then printf '%s\n' "$path"; fi
 }
 
 # The installed app's path, derived from the helper path in gpg-agent.conf.
@@ -143,24 +162,50 @@ app_from_conf() {
 }
 
 reload_agent() {
-    if command -v gpgconf >/dev/null 2>&1; then
-        gpgconf --kill gpg-agent
+    if ! command -v gpgconf >/dev/null 2>&1; then
+        warn "gpgconf not found; restart gpg-agent yourself to apply the change"
+    elif gpgconf --kill gpg-agent; then
         say "Stopped gpg-agent with 'gpgconf --kill gpg-agent'; it restarts with the new settings on next use."
         say "gpg-agent forgot its cached PINs and passphrases, so the next card operation asks for the PIN again."
     else
-        warn "gpgconf not found; restart gpg-agent yourself to apply the change"
+        warn "gpg-agent.conf is written, but 'gpgconf --kill gpg-agent' failed; run it yourself to apply the change"
+        exit_status=1
     fi
 }
+
+# After the app was replaced, the running scdaemon is still the previous touchglass-scdaemon, and it
+# runs until gpg-agent stops it. gpg-agent starts it again on the next card operation.
+restart_scdaemon() {
+    if ! command -v gpgconf >/dev/null 2>&1; then
+        warn "gpgconf not found; run 'gpgconf --kill scdaemon' yourself so that the new touchglass-scdaemon takes over"
+    elif gpgconf --kill scdaemon; then
+        say "Stopped scdaemon with 'gpgconf --kill scdaemon', so the next card operation runs the new touchglass-scdaemon."
+        say "The card is locked again, so the next card operation asks for the PIN again."
+    else
+        warn "'gpgconf --kill scdaemon' failed; run it yourself so that the new touchglass-scdaemon takes over"
+        exit_status=1
+    fi
+}
+
+host_running() { pgrep -x TouchGlass >/dev/null 2>&1; }
 
 show_diff() { # old new label
     if [ -f "$1" ]; then old="$1"; else old=/dev/null; fi
     diff -u -L "a/$3" -L "b/$3" "$old" "$2" || true
 }
 
-# Writes new content over the conf in place, so symlinks, owner and mode stay.
+# Replaces the conf atomically: writes the new content next to it and renames it over the original, so
+# an interruption leaves either the old or the new file. A symlinked conf keeps its link, and an
+# existing file keeps its mode.
 replace_conf() { # tmpfile
-    mkdir -p "$gnupg_home"
-    cat "$1" > "$conf"
+    [ -d "$gnupg_home" ] || mkdir -m 700 -p "$gnupg_home"
+    target="$conf"
+    if [ -L "$conf" ]; then target="$(realpath "$conf")"; fi
+    staged="$(mktemp "$(dirname "$target")/.gpg-agent.conf.touchglass.XXXXXX")"
+    cat "$1" > "$staged"
+    if [ -e "$target" ]; then chmod "$(stat -f %Lp "$target")" "$staged"; fi
+    mv -f "$staged" "$target"
+    staged=""
 }
 
 cmd_install() {
@@ -205,19 +250,22 @@ cmd_install() {
     [ -n "$real_scd" ] || die "could not find scdaemon; is GnuPG installed and gpgconf on PATH?"
     [ -x "$real_scd" ] || warn "scdaemon at $real_scd is not executable"
 
-    # The fallback pinentry: the one gpg-agent.conf named before TouchGlass, else pinentry-mac.
+    # The fallback pinentry: the one gpg-agent.conf named before TouchGlass, else pinentry-mac, else the
+    # pinentry that gpgconf reports. Never a path that doesn't exist.
     fallback="$(previous_value "$conf" pinentry-program)"
     [ -n "$fallback" ] || fallback="$(find_pinentry_mac)"
+    [ -n "$fallback" ] || fallback="$(gpgconf_pinentry)"
     if [ -z "$fallback" ]; then
-        fallback=/opt/homebrew/bin/pinentry-mac
-        warn "pinentry-mac not found; the fallback pinentry is set to $fallback, which does not exist"
+        warn "no pinentry found; while the TouchGlass host is not reachable, PIN prompts fail. Install pinentry-mac, or set fallback-pinentry in $pinentry_conf."
     fi
 
     new_pinentry="$app/Contents/MacOS/touchglass-pinentry"
     new_scd="$app/Contents/MacOS/touchglass-scdaemon"
 
     tmp="$(mktemp "${TMPDIR:-/tmp}/touchglass.XXXXXX")"
-    trap 'rm -f "$tmp"' EXIT
+    staged=""
+    copying=0
+    trap 'rm -f "$tmp" ${staged:+"$staged"}; if [ "$copying" = 1 ]; then rm -rf "$app.new"; fi' EXIT
     if [ -f "$conf" ]; then created=0; input="$conf"; else created=1; input=/dev/null; fi
     TG_PINENTRY="$new_pinentry" TG_SCD="$new_scd" TG_CREATED="$created" TG_NOEOL="$(no_eol "$input")" \
         awk "$awk_lib"'
@@ -258,16 +306,27 @@ cmd_install() {
         fi
     fi
 
+    # Copy the app unless installing over the same bundle. A copy replaces the helpers that the running
+    # scdaemon and host started from.
+    copy_app=0
+    if [ "$build" = 1 ] || [ "$(cd "$source_app" && pwd -P)" != "$( (cd "$app" 2>/dev/null && pwd -P) || true)" ]; then
+        copy_app=1
+    fi
+    pinentry_plan="$(plan_pinentry_conf)"
+
     if [ "$dry_run" = 1 ]; then
         say "Dry run: nothing is written."
         if [ "$build" = 1 ]; then say "Would build TouchGlass.app with scripts/build-app.sh."; fi
-        say "Would copy $source_app to $app."
-        say "Would write the real scdaemon path to $scd_path_file: $real_scd"
-        if [ -f "$pinentry_conf" ]; then
-            say "Would keep the existing $pinentry_conf."
-        else
-            say "Would write $pinentry_conf with fallback-pinentry = $fallback"
+        if [ "$copy_app" = 1 ]; then
+            say "Would copy $source_app to $app."
+            if host_running; then say "Would quit the running TouchGlass host with 'pkill -x TouchGlass'; the helpers start the new one on demand."; fi
         fi
+        say "Would write the real scdaemon path to $scd_path_file: $real_scd"
+        case "$pinentry_plan" in
+            keep) say "Would keep the existing $pinentry_conf." ;;
+            write) say "Would write $pinentry_conf${fallback:+ with fallback-pinentry = $fallback}." ;;
+            update) say "Would update $pinentry_conf${fallback:+: fallback-pinentry = $fallback}." ;;
+        esac
         if [ "$conf_changed" = 1 ]; then
             if [ -n "$backup" ]; then say "Would back up $conf to $backup."; fi
             say "Would change $conf:"
@@ -275,6 +334,9 @@ cmd_install() {
             say "Would then stop gpg-agent with 'gpgconf --kill gpg-agent', which forgets cached PINs and passphrases."
         else
             say "$conf already points at TouchGlass; no change."
+            if [ "$copy_app" = 1 ]; then
+                say "Would then stop scdaemon with 'gpgconf --kill scdaemon' so that the new touchglass-scdaemon takes over; the next card operation asks for the PIN again."
+            fi
         fi
         return 0
     fi
@@ -284,14 +346,20 @@ cmd_install() {
         "$repo_root/scripts/build-app.sh"
     fi
 
-    # Copy the app. Skip it when installing over the same bundle.
-    if [ "$(cd "$source_app" && pwd -P)" != "$( (cd "$app" 2>/dev/null && pwd -P) || true)" ]; then
+    if [ "$copy_app" = 1 ]; then
+        # Copy next to the app, then swap, so a failed or interrupted copy leaves the installed app whole.
         mkdir -p "$app_dir"
-        rm -rf "$app"
-        ditto "$source_app" "$app"
+        rm -rf "$app.new" "$app.old"
+        copying=1
+        ditto "$source_app" "$app.new" || die "could not copy $source_app; $app is unchanged"
+        if [ -e "$app" ]; then mv "$app" "$app.old"; fi
+        mv "$app.new" "$app"
+        copying=0
+        rm -rf "$app.old"
         say "Copied TouchGlass.app to $app."
-        if pgrep -x TouchGlass >/dev/null 2>&1; then
-            say "The TouchGlass host is running an older copy; quit it from Activity Monitor or 'pkill -x TouchGlass', and the helpers start the new one on demand."
+        if host_running; then
+            pkill -x TouchGlass || true
+            say "Quit the running TouchGlass host with 'pkill -x TouchGlass'; the helpers start the new one on demand."
         fi
     fi
 
@@ -299,21 +367,12 @@ cmd_install() {
     chmod 700 "$support_dir"
     printf '%s\n' "$real_scd" > "$scd_path_file"
     say "Wrote the real scdaemon path to $scd_path_file: $real_scd"
-    if [ -f "$pinentry_conf" ]; then
-        say "Kept the existing $pinentry_conf."
-    else
-        cat > "$pinentry_conf" <<EOF
-# touchglass-pinentry settings. One "key = value" per line.
-# The pinentry that takes over when the TouchGlass host is not reachable.
-fallback-pinentry = $fallback
-# The app the pinentry starts when the host is not running; "none" disables starting it.
-host-app = $app
-EOF
-        say "Wrote $pinentry_conf with fallback-pinentry = $fallback"
-    fi
+    write_pinentry_conf "$pinentry_plan"
 
     if [ "$conf_changed" = 0 ]; then
         say "$conf already points at TouchGlass; no change."
+        # gpg-agent keeps running, and so does the scdaemon it started from the previous copy.
+        if [ "$copy_app" = 1 ]; then restart_scdaemon; fi
         return 0
     fi
     if [ -n "$backup" ]; then
@@ -324,7 +383,64 @@ EOF
     say "Set pinentry-program and scdaemon-program in $conf:"
     say "  pinentry-program $new_pinentry"
     say "  scdaemon-program $new_scd"
+    # Stopping gpg-agent stops its scdaemon too.
     reload_agent
+}
+
+# What install does with pinentry.conf: "write" a new file, "update" the installer's lines in the
+# existing one, or "keep" it as it is.
+plan_pinentry_conf() {
+    if [ ! -f "$pinentry_conf" ]; then echo write; return; fi
+    # Earlier installs wrote host-app with the app's path. The helpers start the app they are in, so
+    # the line can only go stale.
+    if grep -q '^host-app = /.*/TouchGlass\.app$' "$pinentry_conf"; then echo update; return; fi
+    # A fallback that no longer exists is replaced; one that works is the user's choice and stays.
+    current="$(pinentry_setting fallback-pinentry)"
+    if [ -n "$fallback" ] && { [ -z "$current" ] || [ ! -x "$current" ]; }; then echo update; return; fi
+    echo keep
+}
+
+# The value of a key in pinentry.conf, or nothing.
+pinentry_setting() { # key
+    [ -f "$pinentry_conf" ] || return 0
+    TG_KEY="$1" awk '
+        { line = $0; sub(/^[ \t]+/, "", line) }
+        index(line, ENVIRON["TG_KEY"]) == 1 {
+            rest = substr(line, length(ENVIRON["TG_KEY"]) + 1)
+            if (rest ~ /^[ \t]*=/) { sub(/^[ \t]*=[ \t]*/, "", rest); sub(/[ \t]+$/, "", rest); v = rest }
+        }
+        END { print v }' "$pinentry_conf"
+}
+
+write_pinentry_conf() { # plan
+    case "$1" in
+        keep)
+            say "Kept the existing $pinentry_conf."
+            ;;
+        write)
+            {
+                echo '# touchglass-pinentry settings. One "key = value" per line.'
+                echo '# The pinentry that takes over when the TouchGlass host is not reachable.'
+                if [ -n "$fallback" ]; then echo "fallback-pinentry = $fallback"; else echo "# fallback-pinentry = /path/to/pinentry-mac"; fi
+            } > "$pinentry_conf"
+            say "Wrote $pinentry_conf${fallback:+ with fallback-pinentry = $fallback}."
+            ;;
+        update)
+            staged="$(mktemp "$support_dir/.pinentry.conf.XXXXXX")"
+            TG_FALLBACK="$fallback" awk '
+                /^# The app the pinentry starts when the host is not running/ { next }
+                /^host-app = \/.*\/TouchGlass\.app$/ { next }
+                /^[ \t]*fallback-pinentry[ \t]*=/ && ENVIRON["TG_FALLBACK"] != "" {
+                    if (!done) print "fallback-pinentry = " ENVIRON["TG_FALLBACK"]
+                    done = 1; next
+                }
+                { print }
+                END { if (!done && ENVIRON["TG_FALLBACK"] != "") print "fallback-pinentry = " ENVIRON["TG_FALLBACK"] }' "$pinentry_conf" > "$staged"
+            mv -f "$staged" "$pinentry_conf"
+            staged=""
+            say "Updated $pinentry_conf${fallback:+: fallback-pinentry = $fallback}."
+            ;;
+    esac
 }
 
 cmd_uninstall() {
@@ -343,7 +459,8 @@ cmd_uninstall() {
 
     tmp="$(mktemp "${TMPDIR:-/tmp}/touchglass.XXXXXX")"
     notes="$(mktemp "${TMPDIR:-/tmp}/touchglass.XXXXXX")"
-    trap 'rm -f "$tmp" "$notes"' EXIT
+    staged=""
+    trap 'rm -f "$tmp" "$notes" ${staged:+"$staged"}' EXIT
 
     conf_changed=0
     if [ -f "$conf" ]; then
@@ -438,12 +555,15 @@ cmd_uninstall() {
     if ls "$conf".touchglass-backup-* >/dev/null 2>&1; then
         say "Kept the backups of gpg-agent.conf next to it."
     fi
+    if [ -d "$support_dir" ]; then
+        say "Kept $support_dir, which holds the pinentry settings, the real scdaemon path and host.conf; remove it yourself if you don't reinstall."
+    fi
 
     if [ "$remove_app" = 1 ]; then
         if [ -x "$app/Contents/MacOS/TouchGlass" ] && [ "${app##*/}" = TouchGlass.app ]; then
             rm -rf "$app"
             say "Removed $app."
-            if pgrep -x TouchGlass >/dev/null 2>&1; then say "The TouchGlass host is still running; quit it with 'pkill -x TouchGlass'."; fi
+            if host_running; then say "The TouchGlass host is still running; quit it with 'pkill -x TouchGlass'."; fi
         else
             say "No TouchGlass.app at $app; nothing to remove."
         fi
@@ -478,7 +598,7 @@ cmd_status() {
     else
         say "App:               not found at $app"
     fi
-    if pgrep -x TouchGlass >/dev/null 2>&1; then say "Host:              running"; else say "Host:              not running"; fi
+    if host_running; then say "Host:              running"; else say "Host:              not running"; fi
     if [ -f "$scd_path_file" ]; then say "Real scdaemon:     $(head -n 1 "$scd_path_file")"; else say "Real scdaemon:     not configured"; fi
     if [ -f "$pinentry_conf" ]; then
         fb="$(awk -F= '/^[ \t]*fallback-pinentry[ \t]*=/ { v = $2; sub(/^[ \t]+/, "", v); sub(/[ \t]+$/, "", v) } END { print v }' "$pinentry_conf")"
@@ -496,8 +616,8 @@ cmd_status() {
 [ $# -ge 1 ] || { usage >&2; exit 2; }
 command="$1"; shift
 case "$command" in
-    install) cmd_install "$@" ;;
-    uninstall) cmd_uninstall "$@" ;;
+    install) cmd_install "$@"; exit "$exit_status" ;;
+    uninstall) cmd_uninstall "$@"; exit "$exit_status" ;;
     status) cmd_status "$@" ;;
     help | -h | --help) usage ;;
     *) usage >&2; exit 2 ;;
