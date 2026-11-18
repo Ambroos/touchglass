@@ -2,7 +2,7 @@
 
 TouchGlass is a macOS panel for YubiKey operations through gpg-agent. When a signature, SSH login or decryption needs the card, one floating Liquid Glass panel asks for the PIN, then shows "Touch your YubiKey" with a countdown to the card's touch timeout, then confirms and closes itself.
 
-This repository contains the panel and a demo mode. The gpg-agent integration is not built yet, so the app does not talk to gpg-agent, scdaemon or a card.
+Run without arguments, the app is the host: it listens on a Unix socket for `touchglass-pinentry` and `touchglass-scdaemon` and shows the panel for their prompts and card operations. Installing those helpers into a gpg setup is not automated yet.
 
 ## Requirements
 
@@ -53,13 +53,15 @@ The demo never reads, logs or prints what you type in the PIN field.
 build/TouchGlass.app/Contents/MacOS/TouchGlass --samples
 ```
 
-This opens one sample panel per material variant, all built on `NSGlassEffectView`: clear glass with warm-neutral smoke as a glass tint, as a fill layer, or feathered behind the text only, plus a regular-glass reference. Each sample is its own window, so it shows the real content behind it. The glass lenses only while its window is key, so click a sample before judging it. Drag a sample to move it over busy content. The app prints which number is which material. Press Esc or click a close button to quit.
+This opens one sample panel per material variant, each in its own window, so each shows the real content behind it. Click a sample before judging it: the glass refracts at its edges only while its window is key. Drag a sample to move it over busy content. The app prints which label is which variant and each display's current and potential HDR headroom. Press Esc or click a close button to quit.
 
 ## Layout
 
 - `TouchGlassCore`: panel states, copy, touch timing and a pure state machine (`PanelMachine`) that turns events into effects. It depends on Foundation and Observation only.
 - `TouchGlassPanel`: the SwiftUI views and the AppKit panel window. `PanelController` performs the state machine's effects.
-- `TouchGlass`: the app, which currently runs the demo.
+- `TouchGlassHost`: `HostCoordinator`, which merges proxy events and pinentry prompts into panel events and replies, and `HostServer`, which accepts helper connections.
+- `TouchGlassIPC`: the messages and socket transport shared with the helpers.
+- `TouchGlass`: the app: the host, plus the demo and sample modes.
 
 ## License
 

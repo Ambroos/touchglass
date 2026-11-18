@@ -35,6 +35,8 @@ public enum MaterialSamples {
         public var ink: Ink
         /// A wide, soft, unoffset shadow behind the glyph and text only.
         public var textShadow: Bool
+        /// Opacity of a behind-window `NSVisualEffectView` under the glass, in the same window; nil for none.
+        public var backdropOpacity: Double? = nil
         public var summary: String
     }
 
@@ -49,6 +51,12 @@ public enum MaterialSamples {
                summary: "C with an HDR light-blue glyph and ring, HDR white text"),
         Sample(label: "E", style: .regular, shading: .none, ink: .hdrWhite, textShadow: true,
                summary: "Regular glass (sample 9) with C's HDR white text and wide soft shadow"),
+        Sample(label: "F", style: .regular, shading: .tint(0.62), ink: .hdrWhite, textShadow: true,
+               summary: "E plus A's smoke: regular glass, glass tint 62% warm neutral, HDR white text, wide soft shadow"),
+        Sample(label: "G", style: .clear, shading: .darkTint(0.62), ink: .hdrWhite, textShadow: true, backdropOpacity: 1,
+               summary: "Stacked: behind-window blur (NSVisualEffectView, 30 pt) under clear glass, with C's smoke, HDR text and shadow"),
+        Sample(label: "G2", style: .clear, shading: .darkTint(0.62), ink: .hdrWhite, textShadow: true, backdropOpacity: 0.5,
+               summary: "G with the blur layer at 50% opacity, so the backdrop is only slightly blurred"),
     ]
 
     static let size = CGSize(width: 240, height: 216)
@@ -86,7 +94,7 @@ public enum MaterialSamples {
         for screen in NSScreen.screens {
             print("Screen \(screen.localizedName): EDR headroom now \(screen.maximumExtendedDynamicRangeColorComponentValue), potential \(screen.maximumPotentialExtendedDynamicRangeColorComponentValue). HDR shows only when it is above 1.0.")
         }
-        print("Click a sample to make it key before judging it: the lens only shows on the key window.")
+        print("Click a sample before judging it. The glass only lenses in the window you clicked last; the others look flat.")
         for (index, sample) in samples.enumerated() {
             let number = index + 1
             print("\(sample.label): \(sample.summary)")
@@ -103,14 +111,16 @@ public enum MaterialSamples {
         }
         let env = ProcessInfo.processInfo.environment
         if let key = env["TOUCHGLASS_KEY_SAMPLE"].flatMap(Int.init), windows.indices.contains(key - 1) {
+            // Diagnostics only: activate so the chosen sample reliably becomes key.
+            NSApp.activate(ignoringOtherApps: true)
             windows[key - 1].makeKey()
         } else {
             windows.first?.makeKey()
         }
         if env["TOUCHGLASS_DUMP_LAYERS"] != nil {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 for (index, window) in windows.enumerated() {
-                    print("\(index + 1): key=\(window.isKeyWindow) \(glassFilterSummary(window.contentView?.layer))")
+                    print("\(samples[index].label): key=\(window.isKeyWindow) \(glassFilterSummary(window.contentView?.layer))")
                 }
             }
         }
@@ -134,6 +144,17 @@ public enum MaterialSamples {
             if found != "none" { return found }
         }
         return "none"
+    }
+
+    private static func roundedMask(size: CGSize, radius: CGFloat) -> NSImage {
+        let image = NSImage(size: size, flipped: false) { rect in
+            NSColor.black.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+            return true
+        }
+        image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
+        image.resizingMode = .stretch
+        return image
     }
 
     private static func makeWindow(sample: Sample, number: Int) -> NSPanel {
@@ -164,7 +185,22 @@ public enum MaterialSamples {
         host.sizingOptions = []
         host.frame = NSRect(origin: .zero, size: size)
         glass.contentView = host
-        window.contentView = glass
+
+        if let opacity = sample.backdropOpacity {
+            // The blur sits under the glass in the same window, so the glass refracts the blurred image.
+            let root = NSView(frame: NSRect(origin: .zero, size: size))
+            let blur = NSVisualEffectView(frame: root.bounds)
+            blur.material = .underWindowBackground
+            blur.blendingMode = .behindWindow
+            blur.state = .active
+            blur.maskImage = roundedMask(size: size, radius: cornerRadius)
+            blur.alphaValue = opacity
+            root.addSubview(blur)
+            root.addSubview(glass)
+            window.contentView = root
+        } else {
+            window.contentView = glass
+        }
         return window
     }
 }
