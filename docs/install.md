@@ -82,6 +82,8 @@ gpgconf --kill scdaemon
 
 The card locks again when scdaemon stops, so the next card operation asks for the PIN again.
 
+A release that adds a feature to the scdaemon proxy needs the new proxy before the feature works. For example, the host asks gpg-agent for a card's touch policy only through a proxy that told it where GnuPG is, which a proxy from 0.1.0 doesn't. Until scdaemon restarts, the host learns touch policies only from `touchglass card`; see [Touch policies](configuration.md#touch-policies).
+
 From a checkout, run `scripts/touchglass install` again after you pull changes. It replaces the installed app and rewrites the launchers, and leaves `gpg-agent.conf` as it is. It prints the two preceding commands for you to run; with `--apply`, it runs them itself. Install copies the new app next to the old one and then swaps them, so a failed copy leaves the installed app whole.
 
 ## Check the setup
