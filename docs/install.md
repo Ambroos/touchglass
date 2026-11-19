@@ -102,7 +102,7 @@ touchglass uninstall --apply
 
 `--apply` restores the lines from the `# touchglass: ` comments, so the file matches what it was before install. If the comments are missing, it takes the original lines from the newest backup. If it finds a TouchGlass line without a comment next to a commented-out line for the same option, it can't tell whether that line is your earlier setting, so it changes nothing and prints the manual steps. After it stops gpg-agent, it removes the launchers.
 
-Uninstall keeps the launchers, and says why, while a gpg-agent runs that started before `gpg-agent.conf` last changed, or while the `gpg-agent.conf` of another GnuPG home that you ran install for still names them.
+Uninstall keeps the launchers, and says why, while a gpg-agent runs that started before `gpg-agent.conf` last changed, or while the `gpg-agent.conf` of another GnuPG home that you ran install for still names them. After `--apply` stopped this home's gpg-agent, a gpg-agent that still runs and started before the change belongs to another GnuPG home, so uninstall keeps the launchers for it too; stop it with `gpgconf --kill gpg-agent` and `GNUPGHOME` set to its directory, then run uninstall again.
 
 To also delete the installed app, pass `--remove-app`. For the app that Homebrew installed, run `brew uninstall touchglass` instead, after uninstall restored `gpg-agent.conf`.
 
