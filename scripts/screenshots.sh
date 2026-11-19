@@ -1,26 +1,22 @@
 #!/bin/sh
-# Captures the panel states for the README as transparent PNGs in docs/images/.
+# Captures the panel states for the README as PNGs in docs/images/.
 #
-# For each state and colour scheme, it runs `touchglass-screenshots <state>` twice, once over a
-# white and once over a black full-screen backdrop. touchglass-screenshots is a developer tool that
-# shows the app's panel; it is not part of TouchGlass.app. It captures the panel window's region
-# itself, so no Screen Recording permission is needed, and touchglass-matte recovers a transparent
-# PNG from the two captures. Each run covers the panel's screen for about 2 seconds, so leave the Mac
-# alone while it runs. The screen must be unlocked and awake.
+# For each state and colour scheme, it runs `touchglass-screenshots <state>` once, over a full-screen
+# backdrop in the colour of GitHub's page: light over #ffffff, dark over #0d1117. The glass takes its
+# tint from what is behind it, so each image only looks right on that page colour.
+# touchglass-screenshots is a developer tool that shows the app's panel; it is not part of
+# TouchGlass.app. It captures the panel window's region itself, shadow included, at the screen's pixel
+# scale, so no Screen Recording permission is needed. Each run covers the panel's screen for about 2
+# seconds, so leave the Mac alone while it runs. The screen must be unlocked and awake.
 #
 # Usage: scripts/screenshots.sh [options]
 #   --states a,b         Capture only these states (default: all; see touchglass-screenshots --help).
 #   --schemes a,b        light, dark, or both (default: light,dark).
-#   --smoked             Also capture the smoked appearance, which looks the same in both schemes.
-#   --plain              Also write the white- and black-backdrop captures, cropped like the matte.
-#   --grey               Also write the matte over mid-grey, to check its edges for fringes.
-#   --padding <pixels>   Margin around the panel's shadow in the output (default 24).
 #   --out <dir>          Output directory (default docs/images).
-#   --skip-build         Use the existing build/TouchGlassScreenshots.app and touchglass-matte.
+#   --skip-build         Use the existing build/TouchGlassScreenshots.app.
 #   --dry-run            Print what would run, without building or showing anything.
 #
-# Output names: <state>.png (light), <state>-dark.png, <state>-smoked.png; with --plain, the same
-# names with -white, -black or -grey before .png.
+# Output names: <state>.png (light) and <state>-dark.png.
 set -eu
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -29,10 +25,6 @@ cd "$root"
 all_states="pin-entry pin-retry touch ssh success wrong-pin timeout"
 states="$all_states"
 schemes="light dark"
-smoked=0
-plain=0
-grey=0
-padding=24
 out="docs/images"
 build=1
 dry=0
@@ -46,10 +38,6 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --states) [ $# -ge 2 ] || die "--states needs a list"; states="$(echo "$2" | tr ',' ' ')"; shift 2 ;;
         --schemes) [ $# -ge 2 ] || die "--schemes needs a list"; schemes="$(echo "$2" | tr ',' ' ')"; shift 2 ;;
-        --smoked) smoked=1; shift ;;
-        --plain) plain=1; shift ;;
-        --grey) grey=1; shift ;;
-        --padding) [ $# -ge 2 ] || die "--padding needs a number"; padding="$2"; shift 2 ;;
         --out) [ $# -ge 2 ] || die "--out needs a directory"; out="$2"; shift 2 ;;
         --skip-build) build=0; shift ;;
         --dry-run) dry=1; shift ;;
@@ -70,14 +58,10 @@ for scheme in $schemes; do
         *) die "unknown scheme $scheme; schemes: light, dark" ;;
     esac
 done
-case "$padding" in
-    ''|*[!0-9]*) die "--padding needs a whole number of pixels" ;;
-esac
 
 bundle="build/TouchGlassScreenshots.app"
 app="$bundle/Contents/MacOS/touchglass-screenshots"
 bin_dir="$(swift build -c release --show-bin-path 2>/dev/null || echo .build/release)"
-matte="$bin_dir/touchglass-matte"
 
 run() {
     if [ "$dry" = 1 ]; then
@@ -86,16 +70,6 @@ run() {
         "$@"
     fi
 }
-
-# The looks to capture: "<scheme> <appearance> <name suffix>".
-looks=""
-for scheme in $schemes; do
-    case "$scheme" in
-        light) looks="$looks light:readable:" ;;
-        dark) looks="$looks dark:readable:-dark" ;;
-    esac
-done
-[ "$smoked" = 1 ] && looks="$looks dark:smoked:-smoked"
 
 # Wraps touchglass-screenshots in a minimal bundle, so it runs as an app with an Info.plist, as
 # TouchGlass does. The bundle has its own identifier and name, so LaunchServices never takes it
@@ -132,17 +106,16 @@ PLIST
 
 if [ "$build" = 1 ]; then
     run swift build -c release --product touchglass-screenshots
-    run swift build -c release --product touchglass-matte
     run make_bundle
 fi
 if [ "$dry" = 0 ]; then
     [ -x "$app" ] || die "$app is missing; run without --skip-build"
-    [ -x "$matte" ] || die "$matte is missing; run without --skip-build"
 fi
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/touchglass-shots.XXXXXX")"
 pid=""
 cleanup() {
+    # Stops only the process this script started, by its PID.
     if [ -n "$pid" ]; then
         kill "$pid" 2>/dev/null || true
         wait "$pid" 2>/dev/null || true
@@ -154,19 +127,19 @@ trap 'exit 130' INT TERM
 
 run mkdir -p "$out"
 
-# capture <state> <scheme> <appearance> <backdrop> <png>
-# touchglass-screenshots captures its own windows, which needs no Screen Recording permission.
+# capture <state> <scheme> <backdrop> <png>
 capture() {
     log="$work/hold.log"
     if [ "$dry" = 1 ]; then
-        echo "+ $app $1 --color-scheme $2 --appearance $3 --backdrop $4 --capture $5 &   # wait for its captured line, then stop it"
+        echo "+ $app $1 --color-scheme $2 --backdrop $3 --capture $4 &   # wait for its captured line, then stop it"
         return
     fi
     : > "$log"
-    "$app" "$1" --color-scheme "$2" --appearance "$3" --backdrop "$4" --capture "$5" > "$log" 2>&1 &
+    "$app" "$1" --color-scheme "$2" --backdrop "$3" --capture "$4" > "$log" 2>&1 &
     pid=$!
 
-    # The runner prints its ready line about 2 seconds after launch, then captures.
+    # The tool prints its ready line about 2 seconds after launch, then captures. It checks that the
+    # screen is unlocked and awake first, and exits with a message if it isn't.
     tries=0
     until grep -q '^captured ' "$log"; do
         if ! kill -0 "$pid" 2>/dev/null; then
@@ -179,29 +152,21 @@ capture() {
         [ "$tries" -le 150 ] || die "touchglass-screenshots $1 captured nothing within 15 seconds"
         sleep 0.1
     done
-    grep -q 'key=true' "$log" || echo "screenshots: warning: the panel was not key for $1 over $4, so the glass may lack its key look" >&2
+    grep -q 'key=true' "$log" || echo "screenshots: warning: the panel was not key for $1, so the glass may lack its key look" >&2
 
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
     pid=""
-    [ -s "$5" ] || die "the capture $5 is empty"
+    [ -s "$4" ] || die "the capture $4 is empty"
 }
 
-for look in $looks; do
-    scheme="${look%%:*}"
-    rest="${look#*:}"
-    appearance="${rest%%:*}"
-    suffix="${rest#*:}"
+for scheme in $schemes; do
+    case "$scheme" in
+        light) backdrop="#ffffff"; suffix="" ;;
+        dark) backdrop="#0d1117"; suffix="-dark" ;;
+    esac
     for state in $states; do
-        name="$state$suffix"
-        echo "$name: $appearance glass, $scheme scheme"
-        capture "$state" "$scheme" "$appearance" white "$work/$name-white.png"
-        capture "$state" "$scheme" "$appearance" black "$work/$name-black.png"
-        set -- --white "$work/$name-white.png" --black "$work/$name-black.png" --out "$out/$name.png" --padding "$padding"
-        if [ "$plain" = 1 ]; then
-            set -- "$@" --white-out "$out/$name-white.png" --black-out "$out/$name-black.png"
-        fi
-        [ "$grey" = 1 ] && set -- "$@" --composite-out "$out/$name-grey.png"
-        run "$matte" "$@"
+        echo "$state$suffix: $scheme scheme over $backdrop"
+        capture "$state" "$scheme" "$backdrop" "$out/$state$suffix.png"
     done
 done

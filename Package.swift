@@ -49,12 +49,8 @@ let package = Package(
             dependencies: ["ScdProxyCore", "ScdTestSupport", "TouchGlassIPC", "touchglass-scdaemon", "fake-scdaemon", "fake-host"]
         ),
 
-        // Screenshot tooling for the README images. Not part of the app.
-        // Shows one panel state over a backdrop and captures it, for scripts/screenshots.sh.
+        // Shows one panel state over a backdrop and captures it, for the README images that
+        // scripts/screenshots.sh takes. A developer tool, not part of the app.
         .executableTarget(name: "touchglass-screenshots", dependencies: ["TouchGlassCore", "TouchGlassPanel"]),
-        // Difference matting of two captures, over white and over black. CoreGraphics and ImageIO only.
-        .target(name: "ScreenshotMatte"),
-        .executableTarget(name: "touchglass-matte", dependencies: ["ScreenshotMatte"]),
-        .testTarget(name: "ScreenshotMatteTests", dependencies: ["ScreenshotMatte"]),
     ]
 )

@@ -7,14 +7,12 @@ Run without arguments, the app is the host: it listens on a Unix socket for `tou
 ## Screenshots
 
 <p>
-<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/pin-entry-dark.png"><img src="docs/images/pin-entry.png" width="270" alt="The panel asks: Enter PIN to sign, YubiKey 12345678, git commit · touchglass, with six characters typed"></picture>
-<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/touch-dark.png"><img src="docs/images/touch.png" width="270" alt="The panel asks: Touch your YubiKey, signing with YubiKey 12345678, git push origin · touchglass, 12 seconds left"></picture>
-<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/success-dark.png"><img src="docs/images/success.png" width="270" alt="The panel shows Signed with a full ring"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/pin-entry-dark.png"><img src="docs/images/pin-entry.png" width="400" alt="The panel asks: Enter PIN to sign, YubiKey 12345678, git commit · touchglass, with six characters typed"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/touch-dark.png"><img src="docs/images/touch.png" width="400" alt="The panel asks: Touch your YubiKey, signing with YubiKey 12345678, git push origin · touchglass, 12 seconds left"></picture>
 </p>
 <p>
-<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/ssh-dark.png"><img src="docs/images/ssh.png" width="270" alt="The panel asks: Touch your YubiKey, SSH login with YubiKey 12345678, ssh github.com, 12 seconds left"></picture>
-<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/wrong-pin-dark.png"><img src="docs/images/wrong-pin.png" width="270" alt="The panel shows Wrong PIN: the YubiKey rejected the PIN"></picture>
-<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/timeout-dark.png"><img src="docs/images/timeout.png" width="270" alt="The panel shows Touch timed out: the YubiKey waited 15 seconds"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/ssh-dark.png"><img src="docs/images/ssh.png" width="400" alt="The panel asks: Touch your YubiKey, SSH login with YubiKey 12345678, ssh github.com, 12 seconds left"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/success-dark.png"><img src="docs/images/success.png" width="400" alt="The panel shows Signed with a full ring"></picture>
 </p>
 
 The images follow your light or dark appearance. To capture them again, run `scripts/screenshots.sh`; see [Capture screenshots](#capture-screenshots).
@@ -141,7 +139,7 @@ The demo never reads, logs or prints what you type in the PIN field.
 
 ### Capture screenshots
 
-`scripts/screenshots.sh` captures the panel states that the README shows into `docs/images/`, as transparent PNGs at the screen's pixel scale. It builds `touchglass-screenshots`, a developer tool that shows the app's panel and is not part of `TouchGlass.app`. For each state, it runs that tool twice, keeping one panel state on screen in front of a full-screen backdrop: once over white and once over black. It then recovers the panel, its glass and its shadow over any background from the two captures by difference matting.
+`scripts/screenshots.sh` captures panel states into `docs/images/` as PNGs at the screen's pixel scale. It builds `touchglass-screenshots`, a developer tool that shows the app's panel and is not part of `TouchGlass.app`, and runs it once for each state and colour scheme in front of a full-screen backdrop in GitHub's page colour: `#ffffff` for light and `#0d1117` for dark. Liquid Glass takes its tint from what is behind it, so each image looks right on that page colour only. Each image is the panel window, shadow included.
 
 ```sh
 scripts/screenshots.sh                      # every state, light and dark
@@ -149,7 +147,7 @@ scripts/screenshots.sh --states touch,ssh   # some states
 scripts/screenshots.sh --dry-run            # print the steps without running them
 ```
 
-Each capture covers the screen for about 2 seconds, so leave the Mac alone while the script runs. The screen must be unlocked and awake. The tool captures its own windows, so the terminal needs no Screen Recording permission. `--smoked` adds the smoked appearance, `--plain` also writes the white and black captures, and `--grey` writes each matte over mid-grey to check its edges. `--help` lists every option.
+Each capture covers the screen for about 2 seconds, so leave the Mac alone while the script runs. The screen must be unlocked and awake. The tool captures its own windows, so the terminal needs no Screen Recording permission. The README shows four of the seven states; `--help` lists the options.
 
 To show one state yourself, run `swift run touchglass-screenshots <state>`; stop it with Control-C. `--help` lists the states.
 
@@ -231,7 +229,7 @@ A release needs a Developer ID Application certificate in the keychain and notar
 - `TouchGlassHost`: `HostCoordinator`, which merges proxy events and pinentry prompts into panel events and replies, and `HostServer`, which accepts helper connections.
 - `TouchGlassIPC`: the messages and socket transport shared with the helpers.
 - `TouchGlass`: the app: the host, plus the demo mode.
-- `touchglass-screenshots`, `ScreenshotMatte` and `touchglass-matte`: the panel states and the difference matting for `scripts/screenshots.sh`. Not part of the app.
+- `touchglass-screenshots`: shows and captures one panel state for `scripts/screenshots.sh`. Not part of the app.
 
 ## License
 
