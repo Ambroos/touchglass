@@ -115,7 +115,7 @@ import TouchGlassIPC
     @Test func pksignWithAuthGripIsAuthentication() {
         let sink = Collector()
         let detector = OperationDetector(sink: sink, touchDelay: 10)
-        feed(detector, .toClient, "S KEYINFO CCCC T SERIAL OPENPGP.3 sa\nOK\n")
+        feed(detector, .toClient, "S KEYINFO CCCC T D2760001240100000006123456780000 OPENPGP.3 sa\nOK\n")
         feed(detector, .toServer, "PKSIGN --hash=sha1 cccc\n")
         feed(detector, .toClient, "D sig\nOK\n")
         detector.drain()
@@ -123,8 +123,24 @@ import TouchGlassIPC
             Issue.record("no op_start")
             return
         }
-        #expect(start.op == .auth && start.slot == 3 && start.serial == "SERIAL")
+        #expect(start.op == .auth && start.slot == 3 && start.serial == "D2760001240100000006123456780000")
         #expect(sink.summaries == ["op_start c auth", "op_end c ok"])
+    }
+
+    /// The serial reaches the host and the log, so only a hex serial of card length is kept; the slot stays.
+    @Test func keyinfoSerialMustBeHex() {
+        for bad in ["not-a-serial", "D276%0A", String(repeating: "A", count: 33)] {
+            let sink = Collector()
+            let detector = OperationDetector(sink: sink, touchDelay: 10)
+            feed(detector, .toClient, "S KEYINFO CCCC T \(bad) OPENPGP.3 sa\nOK\n")
+            feed(detector, .toServer, "PKSIGN cccc\n")
+            detector.drain()
+            guard case let .opStart(start) = sink.messages.first else {
+                Issue.record("no op_start")
+                return
+            }
+            #expect(start.op == .auth && start.slot == 3 && start.serial == nil)
+        }
     }
 
     @Test func mapsErrorCodes() {

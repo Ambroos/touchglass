@@ -32,7 +32,7 @@ public final class OperationDetector: @unchecked Sendable {
     private let log: TouchGlassLog
 
     // Accessed only on `queue`.
-    private var keys: [String: (slot: Int, serial: String)] = [:]
+    private var keys: [String: (slot: Int, serial: String?)] = [:]
     private var connections: [String: ConnectionState] = [:]
     /// The last touch timer generation handed out. Detector-wide and never reset, so a timer armed for an
     /// earlier operation can never match a later one on the same connection.
@@ -233,7 +233,10 @@ public final class OperationDetector: @unchecked Sendable {
         guard args.count >= 4, args[1] == "T" else { return }
         let ref = args[3].uppercased()
         guard ref.hasPrefix("OPENPGP."), let slot = Int(ref.dropFirst("OPENPGP.".count)) else { return }
-        keys[args[0].uppercased()] = (slot, args[2])
+        // The serial reaches the host and the log: keep it only if it is what a card reports, hex digits.
+        let serial = args[2]
+        let isHex = (1...32).contains(serial.utf8.count) && serial.utf8.allSatisfy { (0x30...0x39).contains($0) || (0x41...0x46).contains($0) || (0x61...0x66).contains($0) }
+        keys[args[0].uppercased()] = (slot, isHex ? serial : nil)
     }
 
     private func armTouchTimer(_ conn: String, _ state: inout ConnectionState, from time: Double) {

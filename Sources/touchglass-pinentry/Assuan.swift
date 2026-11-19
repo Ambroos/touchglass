@@ -14,6 +14,20 @@ enum Assuan {
     /// libassuan's reply to an unknown command, with source USER_1 (32), as pinentry-mac sends it.
     static let unknownCommand = "ERR \((32 << 24) | 275) Unknown IPC command <User defined source 1>"
 
+    /// The commands that the pinentry knows, which its trace may name.
+    static let knownCommands: Set<String> = [
+        "BYE", "OPTION", "SETDESC", "SETPROMPT", "SETTITLE", "SETERROR", "SETOK", "SETCANCEL", "SETNOTOK",
+        "SETKEYINFO", "SETREPEAT", "SETREPEATERROR", "SETREPEATOK", "SETQUALITYBAR", "SETQUALITYBAR_TT",
+        "SETGENPIN", "SETGENPIN_TT", "SETTIMEOUT", "RESET", "GETINFO", "GETPIN", "CONFIRM", "MESSAGE",
+        "CLEARPASSPHRASE", "NOP", "CANCEL", "AUTH", "END", "INPUT", "OUTPUT", "HELP",
+    ]
+
+    /// The keyword as the trace logs it: a known command by name, anything else as "other", so no text
+    /// from the agent's stream reaches the log.
+    static func traceKeyword(_ keyword: String) -> String {
+        knownCommands.contains(keyword) ? keyword : "other"
+    }
+
     /// Splits a command line into its keyword, upper-cased, and the argument bytes after the separating spaces.
     static func splitCommand(_ line: [UInt8]) -> (keyword: String, arguments: [UInt8]) {
         let end = line.firstIndex(where: { $0 == 0x20 || $0 == 0x09 }) ?? line.endIndex

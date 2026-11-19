@@ -155,7 +155,7 @@ final class PinentryServer {
         if line.isEmpty || line.first == UInt8(ascii: "#") { return }
         let (keyword, arguments) = Assuan.splitCommand(line)
         let text = Assuan.decodeText(arguments)
-        log("<- \(keyword)")
+        log("<- \(Assuan.traceKeyword(keyword))")
 
         switch keyword {
         case "BYE":

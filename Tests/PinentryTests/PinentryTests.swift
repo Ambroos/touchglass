@@ -22,6 +22,14 @@ import TouchGlassIPC
         #expect(Assuan.splitCommand(Array("BYE".utf8)).arguments.isEmpty)
     }
 
+    @Test func traceNamesOnlyKnownCommands() {
+        #expect(Assuan.traceKeyword("GETPIN") == "GETPIN")
+        #expect(Assuan.traceKeyword("SETDESC") == "SETDESC")
+        #expect(Assuan.traceKeyword("123456") == "other")
+        #expect(Assuan.traceKeyword("D") == "other")
+        #expect(Assuan.traceKeyword(String(repeating: "X", count: 500)) == "other")
+    }
+
     @Test func cardDescriptionForSigning() {
         let desc = "Please unlock the card\n\n\u{1E}Number\u{1F}: 12 345 678\nHolder\u{1F}: \nCounter\u{1F}: 42"
         let (text, fields) = CardDescription.parse(desc)
