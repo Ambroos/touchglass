@@ -13,12 +13,8 @@ struct DemoOptions {
     var settings = HostSettings()
     /// Replaces each scenario's sample client label.
     var client: String?
-    /// A solid window behind the panel, for screenshots.
-    var backdrop: Backdrop?
-    /// Forces the app's appearance, so screenshots of both looks need no change to the system setting.
+    /// Forces the app's appearance, so both looks can be reviewed without changing the system setting.
     var colorScheme: NSAppearance.Name?
-    /// With `--hold`: write the panel's region to this PNG when it is ready.
-    var capturePath: String?
 }
 
 enum DemoScenario: String, CaseIterable {

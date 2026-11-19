@@ -50,6 +50,8 @@ let package = Package(
         ),
 
         // Screenshot tooling for the README images. Not part of the app.
+        // Shows one panel state over a backdrop and captures it, for scripts/screenshots.sh.
+        .executableTarget(name: "touchglass-screenshots", dependencies: ["TouchGlassCore", "TouchGlassPanel"]),
         // Difference matting of two captures, over white and over black. CoreGraphics and ImageIO only.
         .target(name: "ScreenshotMatte"),
         .executableTarget(name: "touchglass-matte", dependencies: ["ScreenshotMatte"]),

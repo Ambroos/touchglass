@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 import TouchGlassCore
 import TouchGlassPanel
 
-/// Panel states that `--hold` shows for screenshots.
+/// Panel states that `touchglass-screenshots` shows.
 enum HoldState: String, CaseIterable {
     case pinEntry = "pin-entry"
     case pinRetry = "pin-retry"
@@ -35,6 +35,19 @@ enum HoldState: String, CaseIterable {
         case .success, .wrongPIN, .timeout: nil
         }
     }
+}
+
+/// What `touchglass-screenshots` shows, and how.
+struct HoldOptions {
+    var settings = HostSettings()
+    /// Replaces the state's sample client label.
+    var client: String?
+    /// A solid window behind the panel.
+    var backdrop: Backdrop?
+    /// Forces the app's appearance, so both looks can be captured without changing the system setting.
+    var colorScheme: NSAppearance.Name?
+    /// Writes the panel's region to this PNG when it is ready.
+    var capturePath: String?
 }
 
 /// A solid colour for the window behind the panel during screenshots.
@@ -79,10 +92,10 @@ final class HoldRunner {
     private static let settle: TimeInterval = 1.5
 
     private let controller: PanelController
-    private let options: DemoOptions
+    private let options: HoldOptions
     private var backdropWindow: NSWindow?
 
-    init(options: DemoOptions) {
+    init(options: HoldOptions) {
         self.options = options
         controller = PanelController(animationScale: 1, settings: options.settings)
         controller.holdsState = true

@@ -141,7 +141,7 @@ The demo never reads, logs or prints what you type in the PIN field.
 
 ### Capture screenshots
 
-`scripts/screenshots.sh` builds the app and captures the panel states that the README shows into `docs/images/`, as transparent PNGs at the screen's pixel scale. For each state, it runs the app twice with `--hold`, which keeps one panel state on screen in front of a full-screen backdrop: once over white and once over black. It then recovers the panel, its glass and its shadow over any background from the two captures by difference matting.
+`scripts/screenshots.sh` captures the panel states that the README shows into `docs/images/`, as transparent PNGs at the screen's pixel scale. It builds `touchglass-screenshots`, a developer tool that shows the app's panel and is not part of `TouchGlass.app`. For each state, it runs that tool twice, keeping one panel state on screen in front of a full-screen backdrop: once over white and once over black. It then recovers the panel, its glass and its shadow over any background from the two captures by difference matting.
 
 ```sh
 scripts/screenshots.sh                      # every state, light and dark
@@ -149,9 +149,9 @@ scripts/screenshots.sh --states touch,ssh   # some states
 scripts/screenshots.sh --dry-run            # print the steps without running them
 ```
 
-Each capture covers the screen for about 2 seconds, so leave the Mac alone while the script runs. The screen must be unlocked and awake. The app captures its own windows, so the terminal needs no Screen Recording permission. `--smoked` adds the smoked appearance, `--plain` also writes the white and black captures, and `--grey` writes each matte over mid-grey to check its edges. `--help` lists every option.
+Each capture covers the screen for about 2 seconds, so leave the Mac alone while the script runs. The screen must be unlocked and awake. The tool captures its own windows, so the terminal needs no Screen Recording permission. `--smoked` adds the smoked appearance, `--plain` also writes the white and black captures, and `--grey` writes each matte over mid-grey to check its edges. `--help` lists every option.
 
-To show one state yourself, run `TouchGlass --hold <state>`; stop it with Control-C. `--help` lists the states.
+To show one state yourself, run `swift run touchglass-screenshots <state>`; stop it with Control-C. `--help` lists the states.
 
 ## Settings
 
@@ -230,8 +230,8 @@ A release needs a Developer ID Application certificate in the keychain and notar
 - `TouchGlassPanel`: the SwiftUI views and the AppKit panel window. `PanelController` performs the state machine's effects.
 - `TouchGlassHost`: `HostCoordinator`, which merges proxy events and pinentry prompts into panel events and replies, and `HostServer`, which accepts helper connections.
 - `TouchGlassIPC`: the messages and socket transport shared with the helpers.
-- `TouchGlass`: the app: the host, plus the demo mode and `--hold` for screenshots.
-- `ScreenshotMatte` and `touchglass-matte`: difference matting for `scripts/screenshots.sh`. Not part of the app.
+- `TouchGlass`: the app: the host, plus the demo mode.
+- `touchglass-screenshots`, `ScreenshotMatte` and `touchglass-matte`: the panel states and the difference matting for `scripts/screenshots.sh`. Not part of the app.
 
 ## License
 
