@@ -39,7 +39,7 @@ pinentry-program /Users/you/Library/Application Support/TouchGlass/bin/touchglas
 scdaemon-program /Users/you/Library/Application Support/TouchGlass/bin/touchglass-scdaemon
 ```
 
-Your original lines stay in the file as comments that start with `# touchglass: `. For an option that wasn't set, a `# touchglass: added <option>` comment goes before the new line. `touchglass uninstall` uses these comments to restore the file.
+Your original lines stay in the file as comments that start with `# touchglass: `. For an option that wasn't set, the new line goes at the end of the file, after a `# touchglass: added <option>` comment. `touchglass uninstall` uses these comments to restore the file.
 
 After you edit the file, stop gpg-agent so that it reads the file on next use:
 

@@ -10,7 +10,7 @@
 # change for you to make. With --apply they edit gpg-agent.conf themselves, and only its
 # pinentry-program and scdaemon-program lines: install comments out the effective line with a
 # "# touchglass: " prefix and adds the TouchGlass line right after it, or, if the option is not set,
-# adds a "# touchglass: added <option>" marker and the TouchGlass line at the top of the file. The
+# adds a "# touchglass: added <option>" marker and the TouchGlass line at the end of the file. The
 # printed instructions describe the same markers. gpg-agent uses the last occurrence of an option, so
 # earlier duplicates stay as they are. Uninstall reverses exactly these edits, so the rest of the file
 # stays byte-identical.
@@ -576,10 +576,6 @@ cmd_install() {
         new["pinentry-program"] = ENVIRON["TG_PINENTRY"]; new["scdaemon-program"] = ENVIRON["TG_SCD"]
         keys[1] = "pinentry-program"; keys[2] = "scdaemon-program"
         if (ENVIRON["TG_CREATED"] == "1") out("# touchglass: created gpg-agent.conf")
-        for (j = 1; j <= 2; j++) {
-            k = keys[j]
-            if (!(k in last)) { out("# touchglass: added " k); out(k " " new[k]) }
-        }
         for (i = 1; i <= NR; i++) {
             k = keyof(L[i])
             if (k == "" || i != last[k]) { out(L[i]); continue }
@@ -589,6 +585,10 @@ cmd_install() {
             } else {
                 out("# touchglass: " L[i]); out(k " " new[k] cr)
             }
+        }
+        for (j = 1; j <= 2; j++) {
+            k = keys[j]
+            if (!(k in last)) { out("# touchglass: added " k); out(k " " new[k]) }
         }
         if (nout && ENVIRON["TG_NOEOL"] != "1") printf "\n"
     }' "$input" > "$tmp"

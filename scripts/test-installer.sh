@@ -137,9 +137,9 @@ begin "existing pinentry-program"
 printf '%s\n' "default-cache-ttl 600" "pinentry-program $EX" "enable-ssh-support" > "$CONF"
 cp "$CONF" "$T/original"
 tg install --apply --from "$app"
-printf '%s\n' "# touchglass: added scdaemon-program" "scdaemon-program $LS" \
-    "default-cache-ttl 600" "# touchglass: pinentry-program $EX" \
-    "pinentry-program $LP" "enable-ssh-support" > "$T/expected"
+printf '%s\n' "default-cache-ttl 600" "# touchglass: pinentry-program $EX" \
+    "pinentry-program $LP" "enable-ssh-support" \
+    "# touchglass: added scdaemon-program" "scdaemon-program $LS" > "$T/expected"
 check "conf as expected" cmp -s "$CONF" "$T/expected"
 check "fallback is the previous pinentry" grep -qx "fallback-pinentry = $EX" "$SUPPORT/pinentry.conf"
 check "one backup" test "$(backups)" = 1
@@ -422,8 +422,19 @@ awk -v conf="$CONF" '
         printf "%s", add
     }' "$T/out" > "$T/edited"
 cp "$T/edited" "$CONF"
-check "manual edit equals what --apply writes, apart from where added lines go" \
-    test "$(grep -c '^# touchglass: ' "$CONF")" = 2
+check "manual edit has both markers" test "$(grep -c '^# touchglass: ' "$CONF")" = 2
+tg uninstall --apply
+check "uninstall --apply restores the original" cmp -s "$CONF" "$T/original"
+
+begin "manual install that adds lines, as printed, equals install --apply"
+printf '%s\n' "default-cache-ttl 600" "enable-ssh-support" > "$CONF"
+cp "$CONF" "$T/original"
+tg install --from "$app"
+check "says to add at the end" out_has "Add these lines at the end of the file."
+# Append the lines under "Add these lines" to the file.
+{ cat "$CONF"; sed -n '/^  Add these lines/,/^$/s/^    //p' "$T/out"; } > "$T/edited"
+tg install --apply --from "$app"
+check "manual edit equals what --apply writes" cmp -s "$CONF" "$T/edited"
 tg uninstall --apply
 check "uninstall --apply restores the original" cmp -s "$CONF" "$T/original"
 
@@ -555,9 +566,9 @@ check "no reload" test "$(kills)" = 1
 check "launchers kept" test -x "$LP" -a -x "$LS"
 check "app kept" test -x "$APP/Contents/MacOS/TouchGlass"
 check "says the app stays" out_has "Kept $APP, because gpg-agent.conf still uses it."
-check "restores the marked pinentry line" out_has "Replace lines 4 and 5:"
+check "restores the marked pinentry line" out_has "Replace lines 2 and 3:"
 check "with the original" out_has "    pinentry-program $EX"
-check "deletes the added scdaemon lines" out_has "line 1: # touchglass: added scdaemon-program"
+check "deletes the added scdaemon lines" out_has "line 4: # touchglass: added scdaemon-program"
 check "explains why the launchers stay" out_has "stay in place while gpg-agent.conf names them"
 check "prints the reload command" out_has "gpgconf --kill gpg-agent"
 check "offers --apply" out_has "touchglass uninstall --apply"
@@ -584,7 +595,7 @@ check "passes before any install" tg uninstall --check
 printf '%s\n' "pinentry-program $EX" > "$CONF"
 tg install --apply --from "$app"
 if "$tool" uninstall --check > "$T/out" 2> "$T/err"; then fail "passed while gpg-agent.conf names the launchers"; fi
-check "names the lines" grep -qF "line 4: pinentry-program $LP" "$T/err"
+check "names the lines" grep -qF "line 2: pinentry-program $LP" "$T/err"
 check "says how to revert" grep -qF "touchglass uninstall --apply" "$T/err"
 # Reverted by hand, but the launchers are still there: another GnuPG home might use them.
 cp "$CONF" "$T/installed"
