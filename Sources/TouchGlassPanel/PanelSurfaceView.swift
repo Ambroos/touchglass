@@ -6,8 +6,12 @@ import TouchGlassCore
 /// The content is the glass view's own content, so it always renders on top of the glass and
 /// stays sharp. (Inside a `GlassEffectContainer`, glass is lifted above sibling views, so the
 /// content must not be a sibling.) The surface is inserted with the system `materialize` glass
-/// transition and a centre-anchored scale; the content's opacity and a small centre-anchored
-/// scale animate separately, after the glass on the way in and before it on the way out.
+/// transition and an opacity transition. The entrance and exit scale is a `scaleEffect` on the
+/// container, which is always present, not a scale transition on the glass view. When a scale
+/// transition inserts or removes a glass view, SwiftUI puts the glass's content at the scaled
+/// glass's top-left corner and scales it about that corner, so the content moves in from the
+/// bottom right. The content's opacity and a small centre-anchored scale animate separately,
+/// after the glass on the way in and before it on the way out.
 public struct PanelSurfaceView: View {
     @Bindable var model: PanelModel
 
@@ -37,11 +41,13 @@ public struct PanelSurfaceView: View {
                         .allowsHitTesting(model.contentShown)
                         .frame(width: PanelMetrics.size.width, height: PanelMetrics.size.height)
                         .modifier(SurfaceMaterial(shape: shape, appearance: model.appearance, opaque: reduceTransparency, reduceMotion: reduceMotion, increasedContrast: contrast == .increased))
-                        .transition(surfaceTransition)
+                        // Opacity only: a scale here throws the content off centre.
+                        .transition(.opacity)
                 }
             }
             .frame(width: PanelMetrics.size.width, height: PanelMetrics.size.height)
         }
+        .scaleEffect(model.surfaceShown || reduceMotion ? 1 : model.hiddenSurfaceScale, anchor: .center)
         .frame(width: PanelMetrics.windowSize.width, height: PanelMetrics.windowSize.height)
     }
 
@@ -52,14 +58,6 @@ public struct PanelSurfaceView: View {
     /// HDR white needs a dark surface behind it; readable glass in light mode keeps label colours.
     private var ink: PanelInk {
         scheme == .dark ? .hdr : .standard
-    }
-
-    private var surfaceTransition: AnyTransition {
-        if reduceMotion { return .opacity }
-        return .asymmetric(
-            insertion: .scale(scale: 0.9, anchor: .center).combined(with: .opacity),
-            removal: .scale(scale: 0.94, anchor: .center).combined(with: .opacity)
-        )
     }
 }
 

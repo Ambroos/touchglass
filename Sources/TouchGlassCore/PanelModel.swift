@@ -22,6 +22,8 @@ public final class PanelModel {
     public var state: PanelState?
     /// The glass surface is present. Toggled inside an animation to materialise or dissolve it.
     public var surfaceShown = false
+    /// The glass's scale while `surfaceShown` is false: where the entrance starts and the exit ends.
+    public var hiddenSurfaceScale = 0.9
     /// The content on the glass is shown. Lags the surface on the way in and leads it on the way out.
     public var contentShown = false
     /// Incremented to shake the secure field after a rejected passphrase.

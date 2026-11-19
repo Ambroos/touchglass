@@ -208,6 +208,76 @@ import TouchGlassCore
         #expect(controller.machine.lingering == nil)
     }
 
+    // MARK: Centred animation
+
+    /// How far the most off-centre panel-sized layer is from the window's centre, in points, and the
+    /// smallest width of such a layer. Panel-sized means at least half the panel in each dimension,
+    /// so this covers the glass and the content's layer but not single controls.
+    func panelLayerGeometry(_ controller: PanelController) -> (offCentre: CGFloat, minWidth: CGFloat) {
+        guard let root = controller.panel.contentView?.layer else { return (0, .infinity) }
+        let centre = CGPoint(x: root.bounds.midX, y: root.bounds.midY)
+        var result: (offCentre: CGFloat, minWidth: CGFloat) = (0, .infinity)
+        func walk(_ layer: CALayer) {
+            if layer !== root, layer.bounds.width >= PanelMetrics.size.width / 2, layer.bounds.height >= PanelMetrics.size.height / 2 {
+                let frame = layer.convert(layer.bounds, to: root)
+                result.offCentre = max(result.offCentre, abs(frame.midX - centre.x), abs(frame.midY - centre.y))
+                result.minWidth = min(result.minWidth, frame.width)
+            }
+            layer.sublayers?.forEach(walk)
+        }
+        walk(root)
+        return result
+    }
+
+    /// Samples the panel's layers for `seconds`. SwiftUI drives these animations by setting the
+    /// layers' model values on every frame, so the samples see the animation in progress.
+    func sampleGeometry(_ controller: PanelController, for seconds: TimeInterval) async -> (offCentre: CGFloat, minWidth: CGFloat) {
+        var result: (offCentre: CGFloat, minWidth: CGFloat) = (0, .infinity)
+        let end = Date().addingTimeInterval(seconds)
+        while Date() < end {
+            try? await Task.sleep(for: .milliseconds(8))
+            let sample = panelLayerGeometry(controller)
+            result = (max(result.offCentre, sample.offCentre), min(result.minWidth, sample.minWidth))
+        }
+        return result
+    }
+
+    /// The glass and its content scale about the panel's centre in every transition. A scale
+    /// transition on the glass view puts the content at the scaled glass's corner and scales it from
+    /// there, so the content moves in from the bottom right.
+    @Test(arguments: [PanelAppearance.readable, .smoked])
+    func everyTransitionStaysCentred(appearance: PanelAppearance) async throws {
+        let controller = PanelController(animationScale: 1, settings: HostSettings(appearance: appearance))
+        controller.muted = true
+        controller.testOrigin = Self.offScreen
+        controller.panel.alphaValue = 0
+        let tolerance: CGFloat = 0.5
+
+        controller.send(.show(pin))
+        let open = await sampleGeometry(controller, for: 0.7)
+        #expect(open.offCentre < tolerance, "open")
+        // The samples caught the entrance's scale, so the check above means something.
+        #expect(open.minWidth < PanelMetrics.size.width * 0.99)
+
+        controller.send(.show(touch()))
+        #expect(await sampleGeometry(controller, for: 0.3).offCentre < tolerance, "PIN to touch")
+        controller.send(.show(.success(.sign)))
+        #expect(await sampleGeometry(controller, for: 0.3).offCentre < tolerance, "touch to success")
+        controller.send(.dismiss)
+        controller.send(.show(touch(.sshLogin)))
+        #expect(await sampleGeometry(controller, for: 0.3).offCentre < tolerance, "success to a touch within the grace")
+
+        controller.send(.userClosed)
+        #expect(await sampleGeometry(controller, for: 0.15).offCentre < tolerance, "close")
+        controller.send(.show(pin))
+        #expect(await sampleGeometry(controller, for: 0.6).offCentre < tolerance, "reverse")
+
+        controller.send(.userClosed)
+        #expect(await sampleGeometry(controller, for: 0.6).offCentre < tolerance, "close")
+        await waitUntil { !controller.isPanelVisible }
+        #expect(!controller.isPanelVisible)
+    }
+
     /// The window server lists the test panel, but nowhere on a screen and with alpha 0.
     @Test func testPanelsStayOffEveryScreen() async throws {
         let controller = makeController()

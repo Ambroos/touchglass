@@ -176,6 +176,7 @@ public final class PanelController {
         withTransaction(instant) {
             model.surfaceShown = false
             model.contentShown = false
+            model.hiddenSurfaceScale = 0.9
             model.state = state
         }
 
@@ -271,6 +272,7 @@ public final class PanelController {
             model.contentShown = false
         }
         withAnimation(.spring(duration: 0.34 * scale, bounce: 0).delay(0.07 * scale), completionCriteria: .removed) {
+            model.hiddenSurfaceScale = 0.94
             model.surfaceShown = false
         } completion: { finish() }
     }
