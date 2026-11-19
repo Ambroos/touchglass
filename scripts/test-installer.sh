@@ -936,6 +936,39 @@ check "no tool from PATH ran" test ! -e "$T/hostile-ran"
 check "pinentry launcher refreshed" cmp -s "$LP" "$T/touchglass-pinentry"
 check "scdaemon launcher refreshed" cmp -s "$LS" "$T/touchglass-scdaemon"
 
+# A copy of the command whose refresh pauses before it checks the launchers, so an uninstall or install runs in the gap.
+slow_tool() {
+    mkdir -p "$T/slow"
+    awk '{ print } /^refresh_still_current\(\) \{/ { print "    sleep 1" }' "$tool" > "$T/slow/touchglass"
+    chmod +x "$T/slow/touchglass"
+}
+
+begin "refresh-launchers doesn't write launchers back after uninstall"
+printf '%s\n' "pinentry-program $EX" > "$CONF"
+tg install --apply --from "$app"
+make_format_0
+slow_tool
+"$T/slow/touchglass" refresh-launchers > "$T/out-refresh" 2>&1 & refresh=$!
+sleep 0.3
+tg uninstall --apply
+wait "$refresh" || fail "refresh failed"
+check "launchers stay removed" test ! -e "$LP" -a ! -e "$LS"
+check "CLI copy stays removed" test ! -e "$SUPPORT/bin/touchglass"
+check "refresh says it stopped" grep -qF "changed during the refresh" "$T/out-refresh"
+check "no staged files left" test -z "$(ls -A "$SUPPORT/bin" 2>/dev/null | grep '^\.')"
+
+begin "refresh-launchers doesn't undo an install for another app"
+tg install --from "$app"
+make_format_0
+slow_tool
+"$T/slow/touchglass" refresh-launchers > "$T/out-refresh" 2>&1 & refresh=$!
+sleep 0.3
+tg install --from "$app" --app-dir "$T/elsewhere"
+wait "$refresh" || fail "refresh failed"
+check "pinentry launcher runs the new app" grep -qx "app='$T/elsewhere/TouchGlass.app'" "$LP"
+check "scdaemon launcher runs the new app" grep -qx "app='$T/elsewhere/TouchGlass.app'" "$LS"
+check "refresh says it stopped" grep -qF "changed during the refresh" "$T/out-refresh"
+
 begin "two refreshes at once"
 tg install --from "$app"
 cp "$LP" "$LS" "$T/"

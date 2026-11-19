@@ -800,7 +800,7 @@ cmd_refresh_launchers() {
         target="$bin_dir/touchglass-$kind"
         launcher_script "$kind" "$app" > "$tmp_launcher"
         if ! cmp -s "$tmp_launcher" "$target"; then
-            write_atomic "$target" 755 "$tmp_launcher"
+            refresh_atomic "$target" 755 "$tmp_launcher"
             rewrote=1
         fi
     done
@@ -816,9 +816,37 @@ cmd_refresh_launchers() {
     elif release_newer "$copy_release" "$cli_version"; then
         say "Kept $cli_copy, which is from the later release $copy_release."
     elif ! cmp -s "$self" "$cli_copy"; then
-        write_atomic "$cli_copy" 755 "$self"
+        refresh_atomic "$cli_copy" 755 "$self"
         say "Copied $prog $cli_version to $cli_copy."
     fi
+}
+
+# Like write_atomic, for refresh-launchers: renames the staged file only while the launchers still
+# name the app that the refresh read. An uninstall that removed the launchers, or an install for another
+# app, that ran since then wins, and the refresh exits. Checking again right before the rename leaves
+# only the rename itself to race with.
+refresh_atomic() { # target mode source
+    refresh_still_current "$1"
+    staged="$(mktemp "$(dirname "$1")/.touchglass.XXXXXX")"
+    cat "$3" > "$staged"
+    chmod "$2" "$staged"
+    refresh_still_current "$1"
+    mv -f "$staged" "$1"
+    staged=""
+}
+
+# Exits the refresh unless the target launcher names the app that the refresh read; for the command copy
+# or a missing launcher, unless either launcher does.
+refresh_still_current() { # target
+    if [ "$1" != "$cli_copy" ] && [ -e "$1" ]; then
+        current="$(launcher_app "$1")"
+    else
+        current="$(launcher_app "$launch_pinentry")"
+        [ "$current" = "$app" ] || current="$(launcher_app "$launch_scd")"
+    fi
+    [ "$current" != "$app" ] || return 0
+    say "The launchers changed during the refresh, so it stopped; run '$prog status' to see them."
+    exit 0
 }
 
 # Prints how to change gpg-agent.conf by hand to what install --apply writes, markers included, so that
