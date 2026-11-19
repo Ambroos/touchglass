@@ -421,9 +421,13 @@ private struct SecureEntry: View {
         .controlSize(.large)
         .defaultFocus($focused, true)
         .onAppear {
-            // Placeholder characters for screenshots; never a real secret.
-            if model.sampleSecretLength > 0 { text = String(repeating: "x", count: model.sampleSecretLength) }
-            DispatchQueue.main.async { focused = true }
+            DispatchQueue.main.async {
+                focused = true
+                // Placeholder characters for screenshots, typed after focus so they aren't selected.
+                if model.sampleSecretLength > 0 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { text = String(repeating: "x", count: model.sampleSecretLength) }
+                }
+            }
         }
         .onChange(of: model.shakeCount) {
             text = ""
