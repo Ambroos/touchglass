@@ -29,7 +29,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>dev.touchglass.TouchGlass</string>
+    <string>io.ambroos.touchglass</string>
     <key>CFBundleName</key>
     <string>TouchGlass</string>
     <key>CFBundleDisplayName</key>

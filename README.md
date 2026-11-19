@@ -135,9 +135,9 @@ The panel plays the system alert sounds Tink, Ping and Basso, at the alert volum
 
 ```sh
 # All panel sounds.
-defaults write dev.touchglass.TouchGlass soundsEnabled -bool false
+defaults write io.ambroos.touchglass soundsEnabled -bool false
 # Only the reminders during the touch countdown.
-defaults write dev.touchglass.TouchGlass reminderSoundsEnabled -bool false
+defaults write io.ambroos.touchglass reminderSoundsEnabled -bool false
 ```
 
 The host reads them each time it plays a sound, so no restart is needed.
