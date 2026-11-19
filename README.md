@@ -9,6 +9,16 @@ Run without arguments, the app is the host: it listens on a Unix socket for `tou
 - macOS 26 or later.
 - Swift 6 with the macOS 26 SDK or later. The Command Line Tools are enough; Xcode is not required.
 
+## Install with Homebrew
+
+```sh
+brew install ambroos/touchglass/touchglass
+touchglass install --dry-run
+touchglass install
+```
+
+The cask installs `TouchGlass.app` in `/Applications` and links the `touchglass` command, which is `scripts/touchglass` bundled in the app. Run from the app, `touchglass install` points gpg-agent at that app where it is instead of copying it; the rest of [Install](#install) applies. `brew uninstall touchglass` runs `touchglass uninstall`. Homebrew also runs that before an upgrade, so after `brew upgrade touchglass`, run `touchglass install` again.
+
 ## Build
 
 ```sh
@@ -165,6 +175,17 @@ gpg-agent doesn't tell scdaemon or the pinentry which command needs the card, so
 - Anything else shows its executable name, such as `gpg`.
 
 The panel opens without waiting for the label, which fills in when the lookup finishes. The lookup gives up after about 50 ms. If several clients could be the one, and they don't give the same label, the panel shows none.
+
+## Release
+
+```sh
+scripts/release.sh --dry-run 1.2.3
+scripts/release.sh 1.2.3
+```
+
+The script builds the app with that version, signs the helpers and the app with the hardened runtime, notarizes the zip with `xcrun notarytool` and staples the ticket. It writes `build/release/TouchGlass-<version>.zip` and prints its SHA-256 for the cask in [homebrew-touchglass](https://github.com/ambroos/homebrew-touchglass), and the `gh release create` command. It creates no tag or release itself.
+
+A release needs a Developer ID Application certificate in the keychain and notarization credentials stored with `xcrun notarytool store-credentials touchglass`. If the keychain holds more than one Developer ID identity, set `TOUCHGLASS_SIGN_IDENTITY`; `TOUCHGLASS_NOTARY_PROFILE` selects another credentials profile. `--dry-run` signs ad hoc and skips notarization, to test the script without a certificate; Gatekeeper rejects its zip.
 
 ## Layout
 
