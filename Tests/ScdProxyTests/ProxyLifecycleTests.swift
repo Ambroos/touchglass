@@ -138,6 +138,38 @@ struct HostEventSinkLaunchTests {
         #expect(launches.load(ordering: .relaxed) == 1)
     }
 
+    /// A host that the sink started and that later quit, such as one that retired for a later release, is
+    /// started again at the next operation, without the wait that follows a failed launch.
+    @Test func aHostThatCameUpAndQuitIsStartedAgain() throws {
+        let (directory, socket) = socketPath()
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        let launches = Atomic<Int>(0)
+        let started = Mutex<FakeHost?>(nil)
+        let sink = HostEventSink(path: socket) {
+            launches.add(1, ordering: .relaxed)
+            Thread.detachNewThread {
+                usleep(200_000)
+                let host = try? FakeHost(path: socket)
+                started.withLock { $0 = host }
+            }
+            return true
+        }
+        sink.send(opStart("1:p"))
+        sink.flush(timeout: 5)
+        let first = try #require(started.withLock { $0 })
+        #expect(first.waitForMessages(count: 1).map(\.summary) == ["op_start p sign slot=1"])
+
+        first.close()
+        first.dropConnections()
+        started.withLock { $0 = nil }
+        sink.send(opStart("1:s1"))
+        sink.flush(timeout: 5)
+        let second = try #require(started.withLock { $0 })
+        defer { second.close() }
+        #expect(second.waitForMessages(count: 1).map(\.summary) == ["op_start s1 sign slot=1"])
+        #expect(launches.load(ordering: .relaxed) == 2)
+    }
+
     @Test func launchesAreRateLimitedAndOnlyForOpStart() throws {
         let (directory, socket) = socketPath()
         defer { try? FileManager.default.removeItem(atPath: directory) }

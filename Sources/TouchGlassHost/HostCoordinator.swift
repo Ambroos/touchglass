@@ -24,6 +24,8 @@ public enum HostTimer: Sendable, Equatable {
     case verifyWatchdog(requestID: String)
     /// Drop an operation whose touch wait passed its deadline without an `op_end`.
     case touchExpired(operation: String, deadline: Date)
+    /// Exit if the host is still idle; see `HostOutput.exit`.
+    case retire
 }
 
 /// One card operation. A proxy connection runs its operations one after another under the same ID, so the
@@ -57,6 +59,9 @@ public enum HostOutput: Sendable, Equatable {
     /// Find out what asked for an operation or request, off the main thread, and report it with
     /// `clientResolved(_:label:)`. The panel never waits for it.
     case resolveClient(ClientSubject, ClientQuery)
+    /// Stop listening and exit the process. A helper of a later release connected, so this host runs code
+    /// that `brew upgrade` replaced; the next helper that needs the host starts the installed version.
+    case exit
 }
 
 /// Merges the proxy's card events and the pinentry's prompts into one panel.
@@ -72,6 +77,9 @@ public struct HostCoordinator: Sendable {
     /// How long after a touch deadline the coordinator waits for the card's own timeout reply before it
     /// drops the operation.
     public static let touchExpiryGrace: TimeInterval = 2
+    /// How long a retiring host stays idle before it exits, by default: longer than a result state shows,
+    /// so the panel finishes what it shows, and a pinentry that connects meanwhile keeps the host.
+    public static let defaultRetireAfterIdle: TimeInterval = 6
 
     struct CardOperation: Sendable, Equatable {
         /// See `OperationRef.number`.
@@ -116,9 +124,20 @@ public struct HostCoordinator: Sendable {
 
     /// Overrides the touch timeout that the proxy reports, in seconds.
     public var touchTimeout: TimeInterval?
+    /// The release this host runs, `BuildInfo.version` read at startup. Nil never retires.
+    public let version: String?
+    /// Connections from pinentries that are still open. A pinentry can send a request at any moment, so
+    /// the host never exits while one is connected.
+    private(set) var pinentryConnections: Set<ConnectionID> = []
+    /// A helper of a later release said hello: exit when idle.
+    public private(set) var retiring = false
+    private var retireScheduled = false
+    /// See `defaultRetireAfterIdle`.
+    public var retireAfterIdle = Self.defaultRetireAfterIdle
 
-    public init(touchTimeout: TimeInterval? = nil) {
+    public init(touchTimeout: TimeInterval? = nil, version: String? = nil) {
         self.touchTimeout = touchTimeout
+        self.version = version
     }
 
     // MARK: Messages
@@ -159,7 +178,11 @@ public struct HostCoordinator: Sendable {
             return showMessage(request, from: connection)
         case .dismiss(let ref):
             return requestEnded(ref.id)
-        case .hello, .ping, .pong, .pin, .confirmed, .notConfirmed, .cancelled, .fallback, .unknown:
+        case .hello(let hello):
+            if hello.role == .pinentry { pinentryConnections.insert(connection) }
+            if let version, let build = hello.build, BuildInfo.isNewer(build, than: version) { retiring = true }
+            return []
+        case .ping, .pong, .pin, .confirmed, .notConfirmed, .cancelled, .fallback, .unknown:
             return []
         }
     }
@@ -171,6 +194,7 @@ public struct HostCoordinator: Sendable {
     }
 
     private mutating func closeConnection(_ connection: ConnectionID) -> [HostOutput] {
+        pinentryConnections.remove(connection)
         var outputs: [HostOutput] = []
         for conn in operationOrder where operations[conn]?.reporter == connection {
             outputs += operationEnded(OpEnd(conn: conn, result: .cancelled))
@@ -255,7 +279,16 @@ public struct HostCoordinator: Sendable {
         case .touchExpired(let conn, let deadline):
             guard let operation = operations[conn], operation.touchDeadline == deadline else { return [] }
             return operationEnded(OpEnd(conn: conn, result: .cancelled))
+        case .retire:
+            retireScheduled = false
+            return isIdle ? [.exit] : []
         }
+    }
+
+    /// Nothing that the user sees or a helper waits for: no card operation, no pinentry connection, and at
+    /// most a result state on the panel.
+    var isIdle: Bool {
+        operations.isEmpty && queuedTouch.isEmpty && pinentryConnections.isEmpty && (shown == nil || shown == .result)
     }
 
     // MARK: Client labels
@@ -317,6 +350,10 @@ public struct HostCoordinator: Sendable {
             case .panel(.dismiss): panelState = nil
             default: break
             }
+        }
+        if retiring, isIdle, !retireScheduled, !outputs.contains(.exit) {
+            retireScheduled = true
+            return outputs + [.schedule(after: retireAfterIdle, .retire)]
         }
         return outputs
     }

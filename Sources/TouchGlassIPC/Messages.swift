@@ -33,12 +33,18 @@ public enum PeerRole: String, Codable, Sendable, Equatable {
 public struct Hello: Codable, Sendable, Equatable {
     public var role: PeerRole
     public var pid: Int32
+    /// The IPC protocol version, `IPCProtocol.version`.
     public var version: String
+    /// The TouchGlass release the helper belongs to, such as "0.2.0". A host that is older than one of
+    /// its helpers exits when idle, so the next helper starts the installed version. Optional, so hosts
+    /// and helpers of different versions understand each other.
+    public var build: String?
 
-    public init(role: PeerRole, pid: Int32 = getpid(), version: String = IPCProtocol.version) {
+    public init(role: PeerRole, pid: Int32 = getpid(), version: String = IPCProtocol.version, build: String? = BuildInfo.version) {
         self.role = role
         self.pid = pid
         self.version = version
+        self.build = build
     }
 }
 

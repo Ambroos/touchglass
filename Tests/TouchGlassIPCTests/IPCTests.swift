@@ -12,7 +12,8 @@ import Testing
 
     @Test func everyMessageRoundTrips() throws {
         let messages: [IPCMessage] = [
-            .hello(Hello(role: .proxy, pid: 42, version: "1")),
+            .hello(Hello(role: .proxy, pid: 42, version: "1", build: nil)),
+            .hello(Hello(role: .pinentry, pid: 43, version: "1", build: "0.2.0")),
             .opStart(OpStart(conn: "123:s3", op: .sign, slot: 1, serial: "D2760001240100000000000000000000", at: 1_800_000_000.5)),
             .opStart(OpStart(conn: "123:p", op: .auth, at: 1, agentPid: 4321)),
             .pinNeeded(ConnRef(conn: "123:p0")),
@@ -34,6 +35,12 @@ import Testing
         for message in messages {
             #expect(try roundTrip(message) == message)
         }
+    }
+
+    /// Helpers from before the build field send hello without it.
+    @Test func helloWithoutBuildDecodes() throws {
+        let message = try IPCLine.decode(Data(#"{"type":"hello","role":"proxy","pid":7,"version":"1"}"#.utf8))
+        #expect(message == .hello(Hello(role: .proxy, pid: 7, version: "1", build: nil)))
     }
 
     @Test func wireFieldsAreSnakeCase() throws {
@@ -164,5 +171,23 @@ import Testing
         #expect(sendToHost(.pinSent(ConnRef(conn: "c")), path: path))
         let accepted = try server.accept()
         #expect(try accepted.receive(timeout: 1) == .pinSent(ConnRef(conn: "c")))
+    }
+}
+
+@Suite struct BuildInfoTests {
+    @Test func comparesDottedVersions() {
+        #expect(BuildInfo.isNewer("0.2.0", than: "0.1.0"))
+        #expect(BuildInfo.isNewer("0.10.0", than: "0.9.3"))
+        #expect(BuildInfo.isNewer("1.0", than: "0.9.9"))
+        #expect(BuildInfo.isNewer("0.1.1", than: "0.1"))
+        #expect(!BuildInfo.isNewer("0.1.0", than: "0.1.0"))
+        #expect(!BuildInfo.isNewer("0.1", than: "0.1.0"))
+        #expect(!BuildInfo.isNewer("0.1.0", than: "0.2.0"))
+    }
+
+    @Test func versionsThatAreNotDottedNumbersAreNeverNewer() {
+        for (candidate, current) in [("HEAD-1a2b3c4", "0.1.0"), ("0.2.0", "HEAD-1a2b3c4"), ("0.2.0-beta", "0.1.0"), ("", "0.1.0"), ("1..0", "0.1.0")] {
+            #expect(!BuildInfo.isNewer(candidate, than: current))
+        }
     }
 }

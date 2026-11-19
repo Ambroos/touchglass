@@ -29,7 +29,10 @@ func runHost() {
         server: server,
         panel: PanelController(settings: settings),
         resolver: settings.showClient ? ClientResolver() : nil,
-        touchTimeout: settings.touchTimeout
+        touchTimeout: settings.touchTimeout,
+        // Read now: after brew upgrade, the bundle path shows the next release's Info.plist.
+        version: BuildInfo.version,
+        onRetire: { exit(0) }
     )
     session.start()
     hostSession = session

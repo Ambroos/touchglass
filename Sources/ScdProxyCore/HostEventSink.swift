@@ -8,9 +8,10 @@ import TouchGlassIPC
 /// short deadline and closes the connection when the host stops reading, so a stopped host costs at most
 /// that deadline per event and never touches the forwarding threads.
 ///
-/// When the host is down at an `op_start`, the writer starts it through `launchHost`, at most once per
-/// `launchInterval`, and waits up to `launchWait` for it to listen, so the touch wait that follows still
-/// reaches it.
+/// When the host is down at an `op_start`, the writer starts it through `launchHost`, and waits up to
+/// `launchWait` for it to listen, so the touch wait that follows still reaches it. After a launch that
+/// didn't bring the host up, it waits `launchInterval` before it tries again. A host that came up and
+/// later quit, such as one that retired for a later release, is started again at the next `op_start`.
 public final class HostEventSink: EventSink, @unchecked Sendable {
     public static let queueCapacity = 64
     /// How long one line may take to write before the connection is dropped.
@@ -36,6 +37,8 @@ public final class HostEventSink: EventSink, @unchecked Sendable {
     // Used only on the writer thread.
     private var connection: IPCConnection?
     private var lastLaunch = -Double.infinity
+    /// The release in each hello, read when the proxy starts; see `BuildInfo.version`.
+    private let build = BuildInfo.version
     /// Counts events dropped because the queue was full, for tests.
     public private(set) var droppedCount = 0
 
@@ -108,14 +111,18 @@ public final class HostEventSink: EventSink, @unchecked Sendable {
         guard launchHost() else { return nil }
         while Posix.monotonicSeconds() - now < Self.launchWait {
             usleep(50_000)
-            if let fresh = openConnection() { return fresh }
+            if let fresh = openConnection() {
+                // The launch worked, so the next one after this host quits needs no wait.
+                lastLaunch = -Double.infinity
+                return fresh
+            }
         }
         return nil
     }
 
     private func openConnection() -> IPCConnection? {
         guard let fresh = try? IPCClient.connect(path: path, timeout: 0.1),
-              let hello = try? IPCLine.encode(.hello(Hello(role: .proxy)))
+              let hello = try? IPCLine.encode(.hello(Hello(role: .proxy, build: build)))
         else { return nil }
         Posix.setNonBlocking(fresh.fileDescriptor, true)
         guard write(hello, to: fresh) else {

@@ -167,6 +167,27 @@ struct HostIntegrationTests {
         #expect(harness.finish()?.status == 0)
     }
 
+    /// A pinentry of a later release says hello; after it disconnects, the host removes its socket and
+    /// retires, so the next helper starts the installed host.
+    @Test func hostRetiresWhenANewerHelperConnected() async throws {
+        let (directory, socket) = shortSocketPath()
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        let server = try HostServer(path: socket)
+        var retired = false
+        let session = HostSession(server: server, panel: RecordingPanel(), version: "0.1.0", retireAfterIdle: 0.2) { retired = true }
+        session.start()
+        defer { session.stop() }
+
+        let client = try IPCClient.connect(path: socket, timeout: 1)
+        try client.send(.hello(Hello(role: .pinentry, build: "0.2.0")))
+        try await Task.sleep(for: .milliseconds(600))
+        #expect(!retired)
+        client.close()
+
+        #expect(await waitUntil { retired })
+        #expect(!FileManager.default.fileExists(atPath: socket))
+    }
+
     /// The real pinentry asks the host for a card PIN and gets the submitted value back.
     @Test func pinentryRoundTrip() async throws {
         let (directory, socket) = shortSocketPath()

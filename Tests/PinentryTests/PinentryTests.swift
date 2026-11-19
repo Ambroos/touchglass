@@ -70,7 +70,8 @@ func answering(secret: String) -> @Sendable (IPCMessage) -> IPCMessage? {
 
         #expect(pinentry.handshake() == "OK Pleased to meet you, process \(pinentry.pid)")
         #expect(pinentry.transact("GETINFO flavor") == ["S FEATURES tabbing", "D touchglass", "OK"])
-        #expect(pinentry.transact("GETINFO version") == ["D \(pinentryVersion)", "OK"])
+        // Outside TouchGlass.app, the build has no release version.
+        #expect(pinentry.transact("GETINFO version") == ["D 0.0.0", "OK"])
         #expect(pinentry.transact("GETINFO ttyinfo") == ["D /dev/ttys009 xterm-256color :0 - \(geteuid())/\(getegid()) -", "OK"])
         #expect(pinentry.transact("GETINFO pid") == ["D \(pinentry.pid)", "OK"])
         #expect(pinentry.transact("SETKEYINFO --clear") == ["OK"])
@@ -88,7 +89,7 @@ func answering(secret: String) -> @Sendable (IPCMessage) -> IPCMessage? {
         #expect(request?.prompt == "PIN")
         #expect(request?.keyinfo == nil)
         #expect(request?.owner == "4242/501 testhost")
-        #expect(host.received.first == .hello(Hello(role: .pinentry, pid: pinentry.pid)))
+        #expect(host.received.first == .hello(Hello(role: .pinentry, pid: pinentry.pid, build: nil)))
 
         #expect(pinentry.transact("BYE") == ["OK closing connection"])
         #expect(pinentry.waitForExit() == 0)
@@ -315,13 +316,34 @@ func answering(secret: String) -> @Sendable (IPCMessage) -> IPCMessage? {
         return (sandbox, host)
     }
 
+    /// The host closes before it answers anything, so the pinentry reconnects once, then falls back.
     @Test func hostDiesMidRequest() throws {
         let (_, host) = try expectHandoff { message in
             if case .getPin = message { return .close }
             if case .ping(let p) = message { return .send(.pong(p)) }
             return .silent
         }
-        #expect(host.received.contains { if case .getPin = $0 { true } else { false } })
+        #expect(host.received.filter { if case .getPin = $0 { true } else { false } }.count == 2)
+    }
+
+    /// A host that exits while the pinentry waits for the agent, such as one that retired for a later
+    /// release, is not a reason to fall back: the pinentry connects again for its next request.
+    @Test func hostExitsWhileIdleThenTheNextHostAnswers() throws {
+        let sandbox = Sandbox()
+        let first = try FakeHost(path: sandbox.socketPath, answer: { _ in nil })
+        let pinentry = try PinentryDriver(sandbox: sandbox)
+        _ = pinentry.handshake()
+        #expect(first.waitFor { if case .hello = $0 { true } else { false } } != nil)
+        first.stop()
+        usleep(300_000)
+        let second = try FakeHost(path: sandbox.socketPath, answer: answering(secret: "4321"))
+
+        #expect(pinentry.transact("GETPIN", timeout: 10) == ["D 4321", "OK"])
+        #expect(pinentry.transact("BYE") == ["OK closing connection"])
+        #expect(pinentry.waitForExit() == 0)
+        #expect(sandbox.stubLines.isEmpty)
+        #expect(second.received.first == .hello(Hello(role: .pinentry, pid: pinentry.pid, build: nil)))
+        #expect(sandbox.read(sandbox.pinentryLog).contains("reconnecting to host"))
     }
 
     @Test func hostStallsMidRequest() throws {

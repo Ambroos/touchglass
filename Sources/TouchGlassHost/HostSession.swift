@@ -21,12 +21,27 @@ public final class HostSession {
     private let resolver: ClientResolving?
     /// Lookups run one at a time, off the main thread.
     private let resolverQueue = DispatchQueue(label: "TouchGlass client lookup", qos: .userInitiated)
+    /// Runs after the session stopped for `HostOutput.exit`. The app exits the process here.
+    private let onRetire: @MainActor () -> Void
 
-    public init(server: HostServer, panel: PanelDriving, resolver: ClientResolving? = nil, touchTimeout: TimeInterval? = nil) {
+    /// - Parameters:
+    ///   - version: The release this host runs; see `HostCoordinator.version`.
+    ///   - onRetire: Called after the session stopped because a helper of a later release connected.
+    public init(
+        server: HostServer,
+        panel: PanelDriving,
+        resolver: ClientResolving? = nil,
+        touchTimeout: TimeInterval? = nil,
+        version: String? = nil,
+        retireAfterIdle: TimeInterval = HostCoordinator.defaultRetireAfterIdle,
+        onRetire: @escaping @MainActor () -> Void = {}
+    ) {
         self.server = server
         self.panel = panel
         self.resolver = resolver
-        coordinator = HostCoordinator(touchTimeout: touchTimeout)
+        self.onRetire = onRetire
+        coordinator = HostCoordinator(touchTimeout: touchTimeout, version: version)
+        coordinator.retireAfterIdle = retireAfterIdle
 
         var actions = PanelActions()
         actions.submitSecret = { [weak self] secret in self?.user(.submit(secret)) }
@@ -83,6 +98,11 @@ public final class HostSession {
                         self.perform(self.coordinator.clientResolved(subject, label: label))
                     }
                 }
+            case .exit:
+                // Removes the socket first, so a helper that connects from now on starts the installed host.
+                stop()
+                onRetire()
+                return
             }
         }
     }

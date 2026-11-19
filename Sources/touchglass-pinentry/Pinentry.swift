@@ -2,7 +2,8 @@ import Darwin
 import Foundation
 import TouchGlassIPC
 
-let pinentryVersion = "0.1.0"
+/// The version for GETINFO version: the release of the TouchGlass.app this pinentry is in.
+let pinentryVersion = BuildInfo.version ?? "0.0.0"
 
 /// What the agent set up before a GETPIN, CONFIRM or MESSAGE, decoded.
 struct Settings {
@@ -240,7 +241,9 @@ final class PinentryServer {
             handoff(line)
             return
         }
-        guard host != nil else {
+        // A host that exits when idle, such as one that retired for a later release, closed the
+        // connection; start the host again before falling back.
+        guard host != nil || reconnect() else {
             handoff(line)
             return
         }
@@ -259,7 +262,10 @@ final class PinentryServer {
             message = .message(MessageRequest(id: id, title: settings.title, desc: settings.desc.map { CardDescription.parse($0).text }, ok: settings.ok))
         }
 
-        let outcome = exchange(message, id: id)
+        var outcome = exchange(message, id: id)
+        if case .lost = outcome, reconnect() {
+            outcome = exchange(message, id: id)
+        }
         // pinentry shows a SETERROR text once.
         settings.error = nil
 
@@ -279,10 +285,19 @@ final class PinentryServer {
             reply(Assuan.cancelled)
         case .timedOut:
             reply(Assuan.timeout)
-        case .fallback(let reason):
+        case .fallback(let reason), .lost(let reason):
             log("falling back: \(reason)")
             handoff(line)
         }
+    }
+
+    /// Connects to the host again, launching it if needed, and says hello.
+    func reconnect() -> Bool {
+        log("reconnecting to host")
+        host = connectToHost()
+        guard let host else { return false }
+        try? host.send(.hello(Hello(role: .pinentry)))
+        return true
     }
 
     func isOneButton(_ keyword: String, _ arguments: String) -> Bool {
@@ -293,6 +308,8 @@ final class PinentryServer {
         case reply(IPCMessage)
         case timedOut
         case fallback(String)
+        /// The connection closed before the host answered anything: the host quit before it took the request.
+        case lost(String)
     }
 
     /// Sends a request to the host and waits for its answer, while watching stdin for EOF, signals, SETTIMEOUT, and host health.
@@ -303,11 +320,12 @@ final class PinentryServer {
             try host.send(message)
         } catch {
             dropHost("send failed")
-            return .fallback("host send failed")
+            return .lost("host send failed")
         }
 
         let start = now()
         var lastHeard = start
+        var heardAny = false
         var nextPing = start + config.pingInterval
         var seq = 0
         let deadline = settings.timeout > 0 ? start + settings.timeout : nil
@@ -350,9 +368,10 @@ final class PinentryServer {
                     messages = try host.readAvailable()
                 } catch {
                     dropHost("closed during request")
-                    return .fallback("host closed the connection")
+                    return heardAny ? .fallback("host closed the connection") : .lost("host closed the connection before it answered")
                 }
                 lastHeard = now()
+                if !messages.isEmpty { heardAny = true }
                 for reply in messages where reply.requestID == id {
                     log("<- host \(reply.type) \(id)")
                     switch reply {
