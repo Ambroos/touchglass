@@ -133,7 +133,7 @@ If the panel doesn't appear for a card operation, run `touchglass status`. If it
 gpgconf --kill scdaemon
 ```
 
-If PIN prompts appear in `pinentry-mac` instead of the panel, the pinentry couldn't reach or start the host. Check that `touchglass status` shows the app where you expect it. For diagnostic lines from the pinentry, set `log-file` in `pinentry.conf`; see [Pinentry settings](configuration.md#pinentry-settings).
+If PIN prompts appear in `pinentry-mac` instead of the panel, the pinentry couldn't reach or start the host. Check that `touchglass status` shows the app where you expect it. The pinentry, the proxy and the host write their diagnostic lines to the unified log; see [Read the log](configuration.md#read-the-log). The pinentry also writes them to a file if you set `log-file` in `pinentry.conf`; see [Pinentry settings](configuration.md#pinentry-settings).
 
 If you removed the Homebrew formula before you restored `gpg-agent.conf`, gpg-agent keeps working without the panel, because the launchers fall back to the real scdaemon and a plain pinentry. `brew uninstall` can also remove `pinentry-mac` if you didn't install it yourself; the pinentry launcher then uses Homebrew's `pinentry`, which asks for the PIN in the terminal. To restore `gpg-agent.conf`, run the copy of the command that install keeps next to the launchers:
 

@@ -26,7 +26,19 @@ gpg-agent uses the pipe for one session at a time. Sessions that overlap it, suc
 
 Each connection has an ID of the form `<proxy pid>:p` for the pipe and `<proxy pid>:s<n>` for relayed socket sessions.
 
-The tap never buffers the payload of a `D` line. PINs, PIN cache values, signatures and decrypted data are skipped byte by byte and never reach the detector, the host or a log. The proxy writes nothing to a log.
+The tap never buffers the payload of a `D` line. PINs, PIN cache values, signatures and decrypted data are skipped byte by byte and never reach the detector, the host or a log.
+
+### Touch cache window
+
+A YubiKey with the `cached` touch policy keeps a touch for 15 seconds, restarts that window on every operation that uses it, and lets one touch cover every key on the card. An operation inside the window can still stay silent for longer than 400 ms, for example during a rebase that signs many commits, so the proxy reports a `touch_wait` for an operation that needs no touch.
+
+The host, not the proxy, handles this, because the window belongs to the card: an SSH login on one scdaemon session uses the touch of a signature on another, and only the host sees every proxy and the queue of touch waits. Each successful `op_end` restarts the window of its card serial for `touch-cache` seconds; see [Configure TouchGlass](configuration.md#panel-settings). A `touch_wait` whose command started inside the window shows the touch step only 1.5 s after that command. If the operation ends first, the panel shows nothing for it: no touch step and no result. When the panel does show, the countdown still runs from the command's `at`, so it shows the time the card has left. A touch wait queued behind another one counts from the end of the operation before it, which restarted the window. After a PIN prompt, the touch step replaces the verifying state at once, as outside the window.
+
+The card's policy isn't visible on the wire, so the host restarts the window after any successful operation. If your card's touch policy is `on` or `fixed`, each operation needs a fresh touch; set `touch-cache = 0` so the touch step shows after 400 ms.
+
+### Logging
+
+The proxy writes to the unified log under the subsystem `io.ambroos.touchglass`, category `scdaemon`: when it starts and when scdaemon exits, each operation's start and end with its kind, slot, card serial, result and durations, each inferred touch wait with the time that passed, and the host connection. At debug level it also logs every scdaemon command by keyword, with its result and duration. Log calls take a fixed set of events with typed values, so no line from the Assuan stream reaches the log. See [Read the log](configuration.md#read-the-log).
 
 ## Configuration
 
@@ -44,7 +56,7 @@ Other environment variables, for tests: `TOUCHGLASS_SOCKET` (host socket), `TOUC
 
 None of these touch a card, gpg-agent or `~/.gnupg`.
 
-- `fake-scdaemon` plays an OpenPGP card from a JSON config named by `FAKE_SCD_CONFIG`: keygrips and slots, PIN, PIN cache inquiries, touch delay and timeout, cached touch window, and exit behaviour. It records every byte per connection for transparency checks. See the comment at the top of `Sources/fake-scdaemon/main.swift`.
+- `fake-scdaemon` plays an OpenPGP card from a JSON config named by `FAKE_SCD_CONFIG`: keygrips and slots, PIN, PIN cache inquiries, touch delay and timeout, cached touch window and the time a cached operation takes, and exit behaviour. It records every byte per connection for transparency checks. See the comment at the top of `Sources/fake-scdaemon/main.swift`.
 - `fake-agent` drives any `scdaemon-program` the way gpg-agent does and prints the replies, with `D` payloads shown only as lengths.
 - `fake-host` listens on the host socket and prints each event as a JSON line.
 

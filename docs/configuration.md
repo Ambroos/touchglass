@@ -11,6 +11,7 @@ The host reads `~/Library/Application Support/TouchGlass/host.conf` when it star
 | `appearance` | `readable` (default), `smoked` | `readable` is regular glass with standard label colours. `smoked` is clear glass with dark smoke and HDR white text. |
 | `show-client` | `yes` (default), `no` | Shows what asked for the card operation under the detail line, such as `git commit · touchglass` or `ssh build-box`. See [How TouchGlass labels what asked](#how-touchglass-labels-what-asked). |
 | `touch-timeout` | Seconds, 1 to 600 | Sets the length of the touch countdown. Without it, the countdown uses the card's touch timeout that `touchglass-scdaemon` reports, 15 seconds. Set it only if your card waits for a different time. |
+| `touch-cache` | Seconds, 0 to 600; default `15` | How long the card keeps a touch under the YubiKey's `cached` touch policy. Within this time after an operation that the card completed, the panel shows the touch step only after the card stays silent for 1.5 seconds instead of 0.4, and shows nothing for an operation that finishes sooner. `0` turns this off. Set `0` if your card's touch policy is `on` or `fixed`. |
 
 The reminder sounds and the urgent phase of the countdown keep their proportions for any `touch-timeout`: they start at a third and at two thirds of the countdown. If `touch-timeout` is shorter than the card's own timeout, the countdown reaches 0 and the panel stays until the card answers.
 
@@ -28,6 +29,26 @@ pkill -x TouchGlass
 ```
 
 The helpers start the host again on the next prompt or card operation.
+
+## Read the log
+
+The helpers and the host write to the unified log under the subsystem `io.ambroos.touchglass`, with the categories `scdaemon`, `host` and `pinentry`. The log holds operation kinds, card serials, results, durations, panel state names and connection news. It never holds a PIN, a passphrase, the data that is signed or decrypted, or key material.
+
+To watch the log while you use the card:
+
+```sh
+log stream --predicate 'subsystem == "io.ambroos.touchglass"' --level info
+```
+
+To read the last 10 minutes afterwards:
+
+```sh
+log show --last 10m --predicate 'subsystem == "io.ambroos.touchglass"' --info
+```
+
+With `--level debug` for `log stream`, or `--debug` for `log show`, the log also shows every scdaemon command with its duration and each Assuan keyword that the pinentry handles. To show one component, add a category to the predicate, such as `subsystem == "io.ambroos.touchglass" AND category == "scdaemon"`.
+
+To tune `touch-cache`, look at the `op end` lines of the `scdaemon` category. Each one gives the time the card took after the command or the PIN. Operations that the cached touch covers take that time without a touch; the host's `touch wait inside … cache window` and `nothing shown` lines show which operations it held back.
 
 ## Sounds
 
@@ -61,7 +82,7 @@ defaults delete io.ambroos.touchglass soundsEnabled
 | `launch-timeout-ms` | `2000` | How long to wait for a host that the pinentry started to accept connections, in milliseconds. |
 | `ping-interval-ms` | `1000` | How often the pinentry checks that the host still answers while a prompt shows, in milliseconds. |
 | `host-stall-ms` | `3000` | How long the host can go without answering before the pinentry hands the prompt to the fallback, in milliseconds. |
-| `log-file` | None | A file for diagnostic lines: message types and Assuan keywords, never a PIN or passphrase. |
+| `log-file` | None | A file for diagnostic lines: message types and Assuan keywords, never a PIN or passphrase. The same lines always go to the unified log; see [Read the log](#read-the-log). |
 
 ## How TouchGlass labels what asked
 
