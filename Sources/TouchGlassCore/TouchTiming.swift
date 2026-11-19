@@ -6,8 +6,15 @@ public enum TouchTiming {
     public static let cardTimeout: TimeInterval = 15
     /// How long a card command must stay silent before the host assumes it waits for a touch.
     public static let detectionThreshold: TimeInterval = 0.4
-    /// How long the success state shows before the panel closes.
-    public static let successHold: TimeInterval = 0.7
+    /// How long the success state shows before the panel closes. The ring and checkmark settle in
+    /// 0.25 s, so this leaves about a second to read the result; 0.7 s closed the panel before the
+    /// eye got to the title.
+    public static let successHold: TimeInterval = 1.2
+    /// How long the panel keeps its last state after it was dismissed or auto-closed, before the exit
+    /// animation starts. A state that arrives meanwhile replaces it in place. Longer than
+    /// `detectionThreshold`, after which the proxy reports the touch wait that follows a PIN prompt,
+    /// plus 0.2 s for the command to reach scdaemon and the event to reach the host.
+    public static let closeGrace: TimeInterval = 0.6
     /// How long an error state shows before the panel closes by itself.
     public static let errorHold: TimeInterval = 4
 }

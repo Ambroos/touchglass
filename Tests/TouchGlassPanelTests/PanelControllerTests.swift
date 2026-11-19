@@ -148,6 +148,51 @@ import TouchGlassCore
         controller.send(.dismiss)
     }
 
+    // MARK: Close grace
+
+    @Test func dismissKeepsThePanelForTheGraceThenCloses() async throws {
+        let controller = makeController()
+        controller.send(.show(touch()))
+        controller.send(.dismiss)
+        try await Task.sleep(for: .seconds(TouchTiming.closeGrace / 2))
+        #expect(controller.isPanelVisible)
+        await waitUntil { !controller.isPanelVisible }
+        #expect(!controller.isPanelVisible)
+        #expect(controller.model.state == nil)
+    }
+
+    @Test func aStateWithinTheGraceReplacesTheLastOne() async throws {
+        let controller = makeController()
+        controller.send(.show(.success(.sign)))
+        controller.send(.dismiss)
+        try await Task.sleep(for: .seconds(TouchTiming.closeGrace / 2))
+        let next = touch(.sshLogin)
+        controller.send(.show(next))
+        try await Task.sleep(for: .seconds(TouchTiming.closeGrace + 0.3))
+        #expect(controller.isPanelVisible)
+        #expect(controller.model.state == next)
+        #expect(controller.model.surfaceShown)
+        controller.send(.dismiss)
+    }
+
+    /// At full animation length, a state that arrives while the exit runs turns it around: the window
+    /// never orders out, and the stale exit completion leaves the new state alone.
+    @Test func aStateDuringTheExitAnimationReversesIt() async throws {
+        let controller = PanelController(animationScale: 1)
+        controller.muted = true
+        controller.send(.show(touch()))
+        controller.send(.dismiss)
+        try await Task.sleep(for: .seconds(TouchTiming.closeGrace + 0.1))
+        #expect(controller.isPanelVisible)
+        #expect(!controller.model.surfaceShown)
+        controller.send(.show(pin))
+        #expect(controller.model.surfaceShown)
+        try await Task.sleep(for: .seconds(0.8))
+        #expect(controller.isPanelVisible)
+        #expect(controller.model.state == pin)
+        controller.send(.dismiss)
+    }
+
     @Test func holdingKeepsResultStatesOpenAndTakesKey() async throws {
         let controller = makeController()
         controller.holdsState = true

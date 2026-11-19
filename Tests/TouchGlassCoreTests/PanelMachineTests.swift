@@ -89,8 +89,90 @@ import Testing
         let rearm = machine.handle(.show(.touchWait(wait)))
         #expect(rearm.contains(.play(.touchStart)))
         #expect(rearm.contains(.update(.touchWait(wait))))
-        #expect(machine.handle(.dismiss).contains(.close))
+        #expect(machine.handle(.dismiss).contains(.scheduleClose(after: TouchTiming.closeGrace)))
         #expect(machine.state == nil)
+        #expect(machine.handle(.closeGraceFired) == [.close])
+    }
+
+    // MARK: Close grace
+
+    @Test func dismissAloneClosesAfterTheGrace() {
+        var machine = PanelMachine()
+        _ = machine.handle(.show(.touchWait(wait)))
+        let dismissed = machine.handle(.dismiss)
+        #expect(dismissed == [.cancelAutoClose, .stopEscalation, .scheduleClose(after: TouchTiming.closeGrace)])
+        #expect(!dismissed.contains(.close))
+        #expect(machine.lingering == .touchWait(wait))
+        #expect(machine.handle(.closeGraceFired) == [.close])
+        #expect(machine.lingering == nil)
+        // A late timer after the panel closed does nothing.
+        #expect(machine.handle(.closeGraceFired).isEmpty)
+    }
+
+    /// A second signature, or a push after a commit: the next touch wait arrives after the success hold,
+    /// inside the grace, and replaces the success in place.
+    @Test func successThenNextTouchWithinTheGrace() {
+        var machine = PanelMachine()
+        _ = machine.handle(.show(.touchWait(wait)))
+        _ = machine.handle(.show(.success(.sign)))
+        #expect(machine.handle(.autoCloseFired).contains(.scheduleClose(after: TouchTiming.closeGrace)))
+        let next = TouchWait.detected(operation: .sshLogin, cardSerial: "12345678", now: Date(timeIntervalSince1970: 1002))
+        let effects = machine.handle(.show(.touchWait(next)))
+        #expect(effects.contains(.cancelClose))
+        #expect(effects.contains(.update(.touchWait(next))))
+        #expect(!effects.contains(.open(.touchWait(next))))
+        #expect(effects.contains(.setKey(false)))
+        #expect(effects.contains(.play(.touchStart)))
+        #expect(machine.lingering == nil)
+        // The cancelled grace timer can still fire if it was already queued; it changes nothing.
+        #expect(machine.handle(.closeGraceFired).isEmpty)
+        #expect(machine.isVisible)
+    }
+
+    /// A PIN prompt that no operation tied to the panel ends; the proxy reports the touch wait
+    /// `detectionThreshold` later, which is inside the grace.
+    @Test func promptEndedThenTouchWaitShortlyAfter() {
+        #expect(TouchTiming.closeGrace > TouchTiming.detectionThreshold)
+        var machine = PanelMachine()
+        let request = PinRequest(operation: .sign, cardSerial: "12345678")
+        _ = machine.handle(.show(.pinEntry(request)))
+        #expect(machine.holdsKey)
+        _ = machine.handle(.dismiss)
+        let effects = machine.handle(.show(.touchWait(wait)))
+        #expect(effects.contains(.update(.touchWait(wait))))
+        #expect(effects.contains(.cancelClose))
+        // The panel starts over for focus, as if it had opened: a touch wait never takes the keyboard.
+        #expect(effects.contains(.setKey(false)))
+        #expect(!machine.holdsKey)
+    }
+
+    @Test func failureThenNextPromptReplacesIt() {
+        var machine = PanelMachine()
+        let request = PinRequest(operation: .sign, cardSerial: "12345678")
+        _ = machine.handle(.show(.verifying(request)))
+        _ = machine.handle(.show(.failure(.wrongPIN)))
+        // The next prompt while the error still shows: a plain update, as before.
+        var effects = machine.handle(.show(.pinEntry(request)))
+        #expect(effects.contains(.update(.pinEntry(request))))
+        #expect(effects.contains(.setKey(true)))
+
+        // And after the error auto-closed, within the grace.
+        _ = machine.handle(.show(.failure(.wrongPIN)))
+        _ = machine.handle(.autoCloseFired)
+        effects = machine.handle(.show(.pinEntry(request)))
+        #expect(effects.contains(.cancelClose))
+        #expect(effects.contains(.update(.pinEntry(request))))
+        #expect(effects.contains(.setKey(true)))
+    }
+
+    /// A panel the user hid is off screen already; dismissing it schedules nothing.
+    @Test func dismissingAHiddenPanelSchedulesNoClose() {
+        var machine = PanelMachine()
+        _ = machine.handle(.show(.touchWait(wait)))
+        _ = machine.handle(.userHid)
+        #expect(machine.handle(.dismiss) == [.cancelAutoClose, .stopEscalation])
+        #expect(machine.lingering == nil)
+        #expect(machine.handle(.show(.touchWait(wait))).contains(.open(.touchWait(wait))))
     }
 
     @Test func userHidOnlyAppliesToTouch() {

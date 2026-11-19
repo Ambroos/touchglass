@@ -27,6 +27,9 @@ public final class PanelController {
     /// Incremented on every entrance and exit, so a stale exit completion cannot order out a re-opened panel.
     private var generation = 0
     private var autoClose: DispatchWorkItem?
+    private var closeGrace: DispatchWorkItem?
+    /// The exit animation runs. An `open` meanwhile turns it around instead of starting over.
+    private var closing = false
     private var escalation: [DispatchWorkItem] = []
 
     public init(animationScale: Double = 1, settings: HostSettings = HostSettings()) {
@@ -107,6 +110,14 @@ public final class PanelController {
         case .cancelAutoClose:
             autoClose?.cancel()
             autoClose = nil
+        case .scheduleClose(let delay):
+            closeGrace?.cancel()
+            let item = DispatchWorkItem { [weak self] in self?.send(.closeGraceFired) }
+            closeGrace = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+        case .cancelClose:
+            closeGrace?.cancel()
+            closeGrace = nil
         case .startEscalation(let wait):
             if !holdsState { startEscalation(wait) }
         case .stopEscalation:
@@ -152,6 +163,11 @@ public final class PanelController {
         let current = generation
         let scale = model.animationScale
 
+        if closing, panel.isVisible {
+            reverseClose(into: state)
+            return
+        }
+
         var instant = Transaction()
         instant.disablesAnimations = true
         withTransaction(instant) {
@@ -195,12 +211,42 @@ public final class PanelController {
         }
     }
 
+    /// A state arrived while the exit animation runs: the panel is still on screen, at its place, so
+    /// swap the content and animate the glass and content back from wherever the exit has got them.
+    /// SwiftUI retargets the running animations, so the glass grows back around its centre without
+    /// first vanishing. The stale exit completion sees a newer generation and does nothing.
+    private func reverseClose(into state: PanelState) {
+        closing = false
+        let scale = model.animationScale
+        withTransaction(Transaction(animation: nil)) { model.state = state }
+        panel.allowsKey = state.allowsKey || holdsState
+        if panel.allowsKey {
+            panel.makeKey()
+            guardKeyAfterOwnChange()
+        }
+        if reduceMotion {
+            withAnimation(.easeOut(duration: 0.16 * scale)) {
+                model.surfaceShown = true
+                model.contentShown = true
+            }
+        } else {
+            withAnimation(.spring(duration: 0.4 * scale, bounce: 0.15)) {
+                model.surfaceShown = true
+            }
+            withAnimation(.easeOut(duration: 0.2 * scale).delay(0.06 * scale)) {
+                model.contentShown = true
+            }
+        }
+    }
+
     private func close() {
         generation += 1
         let current = generation
         let scale = model.animationScale
+        closing = true
         let finish = { [weak self] in
             guard let self, self.generation == current else { return }
+            self.closing = false
             self.panel.orderOut(nil)
             var instant = Transaction()
             instant.disablesAnimations = true

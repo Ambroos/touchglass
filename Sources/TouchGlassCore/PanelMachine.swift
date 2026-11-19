@@ -7,9 +7,12 @@ public enum PanelEvent: Sendable, Equatable {
     /// The user pressed the close button in the touch state. The operation goes on.
     case userHid
     /// Close the panel: the operation ended, the user cancelled, or an error state was dismissed.
+    /// The panel closes after `TouchTiming.closeGrace`, unless a new state arrives first.
     case dismiss
-    /// The auto-close timer for a success or error state fired.
+    /// The auto-close timer for a success or error state fired. Closes like `dismiss`.
     case autoCloseFired
+    /// The close grace that `scheduleClose` started ran out.
+    case closeGraceFired
 }
 
 /// Outputs of the panel state machine. The AppKit layer performs them.
@@ -25,6 +28,9 @@ public enum PanelEffect: Sendable, Equatable {
     case announce(String)
     case scheduleAutoClose(after: TimeInterval)
     case cancelAutoClose
+    /// Send `closeGraceFired` after this delay. The panel keeps its last state on screen meanwhile.
+    case scheduleClose(after: TimeInterval)
+    case cancelClose
     /// Start the reminder sounds and announcements of a touch step.
     case startEscalation(TouchWait)
     case stopEscalation
@@ -42,6 +48,11 @@ public struct PanelMachine: Sendable {
     /// such as Up Arrow and Return to retry, belong to the terminal. A touch-only panel never
     /// takes focus.
     public private(set) var holdsKey = false
+    /// The state still on screen during the close grace, after `dismiss` or the auto-close ended it.
+    /// A state that arrives meanwhile replaces it in place instead of closing and reopening the panel:
+    /// the next operation's touch wait after a success, or the touch wait that the proxy reports
+    /// about `TouchTiming.detectionThreshold` after a PIN prompt ended.
+    public private(set) var lingering: PanelState?
 
     public init() {}
 
@@ -56,12 +67,19 @@ public struct PanelMachine: Sendable {
             hiddenByUser = true
             return [.close]
         case .dismiss, .autoCloseFired:
-            guard state != nil else { return [] }
+            guard let ended = state else { return [] }
             let wasVisible = isVisible
             state = nil
             hiddenByUser = false
+            // Focus starts over with the next state, as in a panel that opens.
             holdsKey = false
-            return [.cancelAutoClose, .stopEscalation] + (wasVisible ? [.close] : [])
+            guard wasVisible else { return [.cancelAutoClose, .stopEscalation] }
+            lingering = ended
+            return [.cancelAutoClose, .stopEscalation, .scheduleClose(after: TouchTiming.closeGrace)]
+        case .closeGraceFired:
+            guard state == nil, lingering != nil else { return [] }
+            lingering = nil
+            return [.close]
         }
     }
 
@@ -72,6 +90,8 @@ public struct PanelMachine: Sendable {
         // A hidden panel was closed on screen, so a state that ends the hide opens it again.
         let wasHidden = previous != nil && hiddenByUser
         if !Self.keepsHide(from: previous, to: next) { hiddenByUser = false }
+        // A state that arrives during the close grace takes the lingering one's place on screen.
+        let replacesLingering = previous == nil && lingering != nil
         let opens = previous == nil || (wasHidden && !hiddenByUser)
         if opens { holdsKey = false }
         state = next
@@ -79,9 +99,13 @@ public struct PanelMachine: Sendable {
         if case .failure = next { holdsKey = false }
 
         var effects: [PanelEffect] = [.cancelAutoClose]
+        if replacesLingering {
+            lingering = nil
+            effects.append(.cancelClose)
+        }
 
         if !hiddenByUser {
-            effects.append(opens ? .open(next) : .update(next))
+            effects.append(opens && !replacesLingering ? .open(next) : .update(next))
             if opens || !labelOnly { effects.append(.setKey(holdsKey)) }
         }
 
