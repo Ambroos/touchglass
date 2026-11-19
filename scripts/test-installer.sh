@@ -546,6 +546,18 @@ check "copy reports the fallbacks" out_has "running the fallbacks, because $APP 
 check "round trip is byte-identical" cmp -s "$CONF" "$T/original"
 check "launchers and copy removed" test ! -e "$SUPPORT/bin"
 
+begin "an app in a Homebrew keg: the launchers use the stable opt path"
+keg="$T/brew/Cellar/touchglass/1.0"
+mkdir -p "$keg" "$T/brew/opt" "$T/brew/bin"
+ditto "$app" "$keg/TouchGlass.app"
+mkdir -p "$keg/TouchGlass.app/Contents/Resources"
+cp "$tool" "$keg/TouchGlass.app/Contents/Resources/touchglass"
+ln -s ../Cellar/touchglass/1.0 "$T/brew/opt/touchglass"
+ln -s ../Cellar/touchglass/1.0/TouchGlass.app/Contents/Resources/touchglass "$T/brew/bin/touchglass"
+"$T/brew/bin/touchglass" install > "$T/out" 2>&1 || fail "install from the keg failed"
+check "launcher records the opt path" grep -qx "app='$(cd "$T" && pwd -P)/brew/opt/touchglass/TouchGlass.app'" "$LP"
+check "no copy to ~/Applications" test ! -e "$APP"
+
 begin "a failing gpgconf --kill is reported"
 printf '%s\n' "pinentry-program /opt/example/bin/pinentry-mac" > "$CONF"
 touch "$T/gpgconf-kill-fails"

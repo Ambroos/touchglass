@@ -52,6 +52,25 @@ case "$self_dir" in
         if [ -x "$self_dir/../MacOS/TouchGlass" ]; then bundle_app="${self_dir%/Contents/Resources}"; fi
         ;;
 esac
+# Homebrew formulae live in a versioned Cellar directory that an upgrade deletes; prefer the stable
+# opt link to the same keg, so the launchers keep pointing at the installed version.
+stable_app() { # path
+    case "$1" in
+        */Cellar/*/*/*)
+            prefix="${1%%/Cellar/*}"
+            rest="${1#"$prefix"/Cellar/}"
+            name="${rest%%/*}"
+            rest="${rest#*/}"
+            rest="${rest#*/}"
+            if [ "$( (cd "$prefix/opt/$name/$rest" 2>/dev/null && pwd -P) || true)" = "$(cd "$1" && pwd -P)" ]; then
+                printf '%s\n' "$prefix/opt/$name/$rest"
+                return 0
+            fi
+            ;;
+    esac
+    printf '%s\n' "$1"
+}
+if [ -n "$bundle_app" ]; then bundle_app="$(stable_app "$bundle_app")"; fi
 if [ -z "$bundle_app" ] && [ "$self_dir" = "$( (cd "$bin_dir" 2>/dev/null && pwd -P) || true)" ]; then
     recorded="$(launcher_app "$launch_pinentry")"
     if [ -n "$recorded" ] && [ -x "$recorded/Contents/MacOS/TouchGlass" ]; then bundle_app="$recorded"; fi
