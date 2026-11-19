@@ -29,8 +29,8 @@ for product in $products; do
     cp "$bin_dir/$product" "$app/Contents/MacOS/$product"
 done
 
-# The install CLI, stamped with the version. Homebrew links it onto PATH; run from here, it works on
-# this bundle.
+# The install CLI, stamped with the version. The formula puts a script on PATH that runs it; run from
+# here, it works on this bundle. The helpers and the host read the version from Info.plist.
 mkdir -p "$app/Contents/Resources"
 sed "s/^cli_version=dev\$/cli_version=$version/" scripts/touchglass > "$app/Contents/Resources/touchglass"
 chmod 755 "$app/Contents/Resources/touchglass"
@@ -66,5 +66,9 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
+# Sign the helpers before the bundle: codesign refuses a bundle whose other executables are unsigned.
+# The arm64 linker signs executables ad hoc, the x86_64 linker doesn't.
+codesign --force --sign - --timestamp=none "$app/Contents/MacOS/touchglass-pinentry"
+codesign --force --sign - --timestamp=none "$app/Contents/MacOS/touchglass-scdaemon"
 codesign --force --sign - --timestamp=none "$app"
 echo "Built $root/$app"
