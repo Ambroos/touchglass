@@ -127,7 +127,7 @@ The host reads `~/Library/Application Support/TouchGlass/host.conf` when it star
 | --- | --- | --- |
 | `appearance` | `readable` (default), `smoked` | Regular glass with standard label colours in light mode, or smoked clear glass with HDR white text. |
 | `show-client` | `yes` (default), `no` | Shows what asked for the card operation under the detail line, such as `git commit · touchglass` or `ssh build-box`. |
-| `touch-timeout` | Seconds, 1 to 600 | Sets the length of the touch countdown. Without it, the host uses the timeout that `touchglass-scdaemon` reports, 15 seconds. Set it only if your card waits for a different time. The reminder sounds and the urgent phase keep their proportions: at a third and two thirds of the countdown. If the value is shorter than the card's own timeout, the countdown reaches 0 and the panel stays until the card answers. |
+| `touch-timeout` | Seconds, 1 to 600 | Sets the length of the touch countdown. Without it, the host uses the timeout that `touchglass-scdaemon` reports, 15 seconds. Set it only if your card waits for a different time. The reminder sounds, if [sounds](#sounds) are on, and the urgent phase keep their proportions: at a third and two thirds of the countdown. If the value is shorter than the card's own timeout, the countdown reaches 0 and the panel stays until the card answers. |
 
 The demo takes `appearance` as `--appearance`, and `show-client = no` as `--no-client`.
 
@@ -141,16 +141,19 @@ The helpers start the host again on the next prompt or card operation. While the
 
 ### Sounds
 
-The panel plays the system alert sounds Tink, Ping and Basso, at the alert volume. Two user defaults of the app turn them off; both default to on:
+The panel is silent by default. To turn sounds on, set this user default of the app:
 
 ```sh
-# All panel sounds.
-defaults write io.ambroos.touchglass soundsEnabled -bool false
-# Only the reminders during the touch countdown.
+defaults write io.ambroos.touchglass soundsEnabled -bool true
+```
+
+With sounds on, the panel plays the system alert sounds at the alert volume: Tink when the touch step starts, Ping as a reminder during the touch countdown, Basso when an operation fails, and your own alert sound for a wrong PIN or passphrase. To keep the other sounds but turn off the reminders:
+
+```sh
 defaults write io.ambroos.touchglass reminderSoundsEnabled -bool false
 ```
 
-The host reads them each time it plays a sound, so no restart is needed.
+The host reads both settings each time it plays a sound, so no restart is needed. To go back to silent, run `defaults delete io.ambroos.touchglass soundsEnabled`.
 
 ### Pinentry settings
 
