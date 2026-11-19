@@ -26,6 +26,7 @@ public final class ProxyHarness: @unchecked Sendable {
         public var verified: [Int] = []
         public var pincache = false
         public var pincache_hit = "CAFEF00D"
+        public var needpin_delay_ms = 0
         public var touch_ms = 0
         public var touch_cache_ms = 0
         public var cached_ms = 0

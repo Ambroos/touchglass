@@ -29,6 +29,8 @@ struct Config: Decodable {
     var pincache: Bool = false
     /// Answer to PINCACHE_GET that counts as a cached PIN.
     var pincache_hit: String = "CAFEF00D"
+    /// Delay before INQUIRE NEEDPIN, in ms, as when scdaemon waits for the card lock or a slow card.
+    var needpin_delay_ms: Int = 0
     /// Delay before the card answers a crypto command when it needs a touch, in ms.
     var touch_ms: Int = 0
     /// After a touch, operations within this window need no touch, in ms (YubiKey "cached" policy). Each
@@ -46,7 +48,7 @@ struct Config: Decodable {
     var split_writes: Bool = false
 
     enum CodingKeys: String, CodingKey {
-        case socket, record_dir, serial, keys, pin, verified, pincache, pincache_hit, touch_ms, touch_cache_ms, cached_ms
+        case socket, record_dir, serial, keys, pin, verified, pincache, pincache_hit, needpin_delay_ms, touch_ms, touch_cache_ms, cached_ms
         case touch_timeout, exit_on_eof, eof_linger_ms, split_writes
     }
 
@@ -62,6 +64,7 @@ struct Config: Decodable {
         verified = try c.decodeIfPresent([Int].self, forKey: .verified) ?? verified
         pincache = try c.decodeIfPresent(Bool.self, forKey: .pincache) ?? pincache
         pincache_hit = try c.decodeIfPresent(String.self, forKey: .pincache_hit) ?? pincache_hit
+        needpin_delay_ms = try c.decodeIfPresent(Int.self, forKey: .needpin_delay_ms) ?? needpin_delay_ms
         touch_ms = try c.decodeIfPresent(Int.self, forKey: .touch_ms) ?? touch_ms
         touch_cache_ms = try c.decodeIfPresent(Int.self, forKey: .touch_cache_ms) ?? touch_cache_ms
         cached_ms = try c.decodeIfPresent(Int.self, forKey: .cached_ms) ?? cached_ms
@@ -336,6 +339,7 @@ func cryptoOperation(_ conn: Connection, command: String, grip: String) {
         if !cached {
             var prompt = "||Please unlock the card%0A%0A\u{1E}Number\u{1F}: 12 345 678%0AHolder\u{1F}: "
             if pinRef == 1 { prompt += "%0ACounter\u{1F}: 7" }
+            usleep(UInt32(config.needpin_delay_ms) * 1000)
             guard let answer = conn.inquire("NEEDPIN " + prompt) else { conn.send(errCancelled); return }
             let pin = answer.prefix { $0 != 0 }
             guard Array(pin) == Array(config.pin.utf8) else { conn.send(errBadPin); return }

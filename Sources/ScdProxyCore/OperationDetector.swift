@@ -173,6 +173,9 @@ public final class OperationDetector: @unchecked Sendable {
             switch keyword {
             case "NEEDPIN":
                 state.inquiry = .needPin
+                // A touch wait reported before the PIN was a false start: the card waits for the touch only
+                // after it accepted the PIN. The answer to this inquiry arms the timer again.
+                state.operation?.touchReported = false
                 sink.send(.pinNeeded(ConnRef(conn: conn)))
                 log(.pinRequested(conn: conn))
             case "POPUPPINPADPROMPT" where args.first == "--ack":

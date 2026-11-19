@@ -131,6 +131,21 @@ struct ProxyIntegrationTests {
         #expect(harness.finish()?.status == 0)
     }
 
+    /// scdaemon stays silent past the detection delay before it asks for the PIN, as when it waits for the
+    /// card lock. The early touch wait is a false start; the touch wait after the PIN must be reported too.
+    @Test func touchWaitAfterPinFollowsEarlyFalseStart() throws {
+        var card = ProxyHarness.Card()
+        card.needpin_delay_ms = 600
+        card.touch_ms = 700
+        let (harness, host, _) = try setUp(card: card)
+        defer { harness.cleanUp(); host?.close() }
+        #expect(operation(harness.agent, "PKSIGN", grip: Self.sign).isOK)
+        #expect(summaries(host, waitingFor: 6) == [
+            "op_start p sign slot=1", "touch_wait p", "pin_needed p", "pin_sent p", "touch_wait p", "op_end p ok",
+        ])
+        #expect(harness.finish()?.status == 0)
+    }
+
     @Test func signWithCachedPin() throws {
         var card = ProxyHarness.Card()
         card.verified = [1]
