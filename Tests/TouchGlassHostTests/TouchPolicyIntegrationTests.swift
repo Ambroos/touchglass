@@ -94,4 +94,27 @@ struct TouchPolicyIntegrationTests {
         #expect(session.coordinator.policies["12345678"]?.slots == [1: .cached, 2: .on, 3: .off])
         #expect(harness.finish()?.status == 0)
     }
+
+    /// `touchglass card` wrote another card while the host ran: the host's next write keeps it.
+    @Test func hostKeepsCardsThatTheCommandStored() async throws {
+        var card = ProxyHarness.Card()
+        card.uif = ["%03+", "%03+", "%03+"]
+        let harness = try ProxyHarness(card: card)
+        let (store, dir) = try temporaryStore()
+        defer { harness.cleanUp(); try? FileManager.default.removeItem(atPath: dir) }
+        let server = try HostServer(path: harness.hostSocketPath)
+        let session = HostSession(server: server, panel: RecordingPanel(), policyStore: store, policyQuery: RecordingQuery(answer: nil))
+        session.start()
+        defer { session.stop() }
+
+        let other = "D2760001240103040006000000420000"
+        try "\(other) = on on on\n".write(toFile: store.path, atomically: true, encoding: .utf8)
+        try harness.start()
+        _ = harness.handshake()
+        let agent = harness.agent
+        #expect(await Task.detached { agent.transact("LEARN --force").isOK }.value)
+        #expect(await waitUntil { storedText(store).contains("\(ProxyHarness.serial) = cached cached cached") })
+        #expect(storedText(store).contains("\(other) = on on on"))
+        #expect(harness.finish()?.status == 0)
+    }
 }

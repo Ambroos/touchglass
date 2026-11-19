@@ -79,11 +79,19 @@ public final class HostSession {
     }
 
     public func receive(_ message: IPCMessage, from connection: ConnectionID) {
-        // `touchglass card` may have written the file meanwhile.
-        if case .opStart = message, let policyStore, let cards = policyStore.reloadIfChanged() {
-            coordinator.loadPolicies(cards)
+        switch message {
+        case .opStart, .touchPolicy: reloadPolicies()
+        default: break
         }
         perform(coordinator.handle(message, from: connection, now: Date()))
+    }
+
+    /// Takes in `cards.conf` if `touchglass card` wrote it since the host last read or wrote it, so the
+    /// host decides with those policies and doesn't write older ones over them.
+    private func reloadPolicies() {
+        if let policyStore, let cards = policyStore.reloadIfChanged() {
+            coordinator.loadPolicies(cards)
+        }
     }
 
     public func closed(_ connection: ConnectionID) {
@@ -130,6 +138,7 @@ public final class HostSession {
                     let slots = policyQuery.query(serial: serial, gnupg: gnupg)
                     DispatchQueue.main.async { [weak self] in
                         guard let self else { return }
+                        self.reloadPolicies()
                         self.perform(self.coordinator.policyQueried(serial: serial, slots: slots, now: Date()))
                     }
                 }
