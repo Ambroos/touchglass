@@ -35,7 +35,7 @@ A YubiKey with the `cached` touch policy keeps a touch for 15 seconds, restarts 
 
 The host, not the proxy, handles this, because the window belongs to the card: an SSH login on one scdaemon session uses the touch of a signature on another, and only the host sees every proxy and the queue of touch waits. Each successful `op_end` restarts the window of its card serial, unless the key's touch policy is `off`; see [Touch policies](configuration.md#touch-policies). A `touch_wait` whose command started inside the window shows the touch step only 1.5 s after that command. If the operation ends first, the panel shows nothing for it: no touch step and no result. When the panel does show, the countdown still runs from the command's `at`, so it shows the time the card has left. A touch wait queued behind another one counts from the end of the operation before it, which restarted the window. After a PIN prompt, the touch step replaces the verifying state at once, as outside the window.
 
-The window applies only to keys whose touch policy is `cached` or `cached-fixed`, and to keys whose policy the host doesn't know. For a key with the `on` or `fixed` policy, the touch step shows after 400 ms, inside the window too. For a key with the `off` policy, the host shows no inferred touch wait.
+The window applies only to keys whose touch policy is `cached` or `cached-fixed`, and to keys whose policy the host doesn't know. For a key with the `on` or `fixed` policy, the touch step shows after 400 ms, inside the window too. For a key with the `off` policy, the host shows an inferred touch wait only 3 s after the command, also after a PIN prompt.
 
 ### Logging
 

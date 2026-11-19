@@ -1211,6 +1211,12 @@ is_yubico() { # serial
     return 1
 }
 
+# True if a list of policies holds one of Yubico's cached policies.
+has_cached() { # policies
+    case " $1 " in *" cached "* | *" cached-fixed "*) return 0 ;; esac
+    return 1
+}
+
 # Plain words for a policy as cards.conf names it.
 policy_words() { # policy
     case "$1" in
@@ -1329,8 +1335,8 @@ learn_cards() { # [quiet]
             say "  Decryption key:     $(policy_words "$2")"
             say "  Authentication key: $(policy_words "$3")"
         fi
-        if ! is_yubico "$serial"; then
-            say "  TouchGlass times the touch step by the policies of YubiKeys only, so for this card it keeps its default."
+        if ! is_yubico "$serial" && has_cached "$1 $2 $3"; then
+            say "  cached and cached-fixed are Yubico's values; for this card, TouchGlass treats them as unknown and keeps its default timing."
         fi
     done
     if [ -s "$learned" ]; then
@@ -1579,7 +1585,7 @@ cmd_status() {
         say "Touch policies:"
         printf '%s\n' "$cards" | while read -r serial sign decrypt auth; do
             note=""
-            if ! is_yubico "$serial"; then note=" (not a YubiKey: the host keeps its default)"; fi
+            if ! is_yubico "$serial" && has_cached "$sign $decrypt $auth"; then note=" (not a YubiKey: cached counts as unknown)"; fi
             say "  card $(display_serial "$serial"): sign $sign, decrypt $decrypt, auth $auth$note"
         done
     else

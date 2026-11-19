@@ -87,17 +87,45 @@ import TouchGlassIPC
         #expect(holdsBack(touchWait(&c, commandAt: 10)))
     }
 
-    @Test func offSlotNeverShowsAnInferredTouch() {
+    /// Whether `outputs` holds the touch wait back until `showAt` seconds.
+    func heldUntil(_ outputs: [HostOutput], _ showAt: TimeInterval) -> Bool {
+        outputs.contains { if case .schedule(_, .showTouch(_, let due)) = $0 { abs(due.timeIntervalSince(at(showAt))) < 1e-6 } else { false } }
+    }
+
+    @Test func offSlotShowsAnInferredTouchLate() throws {
         var c = HostCoordinator()
         learn(&c, [2: .off])
         start(&c, at: 0, op: .decrypt, slot: 2)
-        #expect(touchWait(&c, commandAt: 0).isEmpty)
-        #expect(c.takeLog().contains(.touchIgnored(conn: "100:p", serial: Self.display, slot: 2)))
-        // Nothing showed, so nothing to close.
+        let held = touchWait(&c, commandAt: 0)
+        #expect(heldUntil(held, TouchTiming.offDetectionThreshold) && !shows(held))
+        #expect(c.takeLog().contains {
+            if case let .touchDeferredNoTouchPolicy("100:p", Self.display, 2, showIn) = $0 { abs(showIn - 2.6) < 1e-6 } else { false }
+        })
+        // A slow card that answers first: nothing shows.
         #expect(end(&c, at: 1.2).isEmpty)
-        // A pinpad prompt is scdaemon's word: it shows.
-        start(&c, at: 5, op: .decrypt, slot: 2)
-        #expect(shows(touchWait(&c, commandAt: 5, pinpad: true)))
+        // A card that does wait for a touch, because its policy changed: the panel shows at 3 s, with the
+        // countdown from the command.
+        start(&c, at: 10, op: .decrypt, slot: 2)
+        _ = touchWait(&c, commandAt: 10)
+        let shown = c.fire(.showTouch(operation: "100:p", at: at(13)), now: at(13))
+        let wait = try #require(shown.compactMap { if case .panel(.show(.touchWait(let w))) = $0 { w } else { nil } }.first)
+        #expect(wait.deadline == at(10 + TouchTiming.cardTimeout))
+        // A pinpad prompt is scdaemon's word: it shows at once.
+        _ = end(&c, at: 14)
+        start(&c, at: 20, op: .decrypt, slot: 2)
+        #expect(shows(touchWait(&c, commandAt: 20, pinpad: true)))
+    }
+
+    /// After a PIN prompt, an `off` key still waits 3 s: the verifying state stays meanwhile.
+    @Test func offSlotHoldsBackAfterAPinToo() {
+        var c = HostCoordinator()
+        learn(&c, [1: .off])
+        start(&c, at: 0)
+        _ = c.handle(.pinNeeded(ConnRef(conn: "100:p")), from: proxy, now: at(0.1))
+        _ = c.handle(.getPin(GetPin(id: "r1", desc: "Please unlock the card", owner: nil)), from: 2, now: at(0.2))
+        _ = c.handle(.submit("123456"))
+        let outputs = c.handle(.touchWait(TouchGlassIPC.TouchWait(conn: "100:p", at: at(2).timeIntervalSince1970)), from: proxy, now: at(2.4))
+        #expect(heldUntil(outputs, 2 + TouchTiming.offDetectionThreshold) && !shows(outputs))
     }
 
     @Test func offSlotDoesNotRestartTheWindow() {
@@ -118,12 +146,20 @@ import TouchGlassIPC
         #expect(holdsBack(touchWait(&c, commandAt: 5)))
     }
 
-    @Test func otherCardsKeepTheDefault() {
+    /// off, on and fixed come from the OpenPGP card specification, so they count for any card.
+    @Test func otherCardsUseTheStandardPolicies() {
         var c = HostCoordinator()
-        learn(&c, [1: .on, 2: .off], serial: Self.otherSerial)
+        learn(&c, [1: .on, 2: .off, 3: .cached], serial: Self.otherSerial)
         touchedOperation(&c, serial: Self.otherSerial)
         start(&c, at: 5, serial: Self.otherSerial)
-        #expect(holdsBack(touchWait(&c, commandAt: 5)))
+        #expect(shows(touchWait(&c, commandAt: 5)))
+        _ = end(&c, at: 6)
+        start(&c, at: 7, op: .decrypt, slot: 2, serial: Self.otherSerial)
+        #expect(heldUntil(touchWait(&c, commandAt: 7), 7 + TouchTiming.offDetectionThreshold))
+        _ = end(&c, at: 8)
+        // cached is Yubico's value: the default window, which is the same.
+        start(&c, at: 9, op: .auth, slot: 3, serial: Self.otherSerial)
+        #expect(heldUntil(touchWait(&c, commandAt: 9), 9 + TouchTiming.cachedDetectionThreshold))
     }
 
     @Test func explicitTouchCacheOverridesThePolicy() {
@@ -134,8 +170,9 @@ import TouchGlassIPC
         start(&c, at: 25)
         #expect(holdsBack(touchWait(&c, commandAt: 25)))
         _ = end(&c, at: 26)
+        // Inside the configured window, the off key gets the window's delay, not its own.
         start(&c, at: 40, op: .decrypt, slot: 2)
-        #expect(!touchWait(&c, commandAt: 40).isEmpty)
+        #expect(heldUntil(touchWait(&c, commandAt: 40), 40 + TouchTiming.cachedDetectionThreshold))
 
         var off = HostCoordinator(touchCache: 0)
         learn(&off, [1: .cached])
@@ -224,11 +261,16 @@ import TouchGlassIPC
         var plain = HostCoordinator()
         start(&plain, at: 0)
         #expect(queryTimers(end(&plain, at: 0.2)).isEmpty)
-        // Not a YubiKey.
+        // Not an OpenPGP card.
         var other = HostCoordinator()
         helloWithGnuPG(&other)
-        start(&other, at: 0, serial: Self.otherSerial)
+        start(&other, at: 0, serial: "0123456789")
         #expect(queryTimers(end(&other, at: 0.2)).isEmpty)
+        // Another maker's OpenPGP card: its standard policies count, so it is asked.
+        var maker = HostCoordinator()
+        helloWithGnuPG(&maker)
+        start(&maker, at: 0, serial: Self.otherSerial)
+        #expect(queryTimers(end(&maker, at: 0.2)) == ["87654321"])
         // An explicit touch-cache doesn't use the policy.
         var fixed = HostCoordinator(touchCache: 15)
         helloWithGnuPG(&fixed)
@@ -248,7 +290,7 @@ import TouchGlassIPC
         helloWithGnuPG(&c)
         learn(&c, [1: .off])
         start(&c, at: 0)
-        #expect(touchWait(&c, commandAt: 0).isEmpty)
+        #expect(!shows(touchWait(&c, commandAt: 0)))
         #expect(queryTimers(end(&c, at: 15, result: .timeout)) == [Self.display])
         _ = c.fire(.queryPolicy(serial: Self.display), now: at(18))
         _ = c.policyQueried(serial: Self.serial, slots: [1: .off], now: at(18.1))

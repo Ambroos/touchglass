@@ -1,6 +1,6 @@
 # Configure TouchGlass
 
-TouchGlass works without configuration. Three places hold its settings: `host.conf` for the panel, the app's user defaults for sounds, and `pinentry.conf` for the pinentry helper. Both files are in `~/Library/Application Support/TouchGlass`, with one `key = value` per line and `#` at the start of a comment line. The host and the pinentry ignore unknown keys and invalid values. TouchGlass also learns the touch policy of each YubiKey you use and keeps it in `cards.conf` in the same directory; see [Touch policies](#touch-policies).
+TouchGlass works without configuration. Three places hold its settings: `host.conf` for the panel, the app's user defaults for sounds, and `pinentry.conf` for the pinentry helper. Both files are in `~/Library/Application Support/TouchGlass`, with one `key = value` per line and `#` at the start of a comment line. The host and the pinentry ignore unknown keys and invalid values. TouchGlass also learns the touch policy of each card you use and keeps it in `cards.conf` in the same directory; see [Touch policies](#touch-policies).
 
 ## Panel settings
 
@@ -32,21 +32,21 @@ The helpers start the host again on the next prompt or card operation.
 
 ## Touch policies
 
-A YubiKey sets a touch policy for each of its three OpenPGP keys: the signature, decryption and authentication key. The policy decides when the card waits for a touch, and the card sends nothing while it waits, so TouchGlass needs the policy to time the touch step. With `touch-cache = auto`, the default, the host times each operation by the policy of the key it uses:
+An OpenPGP card with a touch button, such as a YubiKey, sets a touch policy for each of its three OpenPGP keys: the signature, decryption and authentication key. The policy decides when the card waits for a touch, and the card sends nothing while it waits, so TouchGlass needs the policy to time the touch step. With `touch-cache = auto`, the default, the host times each operation by the policy of the key it uses:
 
 | Policy | What the card does | What the panel does |
 | --- | --- | --- |
 | `cached`, `cached-fixed` | Waits for a touch, then accepts operations without one for 15 seconds after each use. | Within 15 seconds after the card's last operation, shows the touch step only after the card stays silent for 1.5 seconds, and nothing for an operation that finishes sooner. Otherwise, after 0.4 seconds. |
 | `on`, `fixed` | Waits for a touch for every operation. | Shows the touch step after 0.4 seconds. |
-| `off` | Never waits for a touch. | Shows no touch step when the card is slow to answer. |
+| `off` | Never waits for a touch. | Shows the touch step only after the card stays silent for 3 seconds, and nothing for an operation that finishes sooner. A slow card stays without a panel, and a key whose policy changed since TouchGlass learned it still gets one. |
 | Not learned yet | Any of these. | As for `cached`. |
 
-The `fixed` variants can't change without replacing the key; for the panel, they behave as the others. For a card from another maker, the host uses the `cached` timing whatever the card reports, because the cached policies and the 15-second window are Yubico's.
+The `fixed` variants can't change without replacing the key; for the panel, they behave as the others. The OpenPGP card specification defines `off`, `on` and `fixed`, so they count for a card from any maker. `cached` and `cached-fixed` are Yubico's values: on a card from another maker, the host treats them as not learned.
 
 TouchGlass reads the policies from the card's User Interaction Flag data objects. Reading them needs no PIN and no touch. The host learns them in two ways:
 
 - When gpg-agent reads the card's data, for example for `gpg --card-status`, the policies pass through `touchglass-scdaemon`, which reports them to the host.
-- After an operation on a YubiKey whose policy the host doesn't know, the host asks gpg-agent once, 3 seconds after the operation ended and while no other operation runs. It runs `gpg-connect-agent --no-autostart --homedir <your GnuPG home> 'scd serialno --demand=<card serial>' 'scd getattr UIF' /bye`. The first command picks the card the way gpg-agent does before each operation, so with several cards attached, the host reads the right one. The host asks again if a key it learned as `off` waits for a touch until the card times out, at most once a minute.
+- After an operation on an OpenPGP card whose policy the host doesn't know, the host asks gpg-agent once, 3 seconds after the operation ended and while no other operation runs. It runs `gpg-connect-agent --no-autostart --homedir <your GnuPG home> 'scd serialno --demand=<card serial>' 'scd getattr UIF' /bye`. The first command picks the card the way gpg-agent does before each operation, so with several cards attached, the host reads the right one. The host asks again if a key it learned as `off` waits for a touch until the card times out, at most once a minute.
 
 The host stores the policies in `~/Library/Application Support/TouchGlass/cards.conf`, one card per line, and reads the file again when it changes. A reading replaces what the file held for that card.
 

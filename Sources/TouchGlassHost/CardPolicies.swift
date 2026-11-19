@@ -21,6 +21,12 @@ public struct CardTouchPolicy: Sendable, Equatable {
     /// Whether the serial is an OpenPGP application ID with Yubico's manufacturer ID, 0006.
     public var isYubico: Bool { Self.isYubico(serial) }
 
+    /// Whether the serial is an OpenPGP application ID, which `GETATTR UIF` can answer for.
+    public static func isOpenPGP(_ serial: String) -> Bool {
+        let compact = serial.uppercased().filter { !$0.isWhitespace }
+        return compact.count == 32 && compact.hasPrefix("D276000124") && compact.allSatisfy(\.isHexDigit)
+    }
+
     public static func isYubico(_ serial: String) -> Bool {
         let compact = serial.uppercased().filter { !$0.isWhitespace }
         return compact.count == 32 && compact.hasPrefix("D276000124") && compact.dropFirst(16).prefix(4) == "0006"

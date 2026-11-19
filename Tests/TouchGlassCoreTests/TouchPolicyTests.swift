@@ -21,30 +21,29 @@ import Testing
         #expect(OperationKind.unknown.cardSlot == nil)
     }
 
-    @Test func autoFollowsAYubiKeysPolicy() {
+    @Test func autoFollowsThePolicy() {
         func handling(_ policy: TouchPolicy?) -> TouchHandling {
-            TouchTiming.handling(setting: .auto, policy: policy, isYubico: true)
+            TouchTiming.handling(setting: .auto, policy: policy)
         }
         #expect(handling(.cached) == .cacheWindow(15))
         #expect(handling(.cachedFixed) == .cacheWindow(15))
         #expect(handling(.on) == .everyTime)
         #expect(handling(.fixed) == .everyTime)
-        #expect(handling(.off) == .never)
+        #expect(handling(.off) == .noTouch)
         // Unknown: the default from before TouchGlass learned policies.
         #expect(handling(nil) == .cacheWindow(15))
     }
 
-    @Test func autoIgnoresThePolicyOfOtherCards() {
-        for policy in [TouchPolicy.off, .on, .cached, nil] {
-            #expect(TouchTiming.handling(setting: .auto, policy: policy, isYubico: false) == .cacheWindow(15))
-        }
+    @Test func offShowsLaterThanTheCacheWindow() {
+        #expect(TouchTiming.offDetectionThreshold == 3)
+        #expect(TouchTiming.offDetectionThreshold > TouchTiming.cachedDetectionThreshold)
     }
 
     @Test func anExplicitSettingWins() {
         for policy in [TouchPolicy.off, .on, .fixed, .cached, nil] {
-            #expect(TouchTiming.handling(setting: 30, policy: policy, isYubico: true) == .cacheWindow(30))
-            #expect(TouchTiming.handling(setting: .seconds(15), policy: policy, isYubico: true) == .cacheWindow(15))
-            #expect(TouchTiming.handling(setting: 0, policy: policy, isYubico: true) == .everyTime)
+            #expect(TouchTiming.handling(setting: 30, policy: policy) == .cacheWindow(30))
+            #expect(TouchTiming.handling(setting: .seconds(15), policy: policy) == .cacheWindow(15))
+            #expect(TouchTiming.handling(setting: 0, policy: policy) == .everyTime)
         }
     }
 

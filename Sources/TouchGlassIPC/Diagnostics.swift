@@ -103,8 +103,8 @@ public enum LogEvent: Sendable, Equatable {
     case touchShown(conn: String, sinceCommand: TimeInterval, deferred: Bool)
     case touchQueued(conn: String)
     case touchSkipped(conn: String, result: OperationResult)
-    /// The card's slot has no touch policy, so the host showed nothing for an inferred touch wait.
-    case touchIgnored(conn: String, serial: String, slot: Int)
+    /// The card's slot has no touch policy, so the host holds an inferred touch wait back.
+    case touchDeferredNoTouchPolicy(conn: String, serial: String, slot: Int, showIn: TimeInterval)
     /// The host asks gpg-agent for a card's touch policies.
     case touchPolicyQuery(serial: String)
     case touchPolicyQueryFailed(serial: String)
@@ -198,8 +198,8 @@ public enum LogEvent: Sendable, Equatable {
             return "\(Self.conn(conn)) touch wait queued"
         case let .touchSkipped(conn, result):
             return "\(Self.conn(conn)) op ended \(result.rawValue) before its deferred touch panel: nothing shown"
-        case let .touchIgnored(conn, serial, slot):
-            return "\(Self.conn(conn)) touch wait on card \(Self.card(serial)) slot \(slot), whose touch policy is off: nothing shown"
+        case let .touchDeferredNoTouchPolicy(conn, serial, slot, showIn):
+            return "\(Self.conn(conn)) touch wait on card \(Self.card(serial)) slot \(slot), whose touch policy is off: panel deferred \(Self.ms(showIn))"
         case let .touchPolicyQuery(serial):
             return "touch policy: asking gpg-agent about card \(Self.card(serial))"
         case let .touchPolicyQueryFailed(serial):

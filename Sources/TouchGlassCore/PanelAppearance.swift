@@ -19,7 +19,7 @@ public struct HostSettings: Sendable, Equatable {
     /// Overrides the touch countdown length that the scdaemon proxy reports, in seconds.
     public var touchTimeout: TimeInterval?
     /// How long a touch stays cached on the card: `auto` follows each card's learned touch policy, a number of
-    /// seconds applies to every card. See `TouchTiming.handling(setting:policy:isYubico:)`.
+    /// seconds applies to every card. See `TouchTiming.handling(setting:policy:)`.
     public var touchCache: TouchCacheSetting = .auto
 
     public init(appearance: PanelAppearance = .readable, showClient: Bool = true, touchTimeout: TimeInterval? = nil, touchCache: TouchCacheSetting = .auto) {

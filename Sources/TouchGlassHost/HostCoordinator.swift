@@ -357,7 +357,10 @@ public struct HostCoordinator: Sendable {
                 operation.touchStart = start
                 operation.touchDeadline = deadline
                 operations[next] = operation
-                if cached != nil, let held = holdBack(next, operation: &operation, start: start, now: now) { return held }
+                if let threshold = holdBackThreshold(for: operation, inWindow: cached != nil),
+                   let held = holdBack(next, operation: &operation, start: start, now: now, threshold: threshold) {
+                    return held
+                }
                 return showTouch(next, operation: operation, deadline: deadline, now: now)
             }
             return []
@@ -494,11 +497,13 @@ public struct HostCoordinator: Sendable {
         operation.touchInferred = wait.pinpad != true
         operations[wait.conn] = operation
 
-        // A slot without a touch policy never waits for a touch: the silence is a slow card. A pinpad
-        // prompt is scdaemon's own word, so it shows anyway.
-        if wait.pinpad != true, handling(for: operation) == .never {
-            log.append(.touchIgnored(conn: wait.conn, serial: operation.serial, slot: operation.slot ?? 0))
-            return []
+        // A pinpad prompt is scdaemon's own word: it shows at once.
+        if wait.pinpad != true, handling(for: operation) == .noTouch {
+            // The key needs no touch, so the silence is most likely a slow card, also after a PIN prompt.
+            if let held = holdBack(wait.conn, operation: &operation, start: start, now: now, threshold: TouchTiming.offDetectionThreshold) {
+                return held
+            }
+            return placeTouch(wait.conn, operation: operation, deadline: deadline, now: now, deferred: false)
         }
 
         // After a PIN prompt, the touch step replaces the verifying state at once: the user is at the panel,
@@ -506,7 +511,7 @@ public struct HostCoordinator: Sendable {
         let followsPIN: Bool
         if case .cardPIN(_, _, wait.conn?, _, true) = shown { followsPIN = true } else { followsPIN = false }
         if !followsPIN, cacheWindowStart(for: operation, at: start) != nil,
-           let held = holdBack(wait.conn, operation: &operation, start: start, now: now) {
+           let held = holdBack(wait.conn, operation: &operation, start: start, now: now, threshold: TouchTiming.cachedDetectionThreshold) {
             return held
         }
         return placeTouch(wait.conn, operation: operation, deadline: deadline, now: now, deferred: false)
@@ -517,7 +522,7 @@ public struct HostCoordinator: Sendable {
     func handling(for operation: CardOperation) -> TouchHandling {
         let card = policies[operation.serial]
         let policy = operation.slot.flatMap { card?.slots[$0] }
-        return TouchTiming.handling(setting: touchCache, policy: policy, isYubico: CardTouchPolicy.isYubico(operation.cardSerial))
+        return TouchTiming.handling(setting: touchCache, policy: policy)
     }
 
     /// When the touch cache window of the operation's card is open at `date` for the operation's slot,
@@ -529,16 +534,27 @@ public struct HostCoordinator: Sendable {
         return last
     }
 
-    /// Inside the touch cache window, holds the touch wait of `conn` back until `cachedDetectionThreshold`
-    /// after `start`, the card command's start. Returns nil when that time has passed already, so the caller
-    /// places the touch wait now.
-    private mutating func holdBack(_ conn: String, operation: inout CardOperation, start: Date, now: Date) -> [HostOutput]? {
-        let showAt = start.addingTimeInterval(TouchTiming.cachedDetectionThreshold)
+    /// How long a queued touch wait waits after its command: for a key without a touch policy, and inside
+    /// the touch cache window. Nil shows it now.
+    private func holdBackThreshold(for operation: CardOperation, inWindow: Bool) -> TimeInterval? {
+        if handling(for: operation) == .noTouch { return TouchTiming.offDetectionThreshold }
+        return inWindow ? TouchTiming.cachedDetectionThreshold : nil
+    }
+
+    /// Holds the touch wait of `conn` back until `threshold` after `start`, the card command's start: inside
+    /// the touch cache window, or for a key whose touch policy is `off`. Returns nil when that time has
+    /// passed already, so the caller places the touch wait now.
+    private mutating func holdBack(_ conn: String, operation: inout CardOperation, start: Date, now: Date, threshold: TimeInterval) -> [HostOutput]? {
+        let showAt = start.addingTimeInterval(threshold)
         let delay = showAt.timeIntervalSince(now)
         guard delay > 0 else { return nil }
         operation.touchShowAt = showAt
         operations[conn] = operation
-        log.append(.touchDeferred(conn: conn, serial: operation.serial, showIn: delay, sinceCommand: now.timeIntervalSince(start)))
+        if threshold == TouchTiming.offDetectionThreshold, handling(for: operation) == .noTouch {
+            log.append(.touchDeferredNoTouchPolicy(conn: conn, serial: operation.serial, slot: operation.slot ?? 0, showIn: delay))
+        } else {
+            log.append(.touchDeferred(conn: conn, serial: operation.serial, showIn: delay, sinceCommand: now.timeIntervalSince(start)))
+        }
         return [.schedule(after: delay, .showTouch(operation: conn, at: showAt))]
     }
 
@@ -587,12 +603,16 @@ public struct HostCoordinator: Sendable {
         if let operation, operation.touchShowAt != nil {
             log.append(.touchSkipped(conn: end.conn, result: end.result))
         }
-        // Each operation the card completes uses its touch, a fresh one or the cached one, and restarts the
-        // window, unless its slot has no touch policy. A slot whose policy isn't known counts as touched.
+        // When the card's touch cache window restarts. Assumed, not checked on a card:
+        // - One touch covers every key on the card, so the window belongs to the card, not to one key.
+        // - Every operation that the card completes restarts the window, on any key of the card, also on a key
+        //   whose policy is `on` or `fixed`, because it took a fresh touch.
+        // - An operation on a key whose policy is `off` doesn't restart it, because it took no touch.
+        // - A key whose policy isn't known counts as touched.
         var policyOutputs: [HostOutput] = []
         if let operation {
             let handling = handling(for: operation)
-            if end.result == .ok, operation.kind != .unknown, handling != .never, handling != .cacheWindow(0) {
+            if end.result == .ok, operation.kind != .unknown, handling != .noTouch, handling != .cacheWindow(0) {
                 lastCardUse[operation.serial] = now
                 if case .cacheWindow(let seconds) = handling {
                     log.append(.touchCacheRestarted(serial: operation.serial, seconds: seconds))
@@ -680,12 +700,12 @@ public struct HostCoordinator: Sendable {
 
     /// After an operation ends, schedules a query for its card's policies when the host doesn't know them,
     /// or when the card contradicted them: a slot learned as `off` waited for a touch until it timed out.
-    /// Only for a YubiKey, whose policies the host uses, under `touch-cache = auto`, and only through a
-    /// proxy that said where its GnuPG is.
+    /// Only for an OpenPGP card, under `touch-cache = auto`, and only through a proxy that said where its
+    /// GnuPG is.
     private mutating func schedulePolicyQuery(after operation: CardOperation, end: OpEnd, now: Date) -> [HostOutput] {
-        guard touchCache == .auto, let gnupg = operation.gnupg, CardTouchPolicy.isYubico(operation.cardSerial) else { return [] }
+        guard touchCache == .auto, let gnupg = operation.gnupg, CardTouchPolicy.isOpenPGP(operation.cardSerial) else { return [] }
         let display = operation.serial
-        let contradicted = end.result == .timeout && operation.touchInferred && handling(for: operation) == .never
+        let contradicted = end.result == .timeout && operation.touchInferred && handling(for: operation) == .noTouch
         switch policyQueries[display]?.state {
         case .scheduled:
             return []

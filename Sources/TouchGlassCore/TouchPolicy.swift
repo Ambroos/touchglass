@@ -73,24 +73,25 @@ public enum TouchHandling: Sendable, Equatable {
     case cacheWindow(TimeInterval)
     /// Show the touch step at once: the card asks for a touch on every operation.
     case everyTime
-    /// The slot needs no touch, so the card's silence is something else: show no touch step.
-    case never
+    /// The slot needs no touch, so the card's silence is most likely something else: show the touch step
+    /// only after `TouchTiming.offDetectionThreshold`, in case the policy changed since it was learned.
+    case noTouch
 }
 
 extension TouchTiming {
-    /// How to treat a touch wait for a slot with `policy`, nil when unknown, on a card that is a YubiKey
-    /// or not. An explicit `touch-cache` setting wins over the policy. Without one, only a YubiKey's
-    /// policy counts, because the cached policies and the 15 s window are Yubico's; any other card, and a
-    /// YubiKey slot whose policy isn't known, gets the cached window, as before TouchGlass learned policies.
-    public static func handling(setting: TouchCacheSetting, policy: TouchPolicy?, isYubico: Bool) -> TouchHandling {
+    /// How to treat a touch wait for a slot with `policy`, nil when unknown. An explicit `touch-cache`
+    /// setting wins over the policy. Without one, `off`, `on` and `fixed` count for any card, because the
+    /// OpenPGP card specification defines them. An unknown policy gets the cached window, as before
+    /// TouchGlass learned policies. `cached` and `cached-fixed` are Yubico's values; on another card they
+    /// count as unknown, which gives the same window.
+    public static func handling(setting: TouchCacheSetting, policy: TouchPolicy?) -> TouchHandling {
         if let seconds = setting.fixedSeconds {
             return seconds > 0 ? .cacheWindow(seconds) : .everyTime
         }
-        guard isYubico, let policy else { return .cacheWindow(touchCacheWindow) }
         switch policy {
-        case .cached, .cachedFixed: return .cacheWindow(touchCacheWindow)
         case .on, .fixed: return .everyTime
-        case .off: return .never
+        case .off: return .noTouch
+        case .cached, .cachedFixed, nil: return .cacheWindow(touchCacheWindow)
         }
     }
 }

@@ -1079,9 +1079,12 @@ stub_cards
 printf '%s\n' "$OTHER %01+ %01+ %01+" "$YK2" > "$T/cards"
 tg card
 check "other maker named without YubiKey" out_has "Card 87654321:"
-check "other maker keeps the default" out_has "for this card it keeps its default"
+check "other maker's standard policies count" sh -c "! grep -q 'treats them as unknown' '$T/out'"
 check "no button" out_has "Reports no touch policy."
 check "button-less card stored as unknown" grep -qx "$YK2 = unknown unknown unknown" "$SUPPORT/cards.conf"
+printf '%s\n' "$OTHER %03+ %01+ %00+" > "$T/cards"
+tg card
+check "cached on another card is noted" out_has "for this card, TouchGlass treats them as unknown"
 
 begin "card: notes a touch-cache setting"
 stub_cards
@@ -1103,7 +1106,11 @@ printf '%s\n' "# comment" "$YK1 = cached on off" "$OTHER = on" "garbage" > "$SUP
 printf '%s\n' "touch-cache = 30" > "$SUPPORT/host.conf"
 tg status
 check "lists the YubiKey" out_has "  card 1234567: sign cached, decrypt on, auth off"
-check "lists the other card" out_has "  card 87654321: sign on, decrypt unknown, auth unknown (not a YubiKey: the host keeps its default)"
+check "lists the other card" out_has "  card 87654321: sign on, decrypt unknown, auth unknown"
+check "no note for standard policies" sh -c "! grep -q 'not a YubiKey' '$T/out'"
+printf '%s\n' "$OTHER = cached on off" > "$SUPPORT/cards.conf"
+tg status
+check "notes cached on another card" out_has "  card 87654321: sign cached, decrypt on, auth off (not a YubiKey: cached counts as unknown)"
 check "touch-cache override" out_has "touch-cache:       30 seconds for every card"
 
 begin "install learns an attached card"
