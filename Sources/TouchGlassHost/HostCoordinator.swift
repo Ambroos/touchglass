@@ -27,6 +27,8 @@ public enum HostTimer: Sendable, Equatable {
     /// Show a touch wait that was held back inside the touch cache window, if the operation still waits.
     /// `at` tells this timer from one of an earlier touch wait of the same operation.
     case showTouch(operation: String, at: Date)
+    /// Ask gpg-agent for the touch policy of the card with this display serial, if the host is idle.
+    case queryPolicy(serial: String)
     /// Exit if the host is still idle; see `HostOutput.exit`. A timer whose generation is not the
     /// coordinator's current one was scheduled before the host was busy again, and does nothing.
     case retire(generation: Int)
@@ -63,6 +65,11 @@ public enum HostOutput: Sendable, Equatable {
     /// Find out what asked for an operation or request, off the main thread, and report it with
     /// `clientResolved(_:label:)`. The panel never waits for it.
     case resolveClient(ClientSubject, ClientQuery)
+    /// Ask gpg-agent for the touch policies of the card with `serial`, off the main thread, and report them
+    /// with `policyQueried(serial:slots:now:)`.
+    case queryCardPolicy(serial: String, GnuPGContext)
+    /// Store the learned touch policies in `cards.conf`.
+    case saveCardPolicies([CardTouchPolicy])
     /// Stop listening and exit the process. A helper of a later release connected, so this host runs code
     /// that `brew upgrade` replaced; the next helper that needs the host starts the installed version.
     case exit
@@ -81,6 +88,12 @@ public struct HostCoordinator: Sendable {
     /// How long after a touch deadline the coordinator waits for the card's own timeout reply before it
     /// drops the operation.
     public static let touchExpiryGrace: TimeInterval = 2
+    /// How long the host waits after an operation on a card with an unknown touch policy before it asks
+    /// gpg-agent for the policy. Long enough that a burst of operations, such as a rebase that signs each
+    /// commit, has ended, so the query never stands between two of them.
+    public static let policyQueryDelay: TimeInterval = 3
+    /// The shortest time between two queries for the same card after a card contradicted its learned policy.
+    public static let policyRequeryInterval: TimeInterval = 60
     /// How long a retiring host stays idle before it exits, by default: longer than a result state shows,
     /// so the panel finishes what it shows, and a pinentry that connects meanwhile keeps the host.
     public static let defaultRetireAfterIdle: TimeInterval = 6
@@ -90,6 +103,14 @@ public struct HostCoordinator: Sendable {
         var number = 0
         var kind: TouchGlassCore.OperationKind
         var serial: String
+        /// The serial as scdaemon reported it, the card's application ID; empty when unknown.
+        var cardSerial = ""
+        /// The OpenPGP key slot: from the proxy, else the slot that the kind uses by default.
+        var slot: Int?
+        /// The host connection's GnuPG installation, for a policy query; see `Hello.gnupg`.
+        var gnupg: GnuPGContext?
+        /// The proxy inferred a touch wait for this operation.
+        var touchInferred = false
         var pinNeeded = false
         var touchDeadline: Date?
         /// The countdown length for this operation, in seconds: the `touch-timeout` setting, or else the card's.
@@ -146,15 +167,35 @@ public struct HostCoordinator: Sendable {
     /// See `defaultRetireAfterIdle`.
     public var retireAfterIdle = Self.defaultRetireAfterIdle
 
-    /// How long the card keeps a touch, in seconds: the `touch-cache` setting. 0 turns the cache window off.
-    public var touchCache: TimeInterval
-    /// When each card's touch cache window ends, by display serial. Every successful operation on the card
-    /// restarts it, from any proxy: the cache belongs to the card, not to one scdaemon session.
-    private(set) var touchCacheEnds: [String: Date] = [:]
+    /// The `touch-cache` setting: `auto` follows each card's learned policy, a number of seconds sets one
+    /// window for all, and 0 turns the window off.
+    public var touchCache: TouchCacheSetting
+    /// When each card last completed an operation that used its touch, by display serial. It restarts the
+    /// card's touch cache window, from any proxy: the cache belongs to the card, not to one scdaemon session.
+    private(set) var lastCardUse: [String: Date] = [:]
+    /// The learned touch policies, by display serial.
+    private(set) var policies: [String: CardTouchPolicy] = [:]
+    /// The GnuPG installation that each proxy connection reported in its hello.
+    private(set) var gnupgContexts: [ConnectionID: GnuPGContext] = [:]
+    /// Policy queries by display serial: when each was last scheduled or run. A card gets one query per
+    /// host run, and another only after it contradicted the learned policy.
+    private(set) var policyQueries: [String: PolicyQuery] = [:]
+
+    struct PolicyQuery: Sendable, Equatable {
+        var serial: String
+        var gnupg: GnuPGContext
+        var state: State
+        enum State: Sendable, Equatable {
+            /// A `queryPolicy` timer is pending.
+            case scheduled
+            /// Asked at that time, or a result arrived.
+            case asked(Date)
+        }
+    }
     /// Diagnostic events for the unified log, taken by `takeLog()`. Pure state: the session writes them.
     private(set) var log: [LogEvent] = []
 
-    public init(touchTimeout: TimeInterval? = nil, touchCache: TimeInterval = TouchTiming.touchCacheWindow, version: String? = nil) {
+    public init(touchTimeout: TimeInterval? = nil, touchCache: TouchCacheSetting = .auto, version: String? = nil) {
         self.touchTimeout = touchTimeout
         self.touchCache = touchCache
         self.version = version
@@ -176,7 +217,12 @@ public struct HostCoordinator: Sendable {
         switch message {
         case .opStart(let start):
             let number = nextOperationNumber()
-            operations[start.conn] = CardOperation(number: number, kind: Self.kind(start.op), serial: Self.displaySerial(start.serial), reporter: connection)
+            let kind = Self.kind(start.op)
+            var operation = CardOperation(number: number, kind: kind, serial: Self.displaySerial(start.serial), reporter: connection)
+            operation.cardSerial = start.serial?.uppercased() ?? ""
+            operation.slot = start.slot ?? kind.cardSlot
+            operation.gnupg = gnupgContexts[connection]
+            operations[start.conn] = operation
             operationOrder.removeAll { $0 == start.conn }
             operationOrder.append(start.conn)
             // PKAUTH comes from an ssh client on the agent's ssh socket; signatures and decryptions come
@@ -197,6 +243,8 @@ public struct HostCoordinator: Sendable {
             return touchWait(wait, from: connection, now: now)
         case .opEnd(let end):
             return operationEnded(end, now: now)
+        case .touchPolicy(let report):
+            return policyReported(report)
         case .getPin(let request):
             return getPin(request, from: connection)
         case .confirm(let request):
@@ -207,13 +255,14 @@ public struct HostCoordinator: Sendable {
             return requestEnded(ref.id)
         case .hello(let hello):
             if hello.role == .pinentry { pinentryConnections.insert(connection) }
+            if hello.role == .proxy, let gnupg = hello.gnupg { gnupgContexts[connection] = gnupg }
             log.append(.hello(id: connection, role: hello.role, build: hello.build))
             if let version, let build = hello.build, BuildInfo.isNewer(build, than: version) {
                 if !retiring { log.append(.retireDecision(hostVersion: version, helperBuild: build)) }
                 retiring = true
             }
             return []
-        case .touchPolicy, .ping, .pong, .pin, .confirmed, .notConfirmed, .cancelled, .fallback, .unknown:
+        case .ping, .pong, .pin, .confirmed, .notConfirmed, .cancelled, .fallback, .unknown:
             return []
         }
     }
@@ -226,6 +275,7 @@ public struct HostCoordinator: Sendable {
 
     private mutating func closeConnection(_ connection: ConnectionID, now: Date) -> [HostOutput] {
         pinentryConnections.remove(connection)
+        gnupgContexts[connection] = nil
         var outputs: [HostOutput] = []
         for conn in operationOrder where operations[conn]?.reporter == connection {
             outputs += operationEnded(OpEnd(conn: conn, result: .cancelled), now: now)
@@ -301,7 +351,7 @@ public struct HostCoordinator: Sendable {
                 // counting from that operation's end.
                 let timeout = operation.touchTimeout ?? touchTimeout ?? TouchTiming.cardTimeout
                 var start = now.addingTimeInterval(-TouchTiming.detectionThreshold)
-                let cached = cacheWindowStart(serial: operation.serial, at: now)
+                let cached = cacheWindowStart(for: operation, at: now)
                 if let cached { start = max(cached, start) }
                 let deadline = start.addingTimeInterval(timeout)
                 operation.touchStart = start
@@ -316,6 +366,17 @@ public struct HostCoordinator: Sendable {
             operation.touchShowAt = nil
             operations[conn] = operation
             return placeTouch(conn, operation: operation, deadline: deadline, now: now, deferred: true)
+        case .queryPolicy(let serial):
+            guard var query = policyQueries[serial], query.state == .scheduled else { return [] }
+            guard operations.isEmpty else {
+                // The card is busy again: the next operation's end schedules the query anew.
+                policyQueries[serial] = nil
+                return []
+            }
+            query.state = .asked(now)
+            policyQueries[serial] = query
+            log.append(.touchPolicyQuery(serial: query.serial))
+            return [.queryCardPolicy(serial: query.serial, query.gnupg)]
         case .verifyWatchdog(let requestID):
             guard case .cardPIN(requestID, _, _, _, true) = shown else { return [] }
             shown = nil
@@ -430,24 +491,42 @@ public struct HostCoordinator: Sendable {
         operation.pinNeeded = false
         operation.touchStart = start
         operation.touchShowAt = nil
+        operation.touchInferred = wait.pinpad != true
         operations[wait.conn] = operation
+
+        // A slot without a touch policy never waits for a touch: the silence is a slow card. A pinpad
+        // prompt is scdaemon's own word, so it shows anyway.
+        if wait.pinpad != true, handling(for: operation) == .never {
+            log.append(.touchIgnored(conn: wait.conn, serial: operation.serial, slot: operation.slot ?? 0))
+            return []
+        }
 
         // After a PIN prompt, the touch step replaces the verifying state at once: the user is at the panel,
         // and the card asks for the touch right after the PIN.
         let followsPIN: Bool
         if case .cardPIN(_, _, wait.conn?, _, true) = shown { followsPIN = true } else { followsPIN = false }
-        if !followsPIN, cacheWindowStart(serial: operation.serial, at: start) != nil,
+        if !followsPIN, cacheWindowStart(for: operation, at: start) != nil,
            let held = holdBack(wait.conn, operation: &operation, start: start, now: now) {
             return held
         }
         return placeTouch(wait.conn, operation: operation, deadline: deadline, now: now, deferred: false)
     }
 
-    /// When the touch cache window of `serial` is open at `date`, the time it last restarted: when the card
-    /// last finished an operation. Nil when the window is closed or off.
-    private func cacheWindowStart(serial: String, at date: Date) -> Date? {
-        guard touchCache > 0, let end = touchCacheEnds[serial], end > date else { return nil }
-        return end.addingTimeInterval(-touchCache)
+    /// How the touch wait of `operation` is treated: the `touch-cache` setting, or the learned policy of
+    /// its card and slot.
+    func handling(for operation: CardOperation) -> TouchHandling {
+        let card = policies[operation.serial]
+        let policy = operation.slot.flatMap { card?.slots[$0] }
+        return TouchTiming.handling(setting: touchCache, policy: policy, isYubico: CardTouchPolicy.isYubico(operation.cardSerial))
+    }
+
+    /// When the touch cache window of the operation's card is open at `date` for the operation's slot,
+    /// the time it last restarted: when the card last finished an operation. Nil when the window is closed,
+    /// or the slot doesn't use it.
+    private func cacheWindowStart(for operation: CardOperation, at date: Date) -> Date? {
+        guard case .cacheWindow(let seconds) = handling(for: operation), let last = lastCardUse[operation.serial],
+              last.addingTimeInterval(seconds) > date else { return nil }
+        return last
     }
 
     /// Inside the touch cache window, holds the touch wait of `conn` back until `cachedDetectionThreshold`
@@ -509,10 +588,17 @@ public struct HostCoordinator: Sendable {
             log.append(.touchSkipped(conn: end.conn, result: end.result))
         }
         // Each operation the card completes uses its touch, a fresh one or the cached one, and restarts the
-        // window. The policy isn't visible on the wire, so this holds for a key without a touch policy too.
-        if let operation, end.result == .ok, operation.kind != .unknown, touchCache > 0 {
-            touchCacheEnds[operation.serial] = now.addingTimeInterval(touchCache)
-            log.append(.touchCacheRestarted(serial: operation.serial, seconds: touchCache))
+        // window, unless its slot has no touch policy. A slot whose policy isn't known counts as touched.
+        var policyOutputs: [HostOutput] = []
+        if let operation {
+            let handling = handling(for: operation)
+            if end.result == .ok, operation.kind != .unknown, handling != .never, handling != .cacheWindow(0) {
+                lastCardUse[operation.serial] = now
+                if case .cacheWindow(let seconds) = handling {
+                    log.append(.touchCacheRestarted(serial: operation.serial, seconds: seconds))
+                }
+            }
+            policyOutputs = schedulePolicyQuery(after: operation, end: end, now: now)
         }
 
         let isShown: Bool
@@ -523,7 +609,7 @@ public struct HostCoordinator: Sendable {
         }
         guard isShown else {
             // A touch wait that never showed, such as one queued behind a prompt, can't leave the panel stuck.
-            return shown == nil || shown == .result ? rearmIfQueued() : []
+            return (shown == nil || shown == .result ? rearmIfQueued() : []) + policyOutputs
         }
 
         let kind = operation?.kind ?? .unknown
@@ -546,7 +632,70 @@ public struct HostCoordinator: Sendable {
         if !queuedTouch.isEmpty {
             outputs.append(.schedule(after: succeeded ? Self.rearmAfterSuccess : Self.rearmAfterFailure, .rearm))
         }
-        return outputs
+        return outputs + policyOutputs
+    }
+
+    // MARK: Touch policies
+
+    /// Replaces the learned policies with those from `cards.conf`.
+    public mutating func loadPolicies(_ cards: [CardTouchPolicy]) {
+        policies = Dictionary(cards.map { ($0.displaySerial, $0) }, uniquingKeysWith: { _, last in last })
+    }
+
+    /// A gpg-agent query for a card's policies ended; `slots` is nil when it failed.
+    public mutating func policyQueried(serial: String, slots: [Int: TouchPolicy]?, now: Date) -> [HostOutput] {
+        tracking(learnPolicies(serial: serial, slots: slots, now: now))
+    }
+
+    private mutating func learnPolicies(serial: String, slots: [Int: TouchPolicy]?, now: Date) -> [HostOutput] {
+        let display = Self.displaySerial(serial)
+        if var query = policyQueries[display] {
+            query.state = .asked(now)
+            policyQueries[display] = query
+        }
+        guard let slots else {
+            log.append(.touchPolicyQueryFailed(serial: display))
+            return []
+        }
+        // A fresh reading replaces every slot, so a policy that changed with ykman doesn't linger.
+        return storePolicy(CardTouchPolicy(serial: serial, slots: slots))
+    }
+
+    /// An `S UIF-<n>` line passed through a proxy: replace that slot.
+    private mutating func policyReported(_ report: TouchPolicyReport) -> [HostOutput] {
+        let display = Self.displaySerial(report.serial)
+        guard (1...3).contains(report.slot), !display.isEmpty else { return [] }
+        var card = policies[display] ?? CardTouchPolicy(serial: report.serial, slots: [:])
+        card.serial = report.serial.uppercased()
+        card.slots[report.slot] = report.uif.flatMap { $0 >= 0 && $0 <= 255 ? TouchPolicy(uif: UInt8($0)) : nil }
+        return storePolicy(card)
+    }
+
+    private mutating func storePolicy(_ card: CardTouchPolicy) -> [HostOutput] {
+        guard policies[card.displaySerial] != card else { return [] }
+        policies[card.displaySerial] = card
+        log.append(.touchPolicyLearned(serial: card.displaySerial, policies: card.summary))
+        return [.saveCardPolicies(policies.values.sorted { $0.serial < $1.serial })]
+    }
+
+    /// After an operation ends, schedules a query for its card's policies when the host doesn't know them,
+    /// or when the card contradicted them: a slot learned as `off` waited for a touch until it timed out.
+    /// Only for a YubiKey, whose policies the host uses, under `touch-cache = auto`, and only through a
+    /// proxy that said where its GnuPG is.
+    private mutating func schedulePolicyQuery(after operation: CardOperation, end: OpEnd, now: Date) -> [HostOutput] {
+        guard touchCache == .auto, let gnupg = operation.gnupg, CardTouchPolicy.isYubico(operation.cardSerial) else { return [] }
+        let display = operation.serial
+        let contradicted = end.result == .timeout && operation.touchInferred && handling(for: operation) == .never
+        switch policyQueries[display]?.state {
+        case .scheduled:
+            return []
+        case .asked(let at):
+            guard contradicted, now.timeIntervalSince(at) >= Self.policyRequeryInterval else { return [] }
+        case nil:
+            guard policies[display] == nil || contradicted else { return [] }
+        }
+        policyQueries[display] = PolicyQuery(serial: operation.cardSerial, gnupg: gnupg, state: .scheduled)
+        return [.schedule(after: Self.policyQueryDelay, .queryPolicy(serial: display))]
     }
 
     enum Outcome: Equatable {

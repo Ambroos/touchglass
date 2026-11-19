@@ -23,6 +23,12 @@ public final class HostSession {
     private let resolverQueue = DispatchQueue(label: "TouchGlass client lookup", qos: .userInitiated)
     /// Runs after the session stopped for `HostOutput.exit`. The app exits the process here.
     private let onRetire: @MainActor () -> Void
+    /// `cards.conf`; nil keeps learned policies in memory only.
+    private let policyStore: CardPolicyStore?
+    /// Asks gpg-agent for touch policies; nil never asks.
+    private let policyQuery: CardPolicyQuerying?
+    /// Queries run one at a time, off the main thread.
+    private let policyQueue = DispatchQueue(label: "TouchGlass touch policy query", qos: .utility)
     private let log = TouchGlassLog(.host)
     private var lastPanelLog: LogEvent?
 
@@ -34,7 +40,9 @@ public final class HostSession {
         panel: PanelDriving,
         resolver: ClientResolving? = nil,
         touchTimeout: TimeInterval? = nil,
-        touchCache: TimeInterval = TouchTiming.touchCacheWindow,
+        touchCache: TouchCacheSetting = .auto,
+        policyStore: CardPolicyStore? = nil,
+        policyQuery: CardPolicyQuerying? = nil,
         version: String? = nil,
         retireAfterIdle: TimeInterval = HostCoordinator.defaultRetireAfterIdle,
         onRetire: @escaping @MainActor () -> Void = {}
@@ -43,7 +51,10 @@ public final class HostSession {
         self.panel = panel
         self.resolver = resolver
         self.onRetire = onRetire
+        self.policyStore = policyStore
+        self.policyQuery = policyQuery
         coordinator = HostCoordinator(touchTimeout: touchTimeout, touchCache: touchCache, version: version)
+        if let policyStore { coordinator.loadPolicies(policyStore.load()) }
         coordinator.retireAfterIdle = retireAfterIdle
 
         var actions = PanelActions()
@@ -56,7 +67,7 @@ public final class HostSession {
     }
 
     public func start() {
-        log(.hostStarted(version: coordinator.version, touchTimeout: coordinator.touchTimeout, touchCache: coordinator.touchCache))
+        log(.hostStarted(version: coordinator.version, touchTimeout: coordinator.touchTimeout, touchCache: coordinator.touchCache.fixedSeconds))
         server.start(
             onMessage: { [weak self] message, connection in self?.receive(message, from: connection) },
             onClose: { [weak self] connection in self?.closed(connection) }
@@ -68,6 +79,10 @@ public final class HostSession {
     }
 
     public func receive(_ message: IPCMessage, from connection: ConnectionID) {
+        // `touchglass card` may have written the file meanwhile.
+        if case .opStart = message, let policyStore, let cards = policyStore.reloadIfChanged() {
+            coordinator.loadPolicies(cards)
+        }
         perform(coordinator.handle(message, from: connection, now: Date()))
     }
 
@@ -109,6 +124,17 @@ public final class HostSession {
                         self.perform(self.coordinator.clientResolved(subject, label: label))
                     }
                 }
+            case .queryCardPolicy(let serial, let gnupg):
+                guard let policyQuery else { continue }
+                policyQueue.async { [weak self] in
+                    let slots = policyQuery.query(serial: serial, gnupg: gnupg)
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self else { return }
+                        self.perform(self.coordinator.policyQueried(serial: serial, slots: slots, now: Date()))
+                    }
+                }
+            case .saveCardPolicies(let cards):
+                policyStore?.save(cards)
             case .exit:
                 // Removes the socket first, so a helper that connects from now on starts the installed host.
                 stop()

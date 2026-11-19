@@ -127,7 +127,7 @@ import TouchGlassIPC
         for (i, startAt) in [10.0, 22, 34].enumerated() {
             start(&c, "100:p", at: startAt)
             _ = end(&c, "100:p", at: startAt + 0.2)
-            #expect(c.touchCacheEnds[TouchCacheTests.displaySerial] == at(startAt + 0.2 + TouchTiming.touchCacheWindow), "operation \(i)")
+            #expect(c.lastCardUse[TouchCacheTests.displaySerial] == at(startAt + 0.2), "operation \(i)")
         }
         // 46 s is 43 s past the touch, but 11.8 s after the last operation.
         start(&c, "100:p", at: 46)
@@ -227,10 +227,13 @@ import TouchGlassIPC
     // MARK: Settings
 
     @Test func touchCacheSetting() {
-        #expect(HostSettings.parse("").touchCache == 15)
+        #expect(HostSettings.parse("").touchCache == .auto)
+        #expect(HostSettings.parse("touch-cache = auto").touchCache == .auto)
+        #expect(HostSettings.parse("touch-cache = AUTO").touchCache == .auto)
         #expect(HostSettings.parse("touch-cache = 0").touchCache == 0)
         #expect(HostSettings.parse("touch-cache = 30").touchCache == 30)
-        #expect(HostSettings.parse("touch-cache = -1").touchCache == 15)
-        #expect(HostSettings.parse("touch-cache = soon").touchCache == 15)
+        #expect(HostSettings.parse("touch-cache = 15").touchCache == .seconds(15))
+        #expect(HostSettings.parse("touch-cache = -1").touchCache == .auto)
+        #expect(HostSettings.parse("touch-cache = soon").touchCache == .auto)
     }
 }

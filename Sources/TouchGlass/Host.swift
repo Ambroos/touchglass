@@ -31,6 +31,8 @@ func runHost() {
         resolver: settings.showClient ? ClientResolver() : nil,
         touchTimeout: settings.touchTimeout,
         touchCache: settings.touchCache,
+        policyStore: CardPolicyStore(),
+        policyQuery: GnuPGCardPolicyQuery(),
         // Read now: after brew upgrade, the bundle path shows the next release's Info.plist.
         version: BuildInfo.version,
         onRetire: { exit(0) }

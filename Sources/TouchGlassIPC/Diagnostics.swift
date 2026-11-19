@@ -91,7 +91,8 @@ public enum LogEvent: Sendable, Equatable {
     case launcherRefresh(LauncherRefreshReason, started: Bool)
 
     // TouchGlass host
-    case hostStarted(version: String?, touchTimeout: TimeInterval?, touchCache: TimeInterval)
+    /// `touchCache` is nil for `auto`.
+    case hostStarted(version: String?, touchTimeout: TimeInterval?, touchCache: TimeInterval?)
     case connectionOpened(id: Int)
     case connectionClosed(id: Int)
     case hello(id: Int, role: PeerRole, build: String?)
@@ -102,6 +103,13 @@ public enum LogEvent: Sendable, Equatable {
     case touchShown(conn: String, sinceCommand: TimeInterval, deferred: Bool)
     case touchQueued(conn: String)
     case touchSkipped(conn: String, result: OperationResult)
+    /// The card's slot has no touch policy, so the host showed nothing for an inferred touch wait.
+    case touchIgnored(conn: String, serial: String, slot: Int)
+    /// The host asks gpg-agent for a card's touch policies.
+    case touchPolicyQuery(serial: String)
+    case touchPolicyQueryFailed(serial: String)
+    /// The host stored new touch policies for a card; `policies` names them per slot, such as "sign cached".
+    case touchPolicyLearned(serial: String, policies: String)
     case panelShow(PanelStateName)
     case panelDismiss
     case panelUserClosed
@@ -169,7 +177,7 @@ public enum LogEvent: Sendable, Equatable {
                 return "command copy: release \(installed) is older than helper release \(helper): \(outcome)"
             }
         case let .hostStarted(version, timeout, cache):
-            return "host started: release \(version ?? "dev"), touch-timeout \(timeout.map { Self.seconds($0) } ?? "card"), touch-cache \(Self.seconds(cache))"
+            return "host started: release \(version ?? "dev"), touch-timeout \(timeout.map { Self.seconds($0) } ?? "card"), touch-cache \(cache.map { Self.seconds($0) } ?? "auto")"
         case let .connectionOpened(id):
             return "connection \(id) opened"
         case let .connectionClosed(id):
@@ -190,6 +198,14 @@ public enum LogEvent: Sendable, Equatable {
             return "\(Self.conn(conn)) touch wait queued"
         case let .touchSkipped(conn, result):
             return "\(Self.conn(conn)) op ended \(result.rawValue) before its deferred touch panel: nothing shown"
+        case let .touchIgnored(conn, serial, slot):
+            return "\(Self.conn(conn)) touch wait on card \(Self.card(serial)) slot \(slot), whose touch policy is off: nothing shown"
+        case let .touchPolicyQuery(serial):
+            return "touch policy: asking gpg-agent about card \(Self.card(serial))"
+        case let .touchPolicyQueryFailed(serial):
+            return "touch policy: query for card \(Self.card(serial)) failed"
+        case let .touchPolicyLearned(serial, policies):
+            return "touch policy: card \(Self.card(serial)) \(policies)"
         case let .panelShow(state):
             return "panel: \(state.rawValue)"
         case .panelDismiss:

@@ -37,6 +37,8 @@ import Testing
     @Test func logShowsTheLastFourDigits() {
         let event = LogEvent.touchPolicySeen(conn: "12:p", serial: "D2760001240100000006123456780000", slot: 1, uif: 3)
         #expect(event.message == "12:p touch policy: card …5678 slot 1 UIF 03")
+        #expect(LogEvent.touchPolicyLearned(serial: "12345678", policies: "sign cached").message == "touch policy: card …5678 sign cached")
+        #expect(!LogEvent.touchPolicyQuery(serial: "D2760001240100000006123456780000").message.contains("1234"))
     }
 }
 
