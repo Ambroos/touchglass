@@ -37,7 +37,7 @@ struct PanelContentView: View {
         let crossfade = AnyTransition.opacity.animation(.easeInOut(duration: 0.2 * model.animationScale))
         let textKey = presentation.title + "\n" + (presentation.detail ?? "") + (presentation.attemptsLine ?? "")
 
-        // A result has no controls: its glyph, title and message form one group, centred in the panel.
+        // An error has no controls: its glyph, title and message form one group, centred in the panel.
         // Other states give the stage the room that the text and controls leave.
         let centred = presentation.centresContent
 
@@ -342,6 +342,8 @@ private struct ControlsView: View {
                 .id(prompt)
         case .countdown(let wait):
             CountdownLine(wait: wait, now: now)
+        case .countdownPlaceholder:
+            Text(verbatim: " ").font(.callout).hidden()
         case .confirm(let cancel, let ok):
             HStack(spacing: 8) {
                 Button { model.actions.cancel() } label: { Text(verbatim: cancel).frame(maxWidth: .infinity) }

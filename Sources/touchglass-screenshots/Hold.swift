@@ -30,9 +30,9 @@ enum HoldState: String, CaseIterable {
     var client: String? {
         switch self {
         case .pinEntry, .pinRetry: "git commit · touchglass"
-        case .touch: "git push origin · touchglass"
+        case .touch, .success: "git push origin · touchglass"
         case .ssh: "ssh github.com"
-        case .success, .wrongPIN, .timeout: nil
+        case .wrongPIN, .timeout: nil
         }
     }
 }
@@ -131,7 +131,7 @@ final class HoldRunner {
             let operation: OperationKind = hold == .ssh ? .sshLogin : .sign
             return .touchWait(TouchWait.detected(operation: operation, cardSerial: Self.serial, now: now, client: client))
         case .success:
-            return .success(.sign)
+            return .success(.sign, client: client)
         case .wrongPIN:
             return .failure(.wrongPIN)
         case .timeout:

@@ -429,7 +429,7 @@ public struct HostCoordinator: Sendable {
         switch Self.outcome(end, touchTimeout: operation?.touchTimeout ?? touchTimeout ?? TouchTiming.cardTimeout) {
         case .success:
             shown = .result
-            outputs = [.panel(.show(.success(kind)))]
+            outputs = [.panel(.show(.success(kind, client: operation?.client)))]
             succeeded = true
         case .failure(let failure):
             shown = .result

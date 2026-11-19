@@ -261,7 +261,7 @@ final class DemoRunner {
             let touched = await inbox.next([.touched], timeout: min(options.touchAfter, untilDeadline))
             if touched != nil || options.touchAfter < untilDeadline {
                 controls.touchEnabled = false
-                controller.send(.show(.success(operation)))
+                controller.send(.show(.success(operation, client: wait.client)))
                 await waitUntilClosed()
             } else {
                 await failure(.touchTimeout(seconds: Int(TouchTiming.cardTimeout)))
@@ -270,7 +270,7 @@ final class DemoRunner {
             // Touching is still possible, to try the success path from a late phase.
             if await inbox.next([.touched], timeout: untilDeadline) != nil {
                 controls.touchEnabled = false
-                controller.send(.show(.success(operation)))
+                controller.send(.show(.success(operation, client: wait.client)))
                 await waitUntilClosed()
             } else {
                 await failure(.touchTimeout(seconds: Int(TouchTiming.cardTimeout)))

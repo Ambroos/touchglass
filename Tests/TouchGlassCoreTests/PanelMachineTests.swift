@@ -235,12 +235,12 @@ import Testing
     }
 }
 
-/// The layout each state asks for. The view centres a result's glyph, title and message as one group.
+/// The layout each state asks for. The view centres an error's glyph, title and message as one group.
 @Suite struct PresentationLayoutTests {
     let wait = TouchWait.detected(operation: .sign, cardSerial: "12345678")
 
-    @Test func resultsAreCentredGroupsWithoutControls() {
-        let results: [PanelState] = [.success(.sign), .success(.sshLogin), .failure(.wrongPIN), .failure(.touchTimeout(seconds: 15)), .failure(.cardRemoved)]
+    @Test func errorsAreCentredGroupsWithoutControls() {
+        let results: [PanelState] = [.failure(.wrongPIN), .failure(.touchTimeout(seconds: 15)), .failure(.cardRemoved)]
         for state in results {
             let presentation = PanelPresentation(state)
             #expect(presentation.centresContent)
@@ -250,16 +250,29 @@ import Testing
     }
 
     @Test func promptsAndTheTouchStepAreNotCentred() {
-        let states: [PanelState] = [.pinEntry(PinRequest(operation: .sign, cardSerial: "12345678")), .touchWait(wait), .message(MessageRequest(title: "t", detail: "d"))]
+        let states: [PanelState] = [.pinEntry(PinRequest(operation: .sign, cardSerial: "12345678")), .touchWait(wait), .success(.sign), .message(MessageRequest(title: "t", detail: "d"))]
         for state in states {
             #expect(!PanelPresentation(state).centresContent)
         }
     }
 
-    /// The touch ring and the result have different layouts, so the step crossfades in place instead
-    /// of moving the ring.
-    @Test func successIsItsOwnLayoutGroup() {
-        #expect(PanelPresentation(.success(.sign)).layoutGroup != PanelPresentation(.touchWait(wait)).layoutGroup)
-        #expect(PanelPresentation(.success(.sign)).stage == .ring(nil, completed: true))
+    /// Success keeps the touch step's layout: the ring stays and fills in place, the title takes the
+    /// title slot, and what asked takes the detail slot. The countdown and client slots stay reserved,
+    /// so nothing moves.
+    @Test func successKeepsTheTouchLayout() {
+        let touch = PanelPresentation(.touchWait(wait))
+        let success = PanelPresentation(.success(.sign, client: "git commit · touchglass"))
+        #expect(success.layoutGroup == touch.layoutGroup)
+        #expect(success.stage == .ring(nil, completed: true))
+        #expect(success.title == "Signed")
+        #expect(success.detail == "git commit · touchglass")
+        #expect(success.reservesClientLine == touch.reservesClientLine)
+        #expect(success.controls == .countdownPlaceholder)
+        #expect(PanelPresentation(.success(.sign)).detail == nil)
+    }
+
+    /// A client label is not a new state: success with and without one compare equal without it.
+    @Test func successClientIsALabel() {
+        #expect(PanelState.success(.sign, client: "git").withoutClient == .success(.sign))
     }
 }

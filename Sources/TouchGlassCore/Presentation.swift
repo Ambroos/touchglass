@@ -37,6 +37,8 @@ public enum Controls: Sendable, Equatable {
     /// `prompt` is the request's `promptID`: the field starts empty when it changes.
     case secureField(placeholder: String, minimumLength: Int, cancel: String, submit: String, busy: Bool, prompt: String?)
     case countdown(TouchWait)
+    /// Keeps the countdown slot's height in the success state, so the ring does not move.
+    case countdownPlaceholder
     case confirm(cancel: String, ok: String)
     case acknowledge(ok: String)
 }
@@ -59,8 +61,8 @@ public struct PanelPresentation: Sendable, Equatable {
     /// Identifies which states share a layout, so that changes inside a group do not crossfade.
     public var layoutGroup: String
 
-    /// A result: no controls, so the stage, title and detail form one group centred in the panel
-    /// instead of the stage taking the room above the text.
+    /// An error result: no controls, so the stage, title and detail form one group centred in the
+    /// panel instead of the stage taking the room above the text. Success keeps the touch step's layout.
     public var centresContent: Bool { controls == .none }
 
     public var announcement: String {
@@ -181,18 +183,19 @@ extension PanelPresentation {
                 controls: .countdown(wait),
                 layoutGroup: "touch"
             )
-        case .success(let kind):
+        case .success(let kind, let client):
+            // The touch step's layout: the ring stays where it was and fills into the checkmark, the
+            // title takes the title slot and what asked takes the detail slot.
             self.init(
                 stage: .ring(nil, completed: true),
                 title: Copy.successTitle(kind),
-                detail: nil,
+                detail: client,
                 detailIsError: false,
-                detailLineLimit: 2,
+                detailLineLimit: 1,
+                reservesClientLine: true,
                 attemptsLine: nil,
-                controls: .none,
-                // A layout of its own, centred like the failure states: the touch ring crossfades into
-                // the completed one.
-                layoutGroup: "result"
+                controls: .countdownPlaceholder,
+                layoutGroup: "touch"
             )
         case .failure(let failure):
             let (glyph, title, detail) = Self.failureCopy(failure)

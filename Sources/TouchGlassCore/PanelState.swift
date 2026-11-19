@@ -160,7 +160,8 @@ public enum PanelState: Sendable, Equatable {
     case verifying(PinRequest)
     case passphrase(PassphraseRequest)
     case touchWait(TouchWait)
-    case success(OperationKind)
+    /// The card operation succeeded. `client` is what asked for it, as the touch step showed it.
+    case success(OperationKind, client: String? = nil)
     case failure(Failure)
     case confirm(ConfirmRequest)
     case message(MessageRequest)
@@ -180,7 +181,9 @@ public enum PanelState: Sendable, Equatable {
         case .touchWait(var wait):
             wait.client = nil
             return .touchWait(wait)
-        case .success, .failure, .confirm, .message:
+        case .success(let kind, _):
+            return .success(kind)
+        case .failure, .confirm, .message:
             return self
         }
     }

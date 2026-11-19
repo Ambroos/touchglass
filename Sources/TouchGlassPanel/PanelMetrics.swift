@@ -13,8 +13,8 @@ public enum PanelMetrics {
     /// same opacity as a glass tint, so it is lighter than sample H's 65% tint.
     static let smokeColor = NSColor(srgbRed: 0.13, green: 0.12, blue: 0.11, alpha: 0.5)
 
-    /// Between the stage and the title of a centred result. In the PIN and touch steps, the 16 pt
-    /// padding plus the stage's spare height come to 22–24 pt; a result matches that.
+    /// Between the stage and the title of a centred error. In the PIN and touch steps, the 16 pt
+    /// padding plus the stage's spare height come to 22–24 pt; an error matches that.
     static let centredStageSpacing: CGFloat = 22
 
     static let ringDiameter: CGFloat = 96

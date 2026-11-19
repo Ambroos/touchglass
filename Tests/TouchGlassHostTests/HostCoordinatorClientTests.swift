@@ -62,6 +62,16 @@ import TouchGlassIPC
         #expect(try #require(touch(&coordinator)).client == "ssh example-host")
     }
 
+    /// The success state keeps the label that the touch step showed.
+    @Test func successCarriesTheLabel() throws {
+        var coordinator = HostCoordinator()
+        _ = start(&coordinator)
+        _ = coordinator.clientResolved(.operation(first()), label: "git commit · example")
+        _ = try #require(touch(&coordinator))
+        let ended = panelEvents(coordinator.handle(.opEnd(OpEnd(conn: "100:p", result: .ok)), from: proxy, now: now))
+        #expect(ended == [.show(.success(.sign, client: "git commit · example"))])
+    }
+
     @Test func noLabelOrAnEndedOperationChangesNothing() throws {
         var coordinator = HostCoordinator()
         _ = start(&coordinator)
@@ -178,7 +188,7 @@ import TouchGlassIPC
 
     @Test func promptsAndTouchReserveTheLineAndOthersDoNot() {
         #expect(PanelPresentation(.pinEntry(PinRequest(operation: .sign, cardSerial: ""))).reservesClientLine)
-        #expect(!PanelPresentation(.success(.sign)).reservesClientLine)
+        #expect(PanelPresentation(.success(.sign)).reservesClientLine)
         #expect(!PanelPresentation(.failure(.wrongPIN)).reservesClientLine)
         #expect(!PanelPresentation(.message(TouchGlassCore.MessageRequest(title: "t", detail: "d"))).reservesClientLine)
     }
