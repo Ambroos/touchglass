@@ -1,6 +1,7 @@
 import AppKit
 import Testing
 import TouchGlassCore
+import enum TouchGlassIPC.LogEvent
 @testable import TouchGlassPanel
 
 /// Drives `PanelController` with its real window, so a test sees what reaches the screen and not only the
@@ -153,6 +154,99 @@ import TouchGlassCore
         #expect(!controller.panel.allowsKey)
         #expect(controller.isPanelVisible)
         controller.send(.dismiss)
+    }
+
+    /// The key status requests a controller logs.
+    final class KeyRequests {
+        var events: [LogEvent] = []
+        var taken: [LogEvent] { events.filter { if case .panelKeyTaken = $0 { true } else { false } } }
+    }
+
+    func recordKeyRequests(_ controller: PanelController) -> KeyRequests {
+        let requests = KeyRequests()
+        controller.log = { requests.events.append($0) }
+        return requests
+    }
+
+    /// The window orders in empty and transparent, and the glass appears on the next pass of the main
+    /// queue. Key status waits for the glass, so focus never leaves the frontmost app for an empty window.
+    @Test func aPromptTakesKeyOnlyOnceTheGlassStartsToAppear() async {
+        let controller = makeController()
+        let requests = recordKeyRequests(controller)
+        controller.send(.show(pin))
+        #expect(controller.isPanelVisible)
+        #expect(!controller.model.surfaceShown)
+        #expect(requests.taken.isEmpty)
+        #expect(!controller.isPanelKey)
+        await waitUntil { !requests.taken.isEmpty }
+        #expect(controller.model.surfaceShown)
+        #expect(controller.isPanelKey)
+        guard case .panelKeyTaken(.pinEntry, .open, _, _, _)? = requests.taken.first else {
+            Issue.record("expected one open request, got \(requests.events)")
+            return
+        }
+        #expect(requests.taken.count == 1)
+        controller.send(.userClosed)
+    }
+
+    /// Touch, result and lingering states never ask for key status.
+    @Test func touchAndResultStatesNeverTakeKey() async throws {
+        let controller = makeController()
+        let requests = recordKeyRequests(controller)
+        controller.send(.show(touch()))
+        controller.send(.show(.success(.sign)))
+        controller.send(.dismiss)
+        controller.send(.show(touch(.sshLogin)))
+        controller.send(.show(.failure(.touchTimeout(seconds: 15))))
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(requests.taken.isEmpty)
+        #expect(!controller.isPanelKey)
+        controller.send(.userClosed)
+    }
+
+    /// A prompt closed before its entrance started never takes key status.
+    @Test func aPromptClosedBeforeItAppearsNeverTakesKey() async throws {
+        let controller = makeController()
+        let requests = recordKeyRequests(controller)
+        controller.send(.show(pin))
+        controller.send(.userClosed)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(requests.taken.isEmpty)
+        #expect(!controller.isPanelKey)
+    }
+
+    /// The user closed the prompt: the exit animation runs with the keyboard already back at the
+    /// frontmost app, and a resign of key status meanwhile is not undone, even within the re-take window
+    /// that guards the panel's own content changes.
+    @Test func aClosingPanelLetsGoOfTheKeyboard() async throws {
+        let controller = makeController(animationScale: 1)
+        let requests = recordKeyRequests(controller)
+        controller.send(.show(pin))
+        await waitUntil { !requests.taken.isEmpty }
+        #expect(controller.isPanelKey)
+        controller.send(.userClosed)
+        #expect(controller.isPanelVisible)
+        #expect(!controller.panel.allowsKey)
+        #expect(!controller.isPanelKey)
+        NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: controller.panel)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(requests.taken.count == 1)
+        #expect(!controller.isPanelKey)
+    }
+
+    /// A touch wait that follows a PIN prompt keeps the keyboard: the user just typed in the panel.
+    @Test func theTouchStepAfterAPINKeepsKey() async throws {
+        let controller = makeController()
+        let requests = recordKeyRequests(controller)
+        let request = PinRequest(operation: .sign, cardSerial: "12345678", promptID: "r1")
+        controller.send(.show(.pinEntry(request)))
+        await waitUntil { !requests.taken.isEmpty }
+        controller.send(.show(.verifying(request)))
+        controller.send(.show(touch()))
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(controller.isPanelKey)
+        controller.send(.dismiss)
+        #expect(!controller.isPanelKey)
     }
 
     // MARK: Close grace

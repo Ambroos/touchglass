@@ -32,7 +32,7 @@ The helpers start the host again on the next prompt or card operation.
 
 ## Read the log
 
-The helpers and the host write to the unified log under the subsystem `io.ambroos.touchglass`, with the categories `scdaemon`, `host` and `pinentry`. The log holds operation kinds, card serials, results, durations, panel state names and connection news. It never holds a PIN, a passphrase, the data that is signed or decrypted, or key material.
+The helpers and the host write to the unified log under the subsystem `io.ambroos.touchglass`, with the categories `scdaemon`, `host` and `pinentry`. The log holds operation kinds, card serials, results, durations, panel state names, connection news, and each time the panel takes or gives back keyboard focus, with the bundle ID of the frontmost app. It never holds a PIN, a passphrase, the data that is signed or decrypted, or key material.
 
 To watch the log while you use the card:
 
@@ -49,6 +49,8 @@ log show --last 10m --predicate 'subsystem == "io.ambroos.touchglass"' --info
 With `--level debug` for `log stream`, or `--debug` for `log show`, the log also shows every scdaemon command with its duration and each Assuan keyword that the pinentry handles. To show one component, add a category to the predicate, such as `subsystem == "io.ambroos.touchglass" AND category == "scdaemon"`.
 
 To tune `touch-cache`, look at the `op end` lines of the `scdaemon` category. Each one gives the time the card took after the command or the PIN. Operations that the cached touch covers take that time without a touch; the host's `touch wait inside … cache window` and `nothing shown` lines show which operations it held back.
+
+If focus leaves your terminal unexpectedly, look at the `panel: make key` and `panel: release key` lines of the `host` category. Each one names the panel state, why the panel asked for focus, and the frontmost app before and after.
 
 ## Sounds
 

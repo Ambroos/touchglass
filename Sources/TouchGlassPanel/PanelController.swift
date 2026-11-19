@@ -1,6 +1,10 @@
 import AppKit
 import SwiftUI
 import TouchGlassCore
+import enum TouchGlassIPC.LogEvent
+import enum TouchGlassIPC.PanelKeyReason
+import enum TouchGlassIPC.PanelStateName
+import struct TouchGlassIPC.TouchGlassLog
 
 /// Owns the panel window and performs the effects of `PanelMachine`.
 ///
@@ -34,6 +38,11 @@ public final class PanelController {
     /// The exit animation runs. An `open` meanwhile turns it around instead of starting over.
     private var closing = false
     private var escalation: [DispatchWorkItem] = []
+    /// The window is on screen but the glass has not started to appear. The panel takes no key status
+    /// until it has.
+    private var entrancePending = false
+    /// Tests replace this to see the key status changes.
+    var log: (LogEvent) -> Void = { TouchGlassLog(.host)($0) }
 
     public init(animationScale: Double = 1, settings: HostSettings = HostSettings()) {
         model.animationScale = animationScale
@@ -103,8 +112,9 @@ public final class PanelController {
             allowsKey = allowsKey || holdsState
             panel.allowsKey = allowsKey
             if allowsKey, panel.isVisible {
-                panel.makeKey()
-                guardKeyAfterOwnChange()
+                // During the entrance, `open` takes key status once the glass starts to appear.
+                guard !entrancePending, !closing else { return }
+                takeKey(.setKey)
             } else if !allowsKey, panel.isKeyWindow {
                 releaseKey()
             }
@@ -142,17 +152,62 @@ public final class PanelController {
     private var keyGuardUntil = Date.distantPast
     private var resignObserver: NSObjectProtocol?
 
+    /// Whether the panel may have key status now: a prompt, or the states after one that keep it (see
+    /// `PanelMachine.holdsKey`), is on screen, and the glass is appearing or shown. Never while hidden,
+    /// lingering, closing or before the entrance starts.
+    private var mayHoldKey: Bool {
+        guard panel.allowsKey, panel.isVisible, !entrancePending, !closing else { return false }
+        return holdsState || (machine.isVisible && machine.holdsKey)
+    }
+
+    /// Makes the panel key, logs it, and starts the guard against our own content changes.
+    private func takeKey(_ reason: PanelKeyReason) {
+        let before = Self.frontmostApp()
+        panel.makeKey()
+        log(.panelKeyTaken(state: shownStateName, reason: reason, isKey: panel.isKeyWindow, frontmostBefore: before, frontmostAfter: Self.frontmostApp()))
+        guardKeyAfterOwnChange()
+    }
+
+    private static func frontmostApp() -> String? {
+        NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+    }
+
+    private var shownStateName: PanelStateName? {
+        model.state.map(Self.name)
+    }
+
+    static func name(_ state: PanelState) -> PanelStateName {
+        switch state {
+        case .pinEntry: .pinEntry
+        case .verifying: .verifying
+        case .passphrase: .passphrase
+        case .touchWait: .touchWait
+        case .success: .success
+        case .failure: .failure
+        case .confirm: .confirm
+        case .message: .message
+        }
+    }
+
     /// Disabling the secure field for "verifying", or removing it for the touch step, takes
     /// first responder away, and AppKit then resigns the panel's key status. Re-take key status
-    /// if that happens within half a second of our own change. Later resigns come from the user
-    /// clicking elsewhere and are left alone.
+    /// if that happens within half a second of our own change and the panel may still hold it. Later
+    /// resigns come from the user clicking elsewhere and are left alone. The check runs again when the
+    /// re-take runs, because the state may change in between.
     private func guardKeyAfterOwnChange() {
         keyGuardUntil = Date().addingTimeInterval(0.5)
         guard resignObserver == nil else { return }
         resignObserver = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, self.panel.allowsKey, self.panel.isVisible, Date() < self.keyGuardUntil else { return }
-                DispatchQueue.main.async { self.panel.makeKey() }
+                guard let self, Date() < self.keyGuardUntil else { return }
+                DispatchQueue.main.async {
+                    guard Date() < self.keyGuardUntil, !self.panel.isKeyWindow else { return }
+                    if self.mayHoldKey {
+                        self.takeKey(.retake)
+                    } else {
+                        self.log(.panelKeyRetakeSkipped(state: self.shownStateName))
+                    }
+                }
             }
         }
     }
@@ -163,12 +218,14 @@ public final class PanelController {
     /// commits as one visual change, so the panel doesn't blink while it lingers or shows an error.
     private func releaseKey() {
         keyGuardUntil = .distantPast
+        let before = Self.frontmostApp()
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0
             context.allowsImplicitAnimation = false
             panel.orderOut(nil)
             panel.orderFrontRegardless()
         }
+        log(.panelKeyReleased(state: shownStateName, isKey: panel.isKeyWindow, frontmostBefore: before, frontmostAfter: Self.frontmostApp()))
     }
 
     // MARK: Entrance and exit
@@ -201,16 +258,16 @@ public final class PanelController {
             panel.setFrameOrigin(Placement.origin(on: screen))
         }
         panel.allowsKey = state.allowsKey || holdsState
+        entrancePending = true
         panel.orderFrontRegardless()
-        if panel.allowsKey {
-            panel.makeKey()
-            guardKeyAfterOwnChange()
-        }
 
         // Let the empty, transparent window reach the screen first, so the glass visibly
-        // materialises in place instead of appearing with the window.
+        // materialises in place instead of appearing with the window. The panel takes key status
+        // only then: an empty window that takes the keyboard reads as focus vanishing.
         DispatchQueue.main.async { [self] in
             guard generation == current else { return }
+            entrancePending = false
+            if mayHoldKey { takeKey(.open) }
             if reduceMotion {
                 withAnimation(.easeOut(duration: 0.16 * scale)) {
                     model.surfaceShown = true
@@ -238,10 +295,7 @@ public final class PanelController {
         let scale = model.animationScale
         withTransaction(Transaction(animation: nil)) { model.state = state }
         panel.allowsKey = state.allowsKey || holdsState
-        if panel.allowsKey {
-            panel.makeKey()
-            guardKeyAfterOwnChange()
-        }
+        if mayHoldKey { takeKey(.reverseClose) }
         if reduceMotion {
             withAnimation(.easeOut(duration: 0.16 * scale)) {
                 model.surfaceShown = true
@@ -262,9 +316,17 @@ public final class PanelController {
         let current = generation
         let scale = model.animationScale
         closing = true
+        entrancePending = false
+        // A closing panel takes no input, so the keyboard goes back to the frontmost app now, not after
+        // the exit animation.
+        if !holdsState {
+            panel.allowsKey = false
+            if panel.isKeyWindow { releaseKey() }
+        }
         let finish = { [weak self] in
             guard let self, self.generation == current else { return }
             self.closing = false
+            if self.panel.isKeyWindow { self.log(.panelOrderedOutWhileKey(state: self.shownStateName)) }
             self.panel.orderOut(nil)
             var instant = Transaction()
             instant.disablesAnimations = true

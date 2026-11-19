@@ -47,10 +47,23 @@ public enum PanelStateName: String, Sendable, Equatable {
     case message
 }
 
+/// Why the panel asked for key status, for the log.
+public enum PanelKeyReason: String, Sendable, Equatable {
+    /// The entrance of a prompt started.
+    case open
+    /// A state change on the visible panel, such as a prompt replacing a lingering state.
+    case setKey = "set-key"
+    /// The panel lost key status within half a second of its own content change and took it back.
+    case retake = "re-take after own change"
+    /// A prompt arrived during the exit animation, which turned around.
+    case reverseClose = "reverse close"
+}
+
 /// Something worth a line in the unified log.
 ///
 /// Log calls take only these events, and each case carries only typed, non-secret values: operation kinds,
-/// results, card serials (the panel shows them), connection IDs, releases and durations. No case takes a
+/// results, card serials (the panel shows them), connection IDs, releases, durations and the bundle IDs of
+/// frontmost apps. No case takes a
 /// line from the Assuan stream, a PIN, a passphrase, hash data or a `D` payload.
 public enum LogEvent: Sendable, Equatable {
     // touchglass-scdaemon
@@ -86,6 +99,15 @@ public enum LogEvent: Sendable, Equatable {
     case panelDismiss
     case panelUserClosed
     case panelUserHid
+    /// The panel asked for key status in `state`; `isKey` is whether it has it afterwards. The bundle IDs are
+    /// the frontmost app's before and after.
+    case panelKeyTaken(state: PanelStateName?, reason: PanelKeyReason, isKey: Bool, frontmostBefore: String?, frontmostAfter: String?)
+    /// The panel gave key status back to the frontmost app.
+    case panelKeyReleased(state: PanelStateName?, isKey: Bool, frontmostBefore: String?, frontmostAfter: String?)
+    /// The panel lost key status within the re-take window, but its state may not hold key, so it left it.
+    case panelKeyRetakeSkipped(state: PanelStateName?)
+    /// The exit animation ended and ordered the panel out while it still had key status.
+    case panelOrderedOutWhileKey(state: PanelStateName?)
 
     // touchglass-pinentry
     /// A line of the pinentry's diagnostic trace: fixed text, Assuan keywords, message types, request IDs and
@@ -159,9 +181,25 @@ public enum LogEvent: Sendable, Equatable {
             return "panel: closed by user"
         case .panelUserHid:
             return "panel: hidden by user"
+        case let .panelKeyTaken(state, reason, isKey, before, after):
+            return "panel: make key (\(reason.rawValue)) in \(Self.name(state)): \(isKey ? "key" : "not key"), frontmost \(Self.app(before)) -> \(Self.app(after))"
+        case let .panelKeyReleased(state, isKey, before, after):
+            return "panel: release key in \(Self.name(state)): \(isKey ? "still key" : "not key"), frontmost \(Self.app(before)) -> \(Self.app(after))"
+        case let .panelKeyRetakeSkipped(state):
+            return "panel: lost key in \(Self.name(state)), not taking it back"
+        case let .panelOrderedOutWhileKey(state):
+            return "panel: ordered out while key, after \(Self.name(state))"
         case let .pinentryTrace(text):
             return text
         }
+    }
+
+    static func name(_ state: PanelStateName?) -> String {
+        state?.rawValue ?? "no state"
+    }
+
+    static func app(_ bundleID: String?) -> String {
+        bundleID ?? "none"
     }
 
     static func ms(_ seconds: TimeInterval) -> String {

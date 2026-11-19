@@ -17,7 +17,7 @@ let package = Package(
         // Panel states, copy, timing and the state machine. Foundation and Observation only.
         .target(name: "TouchGlassCore"),
         // SwiftUI views and the AppKit panel window.
-        .target(name: "TouchGlassPanel", dependencies: ["TouchGlassCore"]),
+        .target(name: "TouchGlassPanel", dependencies: ["TouchGlassCore", "TouchGlassIPC"]),
         // The host: merges proxy and pinentry messages into panel events. Foundation only, no UI.
         .target(name: "TouchGlassHost", dependencies: ["TouchGlassCore", "TouchGlassIPC"]),
         // The app: the host with its panel, plus a demo mode.
