@@ -129,9 +129,33 @@ public final class LauncherRefresher: Sendable {
         return access(command, X_OK) == 0 ? command : nil
     }
 
-    /// Starts the command detached and reaps it on a background thread, so it leaves no zombie.
+    /// The whole environment of the refresh. Not the helper's: that is gpg-agent's, whose `PATH` can put
+    /// a project's `bin` directory first and whose `HOME` can differ from the home that `IPCPaths` uses.
+    /// The command resolves its tools from the system directories and finds the launchers in the same
+    /// support directory as the helper.
+    public static func refreshEnvironment() -> [String] {
+        var environment = [
+            "PATH=/usr/bin:/bin:/usr/sbin:/sbin",
+            "HOME=\(IPCPaths.homeDirectory)",
+        ]
+        if let temporary = userTemporaryDirectory() { environment.append("TMPDIR=\(temporary)") }
+        return environment
+    }
+
+    /// The per-user temporary directory, as `TMPDIR` normally holds it, or nil.
+    static func userTemporaryDirectory() -> String? {
+        let length = confstr(_CS_DARWIN_USER_TEMP_DIR, nil, 0)
+        guard length > 0 else { return nil }
+        var buffer = [CChar](repeating: 0, count: length)
+        guard confstr(_CS_DARWIN_USER_TEMP_DIR, &buffer, length) > 0 else { return nil }
+        let path = String(cString: buffer)
+        return path.isEmpty ? nil : path
+    }
+
+    /// Starts the command detached with `refreshEnvironment()` and reaps it on a background thread, so it
+    /// leaves no zombie.
     static let spawnDetached: Spawner = { path, arguments in
-        guard let pid = DetachedProcess.spawn(path, arguments: arguments) else { return false }
+        guard let pid = DetachedProcess.spawn(path, arguments: arguments, environment: refreshEnvironment()) else { return false }
         Thread.detachNewThread {
             var status: Int32 = 0
             while waitpid(pid, &status, 0) < 0 && errno == EINTR {}

@@ -18,6 +18,12 @@ set -eu
 # Byte-wise text handling: awk in a UTF-8 locale stops at a byte that isn't valid UTF-8, such as a
 # Latin-1 character in a comment.
 export LC_ALL=C
+# The helpers run refresh-launchers unattended, after an upgrade. Resolve its tools from the system
+# directories only, never from a PATH that gpg-agent or a shell put a project's bin directory first in.
+if [ "${1:-}" = refresh-launchers ]; then
+    PATH=/usr/bin:/bin:/usr/sbin:/sbin
+    export PATH
+fi
 
 prog=touchglass
 # scripts/build-app.sh replaces "dev" with the release version in the copy it bundles.

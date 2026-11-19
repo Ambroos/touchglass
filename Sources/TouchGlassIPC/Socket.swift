@@ -2,10 +2,15 @@ import Darwin
 import Foundation
 
 public enum IPCPaths {
+    /// The user's home directory from the user database. Ignores `HOME`, which gpg-agent's environment
+    /// can set to anything.
+    public static var homeDirectory: String {
+        FileManager.default.homeDirectoryForCurrentUser.path
+    }
+
     /// `~/Library/Application Support/TouchGlass`, created with mode 0700 by the host.
     public static var supportDirectory: String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return home + "/Library/Application Support/TouchGlass"
+        homeDirectory + "/Library/Application Support/TouchGlass"
     }
 
     /// The host's listening socket. The `TOUCHGLASS_SOCKET` environment variable overrides it, for tests.

@@ -145,6 +145,32 @@ import Testing
         #expect((try? String(contentsOfFile: marker, encoding: .utf8)) == "refresh-launchers null\n")
     }
 
+    /// The refresh gets the system PATH, the home from the user database and the user's temporary
+    /// directory, and nothing of the helper's environment.
+    @Test func realSpawnPassesOnlyTheFixedEnvironment() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("refresher-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let marker = root.appendingPathComponent("env").path
+        let command = root.appendingPathComponent("touchglass").path
+        let script = "#!/bin/sh\n/usr/bin/env > '\(marker).tmp'\n/bin/mv '\(marker).tmp' '\(marker)'\n"
+        FileManager.default.createFile(atPath: command, contents: Data(script.utf8), attributes: [.posixPermissions: 0o755])
+        #expect(LauncherRefresher.spawnDetached(command, [LauncherRefresher.command]))
+        let deadline = Date().addingTimeInterval(5)
+        while !FileManager.default.fileExists(atPath: marker), Date() < deadline { usleep(10_000) }
+        // sh adds its own PWD, SHLVL and _.
+        let shellOwn: Set = ["PWD", "SHLVL", "_", "OLDPWD"]
+        let lines = try String(contentsOfFile: marker, encoding: .utf8).split(separator: "\n").map(String.init)
+            .filter { !shellOwn.contains(String($0.prefix { $0 != "=" })) }
+        #expect(lines.sorted() == LauncherRefresher.refreshEnvironment().sorted())
+
+        let environment = LauncherRefresher.refreshEnvironment()
+        #expect(environment.contains("PATH=/usr/bin:/bin:/usr/sbin:/sbin"))
+        #expect(environment.contains("HOME=\(IPCPaths.homeDirectory)"))
+        let temporary = try #require(environment.first { $0.hasPrefix("TMPDIR=") })
+        #expect(temporary.count > "TMPDIR=/".count)
+    }
+
     /// The helpers and the command must agree on the launcher format, the variable and the release stamp.
     @Test func scriptWritesTheFormatTheHelpersExpect() throws {
         let script = URL(fileURLWithPath: #filePath)

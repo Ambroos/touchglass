@@ -4,8 +4,9 @@ import Darwin
 public enum DetachedProcess {
     /// Starts `path` with `arguments` and returns its PID, which the caller reaps. Stdio goes to
     /// `/dev/null` and no other descriptor is inherited, so the program never holds a helper's agent pipes
-    /// or sockets. The signals that helpers ignore or catch start with their default action.
-    public static func spawn(_ path: String, arguments: [String]) -> pid_t? {
+    /// or sockets. The signals that helpers ignore or catch start with their default action. `environment`
+    /// holds `NAME=value` entries; nil passes the helper's own environment.
+    public static func spawn(_ path: String, arguments: [String], environment: [String]? = nil) -> pid_t? {
         var actions: posix_spawn_file_actions_t?
         posix_spawn_file_actions_init(&actions)
         defer { posix_spawn_file_actions_destroy(&actions) }
@@ -30,6 +31,11 @@ public enum DetachedProcess {
         let argv = ([path] + arguments).map { strdup($0) } + [nil]
         defer { argv.forEach { free($0) } }
         var pid: pid_t = 0
-        return posix_spawn(&pid, path, &actions, &attributes, argv, environ) == 0 ? pid : nil
+        guard let environment else {
+            return posix_spawn(&pid, path, &actions, &attributes, argv, environ) == 0 ? pid : nil
+        }
+        let envp = environment.map { strdup($0) } + [nil]
+        defer { envp.forEach { free($0) } }
+        return posix_spawn(&pid, path, &actions, &attributes, argv, envp) == 0 ? pid : nil
     }
 }

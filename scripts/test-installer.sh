@@ -922,6 +922,20 @@ check "current launchers" out_has "Launcher format:   1, current"
 check "current command copy" out_has "Command copy:      release 1.2.0"
 check "nothing out of date" sh -c "! grep -q 'out of date' '$T/out'"
 
+begin "refresh-launchers ignores tools that PATH puts first"
+tg install --from "$app"
+cp "$LP" "$LS" "$T/"
+make_format_0
+mkdir -p "$T/hostile"
+for name in sed awk mktemp cmp cat chmod mv rm head dirname realpath; do
+    printf '#!/bin/sh\ntouch "%s/hostile-ran"\nexit 1\n' "$T" > "$T/hostile/$name"
+    chmod +x "$T/hostile/$name"
+done
+PATH="$T/hostile:$PATH" "$tool" refresh-launchers > "$T/out" 2>&1 || fail "refresh with a hostile PATH failed"
+check "no tool from PATH ran" test ! -e "$T/hostile-ran"
+check "pinentry launcher refreshed" cmp -s "$LP" "$T/touchglass-pinentry"
+check "scdaemon launcher refreshed" cmp -s "$LS" "$T/touchglass-scdaemon"
+
 begin "two refreshes at once"
 tg install --from "$app"
 cp "$LP" "$LS" "$T/"
