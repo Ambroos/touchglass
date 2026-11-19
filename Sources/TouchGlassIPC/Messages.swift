@@ -363,6 +363,8 @@ extension IPCMessage: Codable {
 }
 
 public enum IPCProtocol {
-    /// Version string sent in hello. Bump when a change breaks older peers.
+    /// Version string sent in hello, for logs; no peer checks it. Messages stay compatible in both
+    /// directions instead: new fields are optional and receivers ignore unknown message types. Which
+    /// release a helper belongs to travels in `Hello.build`.
     public static let version = "1"
 }

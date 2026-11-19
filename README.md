@@ -19,8 +19,9 @@ The images follow your light or dark appearance. To capture them again, run `scr
 
 ## Requirements
 
-- macOS 26 or later.
-- Swift 6 with the macOS 26 SDK or later. The Command Line Tools are enough; Xcode is not required.
+TouchGlass runs on macOS 26 or later, on Apple silicon and Intel Macs, with GnuPG's gpg-agent.
+
+To build it, you need Swift 6 with the macOS 26 SDK or later. The Command Line Tools are enough; Xcode is not required.
 
 ## Install with Homebrew
 
@@ -29,9 +30,9 @@ brew install ambroos/touchglass/touchglass
 touchglass install
 ```
 
-The formula installs `TouchGlass.app` in Homebrew's prefix, at `$(brew --prefix)/opt/touchglass/TouchGlass.app`, and puts the `touchglass` command, which is `scripts/touchglass` bundled in the app, on `PATH`. It also installs `gnupg` and `pinentry-mac`. Run from the app, `touchglass install` uses that app where it is instead of copying it; the rest of [Install](#install) applies. `brew upgrade touchglass` needs no new `touchglass install`, because the launchers point at the `opt` path, which follows upgrades. Before `brew uninstall touchglass`, run `touchglass uninstall`.
+The formula installs `TouchGlass.app` in Homebrew's prefix, at `$(brew --prefix)/opt/touchglass/TouchGlass.app`, and puts the `touchglass` command, which is `scripts/touchglass` bundled in the app, on `PATH`. It also installs `gnupg` and `pinentry-mac`. Run from the app, `touchglass install` uses that app where it is instead of copying it; the rest of [Install](#install) applies. `brew upgrade touchglass` needs no new `touchglass install`, because the launchers point at the `opt` path, which follows upgrades. The running host notices the first helper of the new version and quits after it has nothing to show, so the next prompt starts the new one. Before `brew uninstall touchglass`, run `touchglass uninstall`.
 
-Without Homebrew, download the signed and notarized `TouchGlass-<version>.zip` from the GitHub release, move `TouchGlass.app` to `/Applications`, and run `/Applications/TouchGlass.app/Contents/Resources/touchglass install`.
+Without Homebrew, download the signed and notarized `TouchGlass-<version>.zip` from the GitHub release, which runs on Apple silicon and Intel Macs, move `TouchGlass.app` to `/Applications`, and run `/Applications/TouchGlass.app/Contents/Resources/touchglass install`.
 
 ## Build
 
@@ -61,9 +62,9 @@ Install does the following:
 
 1. Builds `build/TouchGlass.app` if it is missing or older than the sources, and copies it to `~/Applications`. To install somewhere else, pass `--app-dir <directory>`; to install a bundle you built yourself, pass `--from <path to TouchGlass.app>`.
 2. Writes the path of the real scdaemon to `~/Library/Application Support/TouchGlass/scdaemon-program`. The path comes from the `scdaemon-program` line that `gpg-agent.conf` had before TouchGlass, else from an earlier install, else from `gpgconf --list-components`. For Homebrew, install prefers a stable path such as `/opt/homebrew/opt/gnupg/libexec/scdaemon` over the versioned `Cellar` path, which a GnuPG upgrade removes.
-3. If `~/Library/Application Support/TouchGlass/pinentry.conf` doesn't exist, writes it with `fallback-pinentry` set to the pinentry that `gpg-agent.conf` named before, else `pinentry-mac`, else the pinentry that `gpgconf --list-components` reports. `touchglass-pinentry` hands prompts to that pinentry when the TouchGlass host isn't reachable. If install finds no pinentry at all, it warns and leaves the setting out. On a later install, it replaces a `fallback-pinentry` that no longer exists and keeps one that works.
-4. Writes two launchers, `touchglass-pinentry` and `touchglass-scdaemon`, to `~/Library/Application Support/TouchGlass/bin`, and copies the `touchglass` command next to them. Each launcher runs the helper of the same name in the app with `exec`. While the app is missing, for example during `brew upgrade`, the pinentry launcher runs the `fallback-pinentry` and the scdaemon launcher runs the real scdaemon, so card operations keep working without the panel. Install rewrites the launchers each time.
-5. Prints the lines to change in `gpg-agent.conf`, which is in `GNUPGHOME` if it is set and in `~/.gnupg` otherwise: the `pinentry-program` and `scdaemon-program` lines to comment out, and the two lines to add, which name the launchers. If `gpg-agent.conf` names the helpers inside `TouchGlass.app` directly, as installs before the launchers did, it prints those lines with their replacements instead.
+3. If `~/Library/Application Support/TouchGlass/pinentry.conf` doesn't exist, writes it with `fallback-pinentry` set to the pinentry that `gpg-agent.conf` named before, else `pinentry-mac`, else the pinentry that `gpgconf --list-components` reports. `touchglass-pinentry` hands prompts to that pinentry when the TouchGlass host isn't reachable. A pinentry that `gpg-agent.conf` names but that doesn't exist doesn't count. If install finds no pinentry at all, it warns and leaves the setting out. On a later install, it replaces a `fallback-pinentry` that no longer exists and keeps one that works.
+4. Writes two launchers, `touchglass-pinentry` and `touchglass-scdaemon`, to `~/Library/Application Support/TouchGlass/bin`, and copies the `touchglass` command next to them. Each launcher runs the helper of the same name in the app with `exec`. While the app is missing, for example during `brew upgrade`, the pinentry launcher runs the `fallback-pinentry`, else `pinentry-mac`, else `pinentry` from Homebrew, and the scdaemon launcher runs the real scdaemon, so card operations keep working without the panel. Install rewrites the launchers each time.
+5. Prints the lines to change in `gpg-agent.conf`, which is in `GNUPGHOME` if it is set and in `~/.gnupg` otherwise: the same edit that `--apply` makes, described in the next paragraph. Each effective `pinentry-program` and `scdaemon-program` line becomes a `# touchglass: ` comment followed by the line that names the launcher, and an option that isn't set gets a `# touchglass: added <option>` line before the launcher line. These comments let both uninstall modes restore the file. If `gpg-agent.conf` names the helpers inside `TouchGlass.app` directly, as installs before the launchers did, it prints those lines with their replacements instead.
 6. Prints the command that makes gpg-agent read the file: `gpgconf --kill gpg-agent`. gpg-agent starts again on next use. It forgets its cached PINs and passphrases, so the next card operation asks for the PIN again.
 
 To have install edit `gpg-agent.conf` and stop gpg-agent itself, pass `--apply`. Preview the change first; `--dry-run` prints the edit as a diff and writes nothing:
@@ -75,9 +76,9 @@ scripts/touchglass install --apply
 
 With `--apply`, install first backs up `gpg-agent.conf` to `gpg-agent.conf.touchglass-backup-<timestamp>` next to it. It comments out the effective `pinentry-program` and `scdaemon-program` lines with a `# touchglass: ` prefix and adds the launcher line after each. If an option isn't set, it adds a `# touchglass: added <option>` marker and the launcher line at the top of the file. It changes no other line. If the GnuPG home doesn't exist, it creates it with mode 700. On a `gpg-agent.conf` that names the helpers in the app directly, `--apply` replaces those lines with the launcher lines and keeps the markers, so `uninstall --apply` still restores the lines from before TouchGlass.
 
-Running install again, for example after you pulled changes, replaces the installed app and rewrites the launchers. It leaves `gpg-agent.conf` as it is and adds no second backup or marker. The running host and scdaemon keep the previous version: install prints `pkill -x TouchGlass` and `gpgconf --kill scdaemon` for you to run, and with `--apply` it runs them itself. The running `touchglass-scdaemon` lives as long as scdaemon does, often for days. gpg-agent starts scdaemon again on the next card operation, and the card asks for the PIN again. Install copies the new app next to the old one and then swaps them, so a failed copy leaves the installed app whole.
+Running install again from a checkout, for example after you pulled changes, replaces the installed app and rewrites the launchers; run from the Homebrew app, it copies nothing. It leaves `gpg-agent.conf` as it is and adds no second backup or marker. The running host and scdaemon keep the previous version: install prints `pkill -x TouchGlass` and `gpgconf --kill scdaemon` for you to run, and with `--apply` it runs them itself. The running `touchglass-scdaemon` lives as long as scdaemon does, often for days. gpg-agent starts scdaemon again on the next card operation, and the card asks for the PIN again. Install copies the new app next to the old one and then swaps them, so a failed copy leaves the installed app whole.
 
-To see whether `gpg-agent.conf` uses the launchers or the app's helpers directly, which app the launchers run, whether the host is running, and the backups:
+To see whether `gpg-agent.conf` uses the launchers or the app's helpers directly, which app the launchers run, whether the host and the scdaemon proxy are running, which pinentry the launcher falls back to, and the backups:
 
 ```sh
 scripts/touchglass status
@@ -89,9 +90,9 @@ scripts/touchglass status
 scripts/touchglass uninstall
 ```
 
-Uninstall prints how to restore the original `pinentry-program` and `scdaemon-program` lines and the `gpgconf --kill gpg-agent` command. It keeps the launchers while `gpg-agent.conf` names them, because gpg-agent runs them for every prompt and card operation. After you changed the file and stopped gpg-agent, run uninstall again: it then removes the launchers and the copy of the command.
+Uninstall prints how to restore the original `pinentry-program` and `scdaemon-program` lines and the `gpgconf --kill gpg-agent` command. It keeps the launchers while `gpg-agent.conf` names them, because gpg-agent runs them for every prompt and card operation. After you changed the file and stopped gpg-agent, run uninstall again: it then removes the launchers and the copy of the command. It keeps them, and says why, while a gpg-agent runs that started before `gpg-agent.conf` last changed, or while the `gpg-agent.conf` of another GnuPG home that install was run for still names them.
 
-To have uninstall restore the lines and stop gpg-agent itself, pass `--apply`; `--dry-run` previews it. It restores the lines from the `# touchglass: ` markers, so the file matches what it was before install. If the markers are missing, it takes the original lines from the newest backup. It then removes the launchers. It works when the app was moved or deleted; if the `touchglass` command went with the app, run the copy at `~/Library/Application Support/TouchGlass/bin/touchglass`. To also delete the installed app, pass `--remove-app`.
+To have uninstall restore the lines and stop gpg-agent itself, pass `--apply`; `--dry-run` previews it. It restores the lines from the `# touchglass: ` markers, so the file matches what it was before install. If the markers are missing, it takes the original lines from the newest backup. If it finds a TouchGlass line without a marker next to a commented-out line for the same option, it can't tell whether that is your earlier setting, so it changes nothing and prints the manual steps. After it stopped gpg-agent, it removes the launchers. It works when the app was moved or deleted; if the `touchglass` command went with the app, run the copy at `~/Library/Application Support/TouchGlass/bin/touchglass`. To also delete the installed app, pass `--remove-app`; for the app that Homebrew installed, run `brew uninstall touchglass` instead.
 
 `touchglass uninstall --check` exits with status 1 while `gpg-agent.conf` or the launchers still refer to TouchGlass, to check before you delete TouchGlass's files.
 
@@ -218,7 +219,7 @@ scripts/release.sh --dry-run 1.2.3
 scripts/release.sh 1.2.3
 ```
 
-The script builds the app with that version, signs the helpers and the app with the hardened runtime, notarizes the zip with `xcrun notarytool` and staples the ticket. It writes `build/release/TouchGlass-<version>.zip`, the direct download for the GitHub release, and prints the `gh release create` command. It creates no tag or release itself. The Homebrew formula in [homebrew-touchglass](https://github.com/ambroos/homebrew-touchglass) builds from the tagged source instead; its README describes how to update the formula and publish bottles.
+The script builds the app with that version for Apple silicon and Intel Macs, signs the helpers and the app with the hardened runtime, notarizes the zip with `xcrun notarytool` and staples the ticket. It writes `build/release/TouchGlass-<version>.zip`, the direct download for the GitHub release, and prints the `gh release create` command. It creates no tag or release itself. The Homebrew formula in [homebrew-touchglass](https://github.com/ambroos/homebrew-touchglass) builds from the tagged source instead; its README describes how to update the formula and publish bottles.
 
 A release needs a Developer ID Application certificate in the keychain and notarization credentials stored with `xcrun notarytool store-credentials touchglass`. If the keychain holds more than one Developer ID identity, set `TOUCHGLASS_SIGN_IDENTITY`; `TOUCHGLASS_NOTARY_PROFILE` selects another credentials profile. `--dry-run` signs ad hoc and skips notarization, to test the script without a certificate. `--no-notarize` signs with the Developer ID identity and skips notarization, to check the signature before the notarization credentials exist. Gatekeeper rejects the zip of either.
 
