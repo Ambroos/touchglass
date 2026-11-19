@@ -51,6 +51,8 @@ public final class HostEventSink: EventSink, @unchecked Sendable {
     /// and each proxy process makes a host exit at most once. Pinentries need no such rule: each runs
     /// for one prompt and reads its release from the bundle it starts the host from.
     private var buildReported = false
+    /// Sent in every hello, so a host that restarted learns it again.
+    private let gnupg: GnuPGContext?
     private let log = TouchGlassLog(.scdaemon)
     /// Counts events dropped because the queue was full, for tests.
     public private(set) var droppedCount = 0
@@ -58,9 +60,11 @@ public final class HostEventSink: EventSink, @unchecked Sendable {
     /// - Parameters:
     ///   - launchHost: Starts the host app and returns whether the attempt began. Nil never starts it.
     ///   - build: The release to report in the first hello.
-    public init(path: String = IPCPaths.hostSocket, build: String? = BuildInfo.version, launchHost: (@Sendable () -> Bool)? = nil) {
+    ///   - gnupg: The GnuPG installation to report in each hello.
+    public init(path: String = IPCPaths.hostSocket, build: String? = BuildInfo.version, gnupg: GnuPGContext? = nil, launchHost: (@Sendable () -> Bool)? = nil) {
         self.path = path
         self.build = build
+        self.gnupg = gnupg
         self.launchHost = launchHost
         let thread = Thread { [unowned self] in self.run() }
         thread.name = "touchglass.scdaemon.host"
@@ -149,7 +153,7 @@ public final class HostEventSink: EventSink, @unchecked Sendable {
 
     private func openConnection() -> IPCConnection? {
         guard let fresh = try? IPCClient.connect(path: path, timeout: 0.1),
-              let hello = try? IPCLine.encode(.hello(Hello(role: .proxy, build: buildReported ? nil : build)))
+              let hello = try? IPCLine.encode(.hello(Hello(role: .proxy, build: buildReported ? nil : build, gnupg: gnupg)))
         else { return nil }
         Posix.setNonBlocking(fresh.fileDescriptor, true)
         guard write(hello, to: fresh) else {

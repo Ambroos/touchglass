@@ -213,7 +213,7 @@ public struct HostCoordinator: Sendable {
                 retiring = true
             }
             return []
-        case .ping, .pong, .pin, .confirmed, .notConfirmed, .cancelled, .fallback, .unknown:
+        case .touchPolicy, .ping, .pong, .pin, .confirmed, .notConfirmed, .cancelled, .fallback, .unknown:
             return []
         }
     }

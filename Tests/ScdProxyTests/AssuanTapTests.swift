@@ -176,6 +176,93 @@ import TouchGlassIPC
         #expect(sink.summaries == ["op_start c auth", "touch_wait c", "op_end c ok"])
     }
 
+    // MARK: Touch policies
+
+    static let serial = "D2760001240103040006123456780000"
+
+    @Test func uifLinesReportTheTouchPolicyOfTheNamedCard() {
+        let sink = Collector()
+        let detector = OperationDetector(sink: sink, touchDelay: 10)
+        feed(detector, .toServer, "SERIALNO --demand=\(Self.serial)\n")
+        feed(detector, .toClient, "S SERIALNO \(Self.serial)\nOK\n")
+        feed(detector, .toServer, "GETATTR UIF\n")
+        feed(detector, .toClient, "S UIF-1 %03+\nS UIF-2 %01+\nS UIF-3 %00+\nOK\n")
+        detector.drain()
+        #expect(sink.summaries == [
+            "touch_policy \(Self.serial) 1 3", "touch_policy \(Self.serial) 2 1", "touch_policy \(Self.serial) 3 0",
+        ])
+    }
+
+    @Test func learnReportsTheTouchPolicies() {
+        let sink = Collector()
+        let detector = OperationDetector(sink: sink, touchDelay: 10)
+        feed(detector, .toServer, "LEARN --force\n")
+        feed(detector, .toClient, "S READER Yubico YubiKey OTP FIDO CCID\nS SERIALNO \(Self.serial)\nS APPTYPE openpgp\nS UIF-1 %04+\nS UIF-2 %02+\nS UIF-3 %03+\nOK\n")
+        detector.drain()
+        #expect(sink.summaries == [
+            "touch_policy \(Self.serial) 1 4", "touch_policy \(Self.serial) 2 2", "touch_policy \(Self.serial) 3 3",
+        ])
+    }
+
+    /// Without a card serial on the connection, a UIF line can't be tied to a card.
+    @Test func uifLinesWithoutACardAreIgnored() {
+        for prefix in ["", "S SERIALNO not-hex\n", "S SERIALNO \(String(repeating: "A", count: 33))\n"] {
+            let sink = Collector()
+            let detector = OperationDetector(sink: sink, touchDelay: 10)
+            feed(detector, .toServer, "GETATTR UIF\n")
+            feed(detector, .toClient, prefix + "S UIF-1 %03+\nOK\n")
+            detector.drain()
+            #expect(sink.summaries.isEmpty, "\(prefix)")
+        }
+    }
+
+    /// Odd values still name the slot; the host decides what an unknown value means. OpenPGP cards have
+    /// three key slots; UIF-4 is the attestation key, which no operation uses.
+    @Test func oddUifValuesReportNoByte() {
+        let sink = Collector()
+        let detector = OperationDetector(sink: sink, touchDelay: 10)
+        feed(detector, .toClient, "S SERIALNO \(Self.serial)\nS UIF-1\nS UIF-2 %G1+\nS UIF-3 %7F+\nS UIF-4 %01+\nOK\n")
+        detector.drain()
+        #expect(sink.summaries == [
+            "touch_policy \(Self.serial) 1 -", "touch_policy \(Self.serial) 2 -", "touch_policy \(Self.serial) 3 127",
+        ])
+    }
+
+    /// Each connection has its own current card.
+    @Test func cardSerialIsPerConnection() {
+        let sink = Collector()
+        let detector = OperationDetector(sink: sink, touchDelay: 10)
+        var tap = AssuanTap(direction: .toClient)
+        detector.observe(connection: "a", direction: .toClient, lines: tap.feed(Array("S SERIALNO \(Self.serial)\nOK\n".utf8)), time: 0)
+        var other = AssuanTap(direction: .toClient)
+        detector.observe(connection: "b", direction: .toClient, lines: other.feed(Array("S UIF-1 %03+\nOK\n".utf8)), time: 0)
+        detector.drain()
+        #expect(sink.summaries.isEmpty)
+    }
+
+    @Test func pinpadTouchWaitSaysSo() {
+        let sink = Collector()
+        let detector = OperationDetector(sink: sink, touchDelay: 10)
+        feed(detector, .toServer, "PKAUTH X\n")
+        feed(detector, .toClient, "INQUIRE POPUPPINPADPROMPT --ack\n")
+        detector.drain()
+        guard case let .touchWait(wait) = sink.messages.last else {
+            Issue.record("no touch_wait")
+            return
+        }
+        #expect(wait.pinpad == true)
+    }
+
+    @Test func gnupgContextFromArgumentsAndEnvironment() {
+        let homebrew = "/opt/homebrew/libexec/scdaemon"
+        #expect(ProxyConfig.gnupgContext(arguments: ["--multi-server"], environment: [:], scdaemonPath: homebrew) == GnuPGContext(home: nil, binDir: "/opt/homebrew/bin"))
+        #expect(ProxyConfig.gnupgContext(arguments: ["--multi-server", "--homedir", "/tmp/g h"], environment: ["GNUPGHOME": "/elsewhere"], scdaemonPath: homebrew).home == "/tmp/g h")
+        #expect(ProxyConfig.gnupgContext(arguments: ["--homedir=/tmp/x"], environment: [:], scdaemonPath: homebrew).home == "/tmp/x")
+        #expect(ProxyConfig.gnupgContext(arguments: ["--multi-server"], environment: ["GNUPGHOME": "/elsewhere"], scdaemonPath: homebrew).home == "/elsewhere")
+        #expect(ProxyConfig.gnupgContext(arguments: [], environment: [:], scdaemonPath: "/usr/local/MacGPG2/libexec/scdaemon").binDir == "/usr/local/MacGPG2/bin")
+        #expect(ProxyConfig.gnupgContext(arguments: [], environment: [:], scdaemonPath: "/somewhere/scdaemon").binDir == nil)
+    }
+
     @Test func closedConnectionEndsOperation() {
         let sink = Collector()
         let detector = OperationDetector(sink: sink, touchDelay: 10)
@@ -273,6 +360,7 @@ extension IPCMessage {
         case let .pinSent(m): "pin_sent \(m.conn)"
         case let .touchWait(m): "touch_wait \(m.conn)"
         case let .opEnd(m): "op_end \(m.conn) \(m.result.rawValue)"
+        case let .touchPolicy(m): "touch_policy \(m.serial) \(m.slot) \(m.uif.map(String.init) ?? "-")"
         default: type
         }
     }

@@ -2,6 +2,44 @@ import Foundation
 import Testing
 @testable import TouchGlassIPC
 
+@Suite struct UIFValueTests {
+    @Test func decodesScdaemonEscapes() {
+        #expect(UIFValue.firstByte("%03+") == 0x03)
+        #expect(UIFValue.firstByte("%00+") == 0x00)
+        #expect(UIFValue.firstByte("%04") == 0x04)
+        #expect(UIFValue.firstByte("%0a+") == 0x0A)
+        #expect(UIFValue.firstByte("%2B+") == 0x2B)
+        // A space is escaped as +, other printable bytes are themselves.
+        #expect(UIFValue.firstByte("+") == 0x20)
+        #expect(UIFValue.firstByte("A+") == 0x41)
+    }
+
+    @Test func rejectsMalformedValues() {
+        #expect(UIFValue.firstByte("") == nil)
+        #expect(UIFValue.firstByte("%") == nil)
+        #expect(UIFValue.firstByte("%0") == nil)
+        #expect(UIFValue.firstByte("%G3+") == nil)
+        #expect(UIFValue.firstByte("%-1") == nil)
+        #expect(UIFValue.firstByte("\u{e9}") == nil)
+        #expect(UIFValue.firstByte("\u{1}") == nil)
+    }
+
+    @Test func wireFormat() throws {
+        let line = try IPCLine.encode(.touchPolicy(TouchPolicyReport(serial: "D276", slot: 1, uif: 3)))
+        let json = try #require(try JSONSerialization.jsonObject(with: line.dropLast()) as? [String: Any])
+        #expect(json["type"] as? String == "touch_policy")
+        #expect(json["serial"] as? String == "D276" && json["slot"] as? Int == 1 && json["uif"] as? Int == 3)
+        let hello = try IPCLine.encode(.hello(Hello(role: .proxy, pid: 1, build: nil, gnupg: GnuPGContext(home: "/h", binDir: "/b"))))
+        let gnupg = try #require((try JSONSerialization.jsonObject(with: hello.dropLast()) as? [String: Any])?["gnupg"] as? [String: String])
+        #expect(gnupg == ["home": "/h", "bin_dir": "/b"])
+    }
+
+    @Test func logShowsTheLastFourDigits() {
+        let event = LogEvent.touchPolicySeen(conn: "12:p", serial: "D2760001240100000006123456780000", slot: 1, uif: 3)
+        #expect(event.message == "12:p touch policy: card …5678 slot 1 UIF 03")
+    }
+}
+
 @Suite struct MessageCodingTests {
     func roundTrip(_ message: IPCMessage) throws -> IPCMessage {
         let line = try IPCLine.encode(message)
@@ -14,11 +52,16 @@ import Testing
         let messages: [IPCMessage] = [
             .hello(Hello(role: .proxy, pid: 42, version: "1", build: nil)),
             .hello(Hello(role: .pinentry, pid: 43, version: "1", build: "0.2.0")),
+            .hello(Hello(role: .proxy, pid: 44, version: "1", build: nil, gnupg: GnuPGContext(home: "/tmp/g h", binDir: "/opt/homebrew/bin"))),
+            .hello(Hello(role: .proxy, pid: 45, version: "1", build: nil, gnupg: GnuPGContext())),
             .opStart(OpStart(conn: "123:s3", op: .sign, slot: 1, serial: "D2760001240100000000000000000000", at: 1_800_000_000.5)),
             .opStart(OpStart(conn: "123:p", op: .auth, at: 1, agentPid: 4321)),
             .pinNeeded(ConnRef(conn: "123:p0")),
             .pinSent(ConnRef(conn: "123:p0")),
             .touchWait(TouchWait(conn: "123:p0", timeoutMs: 15_000, at: 1.25)),
+            .touchWait(TouchWait(conn: "123:p0", timeoutMs: 15_000, at: 1.25, pinpad: true)),
+            .touchPolicy(TouchPolicyReport(serial: "D2760001240100000006123456780000", slot: 2, uif: 3)),
+            .touchPolicy(TouchPolicyReport(serial: "D2760001240100000006123456780000", slot: 1, uif: nil)),
             .opEnd(OpEnd(conn: "123:p0", result: .badPin, code: 100_663_383)),
             .getPin(GetPin(id: "1", title: "T", desc: "line1\nline2", prompt: "PIN", fields: CardFields(number: "12 345 678", holder: "", counter: "7"), error: "bad", ok: "OK", cancel: "Cancel", keyinfo: nil, owner: "77/501 host")),
             .confirm(Confirm(id: "2", desc: "Sure?", ok: "Yes", cancel: "No", notok: "Never", oneButton: true)),

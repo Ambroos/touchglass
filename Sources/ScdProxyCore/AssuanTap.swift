@@ -38,7 +38,7 @@ public enum WireLine: Sendable, Equatable {
 /// to the next line feed.
 public struct AssuanTap: Sendable {
     public static let commandsWithArgs: Set<String> = ["PKSIGN", "PKAUTH", "PKDECRYPT", "GETINFO"]
-    public static let statusWithArgs: Set<String> = ["KEYINFO"]
+    public static let statusWithArgs: Set<String> = ["KEYINFO", "SERIALNO", "UIF-1", "UIF-2", "UIF-3"]
     public static let inquiriesWithArgs: Set<String> = ["POPUPPINPADPROMPT"]
 
     /// Longer than any legal Assuan line (1000 bytes plus CR and LF).

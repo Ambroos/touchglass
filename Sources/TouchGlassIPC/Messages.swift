@@ -3,7 +3,7 @@ import Foundation
 // Messages exchanged over the host socket. Each message is one JSON object on one line, tagged by its "type" field. Field names are snake_case on the wire.
 //
 // Directions:
-// - Proxy to host: opStart, pinNeeded, pinSent, touchWait, opEnd. Fire-and-forget.
+// - Proxy to host: opStart, pinNeeded, pinSent, touchWait, opEnd, touchPolicy. Fire-and-forget.
 // - Pinentry to host: getPin, confirm, message, dismiss, ping.
 // - Host to pinentry: pin, confirmed, notConfirmed, cancelled, fallback, pong.
 // - Either helper sends hello first.
@@ -39,12 +39,35 @@ public struct Hello: Codable, Sendable, Equatable {
     /// its helpers exits when idle, so the next helper starts the installed version. Optional, so hosts
     /// and helpers of different versions understand each other.
     public var build: String?
+    /// The proxy's GnuPG installation, so the host can ask gpg-agent about a card. Proxies only; optional.
+    public var gnupg: GnuPGContext?
 
-    public init(role: PeerRole, pid: Int32 = getpid(), version: String = IPCProtocol.version, build: String? = BuildInfo.version) {
+    public init(role: PeerRole, pid: Int32 = getpid(), version: String = IPCProtocol.version, build: String? = BuildInfo.version, gnupg: GnuPGContext? = nil) {
         self.role = role
         self.pid = pid
         self.version = version
         self.build = build
+        self.gnupg = gnupg
+    }
+}
+
+/// Where the gpg-agent that runs a proxy lives.
+public struct GnuPGContext: Codable, Sendable, Equatable {
+    /// The GnuPG home directory that gpg-agent passed to scdaemon with `--homedir`, or `GNUPGHOME`. Nil for
+    /// the default, `~/.gnupg`.
+    public var home: String?
+    /// The directory that holds `gpg-connect-agent`: the `bin` directory next to the real scdaemon's
+    /// `libexec`. Nil when unknown.
+    public var binDir: String?
+
+    public init(home: String? = nil, binDir: String? = nil) {
+        self.home = home
+        self.binDir = binDir
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case home
+        case binDir = "bin_dir"
     }
 }
 
@@ -91,17 +114,21 @@ public struct TouchWait: Codable, Sendable, Equatable {
     public var timeoutMs: Int
     /// Unix time in seconds from which the card's touch timeout runs.
     public var at: Double?
+    /// scdaemon said that the card waits for the touch, with `POPUPPINPADPROMPT --ack`, instead of the
+    /// proxy inferring it from silence. Optional; nil means inferred.
+    public var pinpad: Bool?
 
-    public init(conn: String, timeoutMs: Int = 15_000, at: Double? = nil) {
+    public init(conn: String, timeoutMs: Int = 15_000, at: Double? = nil, pinpad: Bool? = nil) {
         self.conn = conn
         self.timeoutMs = timeoutMs
         self.at = at
+        self.pinpad = pinpad
     }
 
     enum CodingKeys: String, CodingKey {
         case conn
         case timeoutMs = "timeout_ms"
-        case at
+        case at, pinpad
     }
 }
 
@@ -115,6 +142,45 @@ public struct OpEnd: Codable, Sendable, Equatable {
         self.conn = conn
         self.result = result
         self.code = code
+    }
+}
+
+/// A card reported the touch policy of one key slot: an `S UIF-<slot>` status line that passed through the
+/// proxy, after an `S SERIALNO` on the same connection named the card.
+public struct TouchPolicyReport: Codable, Sendable, Equatable {
+    /// The card's serial number as scdaemon reports it: for an OpenPGP card, the application ID in hex.
+    public var serial: String
+    /// OpenPGP key slot: 1 sig, 2 dec, 3 aut.
+    public var slot: Int
+    /// The first byte of the UIF data object, or nil when the line held none.
+    public var uif: Int?
+
+    public init(serial: String, slot: Int, uif: Int?) {
+        self.serial = serial
+        self.slot = slot
+        self.uif = uif
+    }
+}
+
+/// The value of an `S UIF-<n>` status line.
+public enum UIFValue {
+    /// The first byte of a UIF status value as scdaemon escapes it: `%XX` for a control byte, `+`, `"` or
+    /// `%`, `+` for a space, any other byte as itself. Nil for an empty or malformed value, or one that
+    /// starts with a byte above 0x7F, which no policy uses.
+    public static func firstByte(_ escaped: String) -> UInt8? {
+        let bytes = Array(escaped.utf8)
+        guard let first = bytes.first else { return nil }
+        switch first {
+        case UInt8(ascii: "%"):
+            guard bytes.count >= 3, let value = UInt8(String(decoding: bytes[1...2], as: UTF8.self), radix: 16) else { return nil }
+            return value
+        case UInt8(ascii: "+"):
+            return 0x20
+        case 0x21...0x7E:
+            return first
+        default:
+            return nil
+        }
     }
 }
 
@@ -255,6 +321,7 @@ public enum IPCMessage: Sendable, Equatable {
     case pinSent(ConnRef)
     case touchWait(TouchWait)
     case opEnd(OpEnd)
+    case touchPolicy(TouchPolicyReport)
 
     case getPin(GetPin)
     case confirm(Confirm)
@@ -285,6 +352,7 @@ public enum IPCMessage: Sendable, Equatable {
         case .pinSent: "pin_sent"
         case .touchWait: "touch_wait"
         case .opEnd: "op_end"
+        case .touchPolicy: "touch_policy"
         case .getPin: "getpin"
         case .confirm: "confirm"
         case .message: "message"
@@ -327,6 +395,7 @@ extension IPCMessage: Codable {
         case "pin_sent": self = .pinSent(try ConnRef(from: decoder))
         case "touch_wait": self = .touchWait(try TouchWait(from: decoder))
         case "op_end": self = .opEnd(try OpEnd(from: decoder))
+        case "touch_policy": self = .touchPolicy(try TouchPolicyReport(from: decoder))
         case "getpin": self = .getPin(try GetPin(from: decoder))
         case "confirm": self = .confirm(try Confirm(from: decoder))
         case "message": self = .message(try MessageRequest(from: decoder))
@@ -351,6 +420,7 @@ extension IPCMessage: Codable {
         case .pinNeeded(let m), .pinSent(let m): try m.encode(to: encoder)
         case .touchWait(let m): try m.encode(to: encoder)
         case .opEnd(let m): try m.encode(to: encoder)
+        case .touchPolicy(let m): try m.encode(to: encoder)
         case .getPin(let m): try m.encode(to: encoder)
         case .confirm(let m): try m.encode(to: encoder)
         case .message(let m): try m.encode(to: encoder)

@@ -110,6 +110,7 @@ extension IPCMessage {
         case let .pinSent(m): return "pin_sent \(shortConn(m.conn))"
         case let .touchWait(m): return "touch_wait \(shortConn(m.conn))"
         case let .opEnd(m): return "op_end \(shortConn(m.conn)) \(m.result.rawValue)"
+        case let .touchPolicy(m): return "touch_policy \(m.serial) slot=\(m.slot) uif=\(m.uif.map(String.init) ?? "-")"
         default: return type
         }
     }

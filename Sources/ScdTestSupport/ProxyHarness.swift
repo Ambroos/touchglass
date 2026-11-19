@@ -34,6 +34,8 @@ public final class ProxyHarness: @unchecked Sendable {
         public var exit_on_eof: Int32 = 0
         public var eof_linger_ms = 0
         public var split_writes = false
+        /// The `S UIF-<n>` values, escaped; see fake-scdaemon's `Config.uif`.
+        public var uif: [String]?
         public init() {}
     }
 

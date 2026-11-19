@@ -59,6 +59,26 @@ public struct ProxyConfig: Sendable {
         )
     }
 
+    /// The GnuPG installation of the agent that runs the proxy. gpg-agent passes `--homedir` to scdaemon
+    /// only for a home that isn't its default; the default is `GNUPGHOME`, which scdaemon inherits, or else
+    /// `~/.gnupg`. `gpg-connect-agent` is in the `bin` directory next to the real scdaemon's `libexec`, as
+    /// in Homebrew, MacGPG2 and MacPorts.
+    public static func gnupgContext(arguments: [String], environment: [String: String] = ProcessInfo.processInfo.environment, scdaemonPath: String) -> GnuPGContext {
+        var home: String?
+        var rest = arguments[...]
+        while let argument = rest.popFirst() {
+            if argument == "--homedir", let value = rest.popFirst() {
+                home = value
+            } else if argument.hasPrefix("--homedir=") {
+                home = String(argument.dropFirst("--homedir=".count))
+            }
+        }
+        if home?.isEmpty ?? true { home = environment["GNUPGHOME"].flatMap { $0.isEmpty ? nil : $0 } }
+        let libexec = (scdaemonPath as NSString).deletingLastPathComponent
+        let binDir = libexec.hasSuffix("/libexec") ? (libexec as NSString).deletingLastPathComponent + "/bin" : nil
+        return GnuPGContext(home: home, binDir: binDir)
+    }
+
     /// `<per-user temporary directory>/touchglass`. The per-user temporary directory is private to the user
     /// and its path has no spaces, `%`, CR or LF.
     static func defaultRuntimeDirectory() -> String? {

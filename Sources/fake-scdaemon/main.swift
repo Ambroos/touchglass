@@ -11,6 +11,8 @@
 //   ECHOINQ       sends INQUIRE ECHO, then returns the answered data as D lines.
 //   SLEEP <ms>    waits, then OK.
 //   EXIT <code>   exits immediately with that code, without a reply.
+//
+// Of GETATTR it knows only UIF and UIF-<n>, from the config's `uif`.
 
 import Darwin
 import Foundation
@@ -46,10 +48,13 @@ struct Config: Decodable {
     var eof_linger_ms: Int = 0
     /// Write replies in chunks of 1 to 3 bytes.
     var split_writes: Bool = false
+    /// The values of the `S UIF-1` to `S UIF-3` lines for GETATTR and LEARN, as scdaemon escapes them, such
+    /// as "%03+". Absent: the card has no button, so GETATTR UIF fails and LEARN sends no UIF lines.
+    var uif: [String]?
 
     enum CodingKeys: String, CodingKey {
         case socket, record_dir, serial, keys, pin, verified, pincache, pincache_hit, needpin_delay_ms, touch_ms, touch_cache_ms, cached_ms
-        case touch_timeout, exit_on_eof, eof_linger_ms, split_writes
+        case touch_timeout, exit_on_eof, eof_linger_ms, split_writes, uif
     }
 
     init() {}
@@ -72,6 +77,7 @@ struct Config: Decodable {
         exit_on_eof = try c.decodeIfPresent(Int32.self, forKey: .exit_on_eof) ?? exit_on_eof
         eof_linger_ms = try c.decodeIfPresent(Int.self, forKey: .eof_linger_ms) ?? eof_linger_ms
         split_writes = try c.decodeIfPresent(Bool.self, forKey: .split_writes) ?? split_writes
+        uif = try c.decodeIfPresent([String].self, forKey: .uif)
     }
 }
 
@@ -277,6 +283,23 @@ func serve(_ conn: Connection, isPipe: Bool) -> Bool {
             conn.send("OK")
         case "SERIALNO":
             conn.send("S SERIALNO " + config.serial)
+            conn.send("OK")
+        case "GETATTR":
+            // Only the touch policy: UIF for all three slots, or UIF-<n> for one.
+            let name = args.first?.uppercased() ?? ""
+            let slots = name == "UIF" ? [1, 2, 3] : name.hasPrefix("UIF-") ? Int(name.dropFirst(4)).map { [$0] } ?? [] : []
+            guard let uif = config.uif, !slots.isEmpty, slots.allSatisfy({ (1...uif.count).contains($0) }) else {
+                conn.send("ERR 100663354 No data <SCD>")
+                continue
+            }
+            for slot in slots { conn.send("S UIF-\(slot) \(uif[slot - 1])") }
+            conn.send("OK")
+        case "LEARN":
+            // A short version of what scdaemon sends for an OpenPGP card with a button.
+            conn.send("S READER Fake Reader 00 00")
+            conn.send("S SERIALNO " + config.serial)
+            conn.send("S APPTYPE openpgp")
+            for (index, value) in (config.uif ?? []).enumerated() { conn.send("S UIF-\(index + 1) \(value)") }
             conn.send("OK")
         case "KEYINFO":
             let wanted: [(String, Int)]

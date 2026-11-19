@@ -30,13 +30,14 @@ public final class ScdaemonProxy: @unchecked Sendable {
     /// The child's PID, for the signal handler.
     nonisolated(unsafe) static var childPID: pid_t = 0
 
-    public init(config: ProxyConfig) {
+    /// `gnupg` goes to the host in the proxy's hello; see `ProxyConfig.gnupgContext`.
+    public init(config: ProxyConfig, gnupg: GnuPGContext? = nil) {
         self.config = config
         var launch: (@Sendable () -> Bool)?
         if let target = config.hostApp {
             launch = { Self.launchHost(target) }
         }
-        sink = HostEventSink(path: config.hostSocketPath, launchHost: launch)
+        sink = HostEventSink(path: config.hostSocketPath, gnupg: gnupg, launchHost: launch)
         // gpg-agent starts the proxy as its scdaemon, so the parent is the agent that owns this card session.
         detector = OperationDetector(sink: sink, touchDelay: config.touchDelay, agentPID: getppid())
     }

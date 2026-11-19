@@ -146,6 +146,60 @@ struct ProxyIntegrationTests {
         #expect(harness.finish()?.status == 0)
     }
 
+    // MARK: - Touch policies
+
+    /// `GETATTR UIF` after `SERIALNO`, as the host's query and gpg-card send them: the host learns each slot,
+    /// and the agent gets every byte as scdaemon sent it.
+    @Test func uifLinesReachTheHostUnchanged() throws {
+        var card = ProxyHarness.Card()
+        card.uif = ["%03+", "%01+", "%00+"]
+        let (harness, host, socket) = try setUp(card: card)
+        defer { harness.cleanUp(); host?.close() }
+        #expect(harness.agent.transact("SERIALNO --demand=\(ProxyHarness.serial)").isOK)
+        #expect(harness.agent.transact("GETATTR UIF").isOK)
+        #expect(summaries(host, waitingFor: 3) == [
+            "touch_policy \(ProxyHarness.serial) slot=1 uif=3",
+            "touch_policy \(ProxyHarness.serial) slot=2 uif=1",
+            "touch_policy \(ProxyHarness.serial) slot=3 uif=0",
+        ])
+        #expect(host?.hellos.first?.gnupg != nil)
+        #expect(harness.finish()?.status == 0)
+        #expect(harness.agent.sent == harness.recorded("pipe", "in"))
+        #expect(harness.agent.received == expectedClientBytes(harness.recorded("pipe", "out"), real: harness.realSocketPath, proxy: socket))
+    }
+
+    /// `LEARN --force`, as `gpg --card-status` makes gpg-agent send it, on a socket session.
+    @Test func learnOnASocketSessionReportsThePolicies() throws {
+        var card = ProxyHarness.Card()
+        card.uif = ["%04+", "%02+", "%03+"]
+        let (harness, host, socket) = try setUp(card: card)
+        defer { harness.cleanUp(); host?.close() }
+        let path = try #require(socket)
+        let session = try #require(harness.openSocketSession(path: path))
+        #expect(session.transact("LEARN --force").isOK)
+        #expect(summaries(host, waitingFor: 3) == [
+            "touch_policy \(ProxyHarness.serial) slot=1 uif=4",
+            "touch_policy \(ProxyHarness.serial) slot=2 uif=2",
+            "touch_policy \(ProxyHarness.serial) slot=3 uif=3",
+        ])
+        _ = session.transact("BYE")
+        _ = session.readToEnd()
+        session.close()
+        #expect(session.received == harness.recorded("sock1", "out"))
+        #expect(harness.finish()?.status == 0)
+    }
+
+    /// A card without a button answers GETATTR UIF with an error: nothing to report.
+    @Test func cardWithoutButtonReportsNothing() throws {
+        let (harness, host, _) = try setUp()
+        defer { harness.cleanUp(); host?.close() }
+        #expect(harness.agent.transact("SERIALNO").isOK)
+        #expect(!harness.agent.transact("GETATTR UIF").isOK)
+        #expect(operation(harness.agent, "PKSIGN", grip: Self.sign).isOK)
+        #expect(summaries(host, waitingFor: 2).allSatisfy { !$0.hasPrefix("touch_policy") })
+        #expect(harness.finish()?.status == 0)
+    }
+
     @Test func signWithCachedPin() throws {
         var card = ProxyHarness.Card()
         card.verified = [1]

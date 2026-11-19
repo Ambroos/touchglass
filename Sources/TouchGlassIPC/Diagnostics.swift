@@ -78,6 +78,8 @@ public enum LogEvent: Sendable, Equatable {
     /// `total` runs from the operation command, `sinceArmed` from the command or the last inquiry answer, which
     /// is what the touch detection delay measures.
     case operationEnded(conn: String, kind: OperationKind, result: OperationResult, code: Int?, total: TimeInterval, sinceArmed: TimeInterval, touchWaitReported: Bool)
+    /// An `S UIF-<slot>` line named the touch policy of a card's slot; `uif` is its first byte.
+    case touchPolicySeen(conn: String, serial: String, slot: Int, uif: Int?)
     case hostConnected(build: String?)
     case hostLaunch(started: Bool)
     case hostUnreachable
@@ -148,6 +150,8 @@ public enum LogEvent: Sendable, Equatable {
         case let .operationEnded(conn, kind, result, code, total, sinceArmed, reported):
             let codeText = code.map { " code \($0)" } ?? ""
             return "\(Self.conn(conn)) op end: \(kind.rawValue) \(result.rawValue)\(codeText), card \(Self.ms(sinceArmed)) since command or PIN, total \(Self.ms(total)), touch wait \(reported ? "reported" : "not reported")"
+        case let .touchPolicySeen(conn, serial, slot, uif):
+            return "\(Self.conn(conn)) touch policy: card \(Self.card(serial)) slot \(slot) UIF \(uif.map { String(format: "%02X", $0) } ?? "?")"
         case let .hostConnected(build):
             return "connected to host" + (build.map { ", reported release \(Self.release($0))" } ?? "")
         case let .hostLaunch(started):

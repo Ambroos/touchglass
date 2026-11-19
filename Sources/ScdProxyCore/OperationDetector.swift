@@ -19,6 +19,9 @@ public protocol EventSink: Sendable {
 ///   open, and `touchDelay` passes after the operation command, the last inquiry answer or
 ///   `S PINCACHE_PUT`, the detector reports a touch wait.
 /// - `OK` or `ERR` ends the operation.
+/// - `S SERIALNO <serial>` names the connection's card; a later `S UIF-<n> <value>` on the connection
+///   reports the touch policy of that card's slot `n` to the host. `LEARN`, as `gpg --card-status` sends
+///   it, and `GETATTR UIF` produce these lines.
 ///
 /// All state lives on one serial queue, so the forwarding threads only enqueue and never wait.
 public final class OperationDetector: @unchecked Sendable {
@@ -56,6 +59,8 @@ public final class OperationDetector: @unchecked Sendable {
         var inquiry: Inquiry?
         /// The command scdaemon has not answered yet, and when it was sent, for the log.
         var command: (keyword: ScdCommand, sentAt: Double)?
+        /// The card that the connection's last `S SERIALNO` named.
+        var cardSerial: String?
     }
 
     /// `agentPID` is the gpg-agent that started the proxy. Each `op_start` carries it, so the host looks for
@@ -162,6 +167,13 @@ public final class OperationDetector: @unchecked Sendable {
         case let .status(keyword, args):
             if keyword == "KEYINFO" {
                 recordKeyInfo(args)
+            } else if keyword == "SERIALNO" {
+                state.cardSerial = args.first.flatMap { Self.isCardSerial($0) ? $0 : nil }
+            } else if keyword.hasPrefix("UIF-"), let slot = Int(keyword.dropFirst(4)), (1...3).contains(slot) {
+                guard let serial = state.cardSerial else { return }
+                let uif = args.first.flatMap(UIFValue.firstByte).map(Int.init)
+                sink.send(.touchPolicy(TouchPolicyReport(serial: serial, slot: slot, uif: uif)))
+                log(.touchPolicySeen(conn: conn, serial: serial, slot: slot, uif: uif))
             } else if keyword == "PINCACHE_PUT", state.operation?.touchReported == false {
                 // scdaemon caches the PIN right after the card accepted it; the card operation starts next.
                 armTouchTimer(conn, &state, from: time)
@@ -183,7 +195,7 @@ public final class OperationDetector: @unchecked Sendable {
                 state.inquiry = .other
                 if state.operation?.touchReported == false {
                     state.operation?.touchReported = true
-                    sink.send(.touchWait(TouchWait(conn: conn, timeoutMs: Self.touchTimeoutMs, at: time)))
+                    sink.send(.touchWait(TouchWait(conn: conn, timeoutMs: Self.touchTimeoutMs, at: time, pinpad: true)))
                     log(.touchWaitInferred(conn: conn, delay: 0, pinpadPrompt: true))
                 }
             default:
@@ -233,10 +245,13 @@ public final class OperationDetector: @unchecked Sendable {
         guard args.count >= 4, args[1] == "T" else { return }
         let ref = args[3].uppercased()
         guard ref.hasPrefix("OPENPGP."), let slot = Int(ref.dropFirst("OPENPGP.".count)) else { return }
-        // The serial reaches the host and the log: keep it only if it is what a card reports, hex digits.
         let serial = args[2]
-        let isHex = (1...32).contains(serial.utf8.count) && serial.utf8.allSatisfy { (0x30...0x39).contains($0) || (0x41...0x46).contains($0) || (0x61...0x66).contains($0) }
-        keys[args[0].uppercased()] = (slot, isHex ? serial : nil)
+        keys[args[0].uppercased()] = (slot, Self.isCardSerial(serial) ? serial : nil)
+    }
+
+    /// The serial reaches the host and the log: keep it only if it is what a card reports, hex digits.
+    static func isCardSerial(_ serial: String) -> Bool {
+        (1...32).contains(serial.utf8.count) && serial.utf8.allSatisfy { (0x30...0x39).contains($0) || (0x41...0x46).contains($0) || (0x61...0x66).contains($0) }
     }
 
     private func armTouchTimer(_ conn: String, _ state: inout ConnectionState, from time: Double) {

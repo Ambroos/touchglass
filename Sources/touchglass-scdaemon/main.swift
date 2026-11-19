@@ -12,4 +12,6 @@ guard let config = ProxyConfig.resolve() else {
     FileHandle.standardError.write(Data("touchglass-scdaemon: no scdaemon found; set \(ProxyConfig.scdaemonEnvironmentKey)\n".utf8))
     exit(2)
 }
-ScdaemonProxy(config: config).run(arguments: Array(CommandLine.arguments.dropFirst()))
+let arguments = Array(CommandLine.arguments.dropFirst())
+let gnupg = ProxyConfig.gnupgContext(arguments: arguments, scdaemonPath: config.scdaemonPath)
+ScdaemonProxy(config: config, gnupg: gnupg).run(arguments: arguments)
