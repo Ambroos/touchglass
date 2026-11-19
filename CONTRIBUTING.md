@@ -14,7 +14,7 @@ The script builds `build/TouchGlass.app` with Swift Package Manager and signs it
 
 - To build the debug configuration, pass `debug`.
 - To bundle the executables of an earlier `swift build` instead of building, pass `--prebuilt <directory>`, as the Homebrew formula does.
-- To set the version in `Info.plist` and in `touchglass --version`, set `TOUCHGLASS_VERSION`. The default is `0.1.0`.
+- To set the version in `Info.plist` and in `touchglass --version`, set `TOUCHGLASS_VERSION`. The default is `0.0.0-dev`, which isn't a release number: a host and helpers of a development build never make each other's host exit for a version mismatch, also next to a Homebrew install.
 
 To install your build, run `scripts/touchglass install`. Run from a checkout, it builds the app if it is missing or older than the sources and copies it to `~/Applications`. See [Install and uninstall TouchGlass](docs/install.md).
 

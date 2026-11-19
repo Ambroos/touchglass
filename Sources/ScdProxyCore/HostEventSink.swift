@@ -40,14 +40,26 @@ public final class HostEventSink: EventSink, @unchecked Sendable {
     // Used only on the writer thread.
     private var connection: IPCConnection?
     private var lastLaunch = -Double.infinity
-    /// The release in each hello, read when the proxy starts; see `BuildInfo.version`.
-    private let build = BuildInfo.version
+    /// The release for the first hello, read when the proxy starts; see `BuildInfo.version`.
+    private let build: String?
+    /// Whether a hello carried `build` already. Used only on the writer thread.
+    ///
+    /// A host of an earlier release exits when it learns of a later one, and the next event starts the
+    /// app at this proxy's bundle path. That gives a later host only if the app on disk is later than the
+    /// one that runs. When the proxy outlives a downgrade, it isn't: the relaunched host is the same
+    /// release and would exit again after every operation. So the proxy reports its release only once,
+    /// and each proxy process makes a host exit at most once. Pinentries need no such rule: each runs
+    /// for one prompt and reads its release from the bundle it starts the host from.
+    private var buildReported = false
     /// Counts events dropped because the queue was full, for tests.
     public private(set) var droppedCount = 0
 
-    /// - Parameter launchHost: Starts the host app and returns whether the attempt began. Nil never starts it.
-    public init(path: String = IPCPaths.hostSocket, launchHost: (@Sendable () -> Bool)? = nil) {
+    /// - Parameters:
+    ///   - launchHost: Starts the host app and returns whether the attempt began. Nil never starts it.
+    ///   - build: The release to report in the first hello.
+    public init(path: String = IPCPaths.hostSocket, build: String? = BuildInfo.version, launchHost: (@Sendable () -> Bool)? = nil) {
         self.path = path
+        self.build = build
         self.launchHost = launchHost
         let thread = Thread { [unowned self] in self.run() }
         thread.name = "touchglass.scdaemon.host"
@@ -128,13 +140,14 @@ public final class HostEventSink: EventSink, @unchecked Sendable {
 
     private func openConnection() -> IPCConnection? {
         guard let fresh = try? IPCClient.connect(path: path, timeout: 0.1),
-              let hello = try? IPCLine.encode(.hello(Hello(role: .proxy, build: build)))
+              let hello = try? IPCLine.encode(.hello(Hello(role: .proxy, build: buildReported ? nil : build)))
         else { return nil }
         Posix.setNonBlocking(fresh.fileDescriptor, true)
         guard write(hello, to: fresh) else {
             fresh.close()
             return nil
         }
+        buildReported = true
         connection = fresh
         return fresh
     }

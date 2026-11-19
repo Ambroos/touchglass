@@ -2,11 +2,13 @@
 # Builds build/TouchGlass.app with SwiftPM and signs it ad hoc.
 # Usage: scripts/build-app.sh [debug|release]   (default: release)
 #        scripts/build-app.sh --prebuilt DIR    (bundles the executables in DIR; builds nothing)
-# TOUCHGLASS_VERSION sets CFBundleShortVersionString and CFBundleVersion (default 0.1.0).
+# TOUCHGLASS_VERSION sets CFBundleShortVersionString and CFBundleVersion. The default, 0.0.0-dev, isn't a
+# release number, so a development build is never compared with a release: neither one makes the other's
+# host exit (see BuildInfo.isNewer).
 # --prebuilt is for builds that run swift build themselves, such as the Homebrew formula.
 set -eu
 
-version="${TOUCHGLASS_VERSION:-0.1.0}"
+version="${TOUCHGLASS_VERSION:-0.0.0-dev}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 products="TouchGlass touchglass-pinentry touchglass-scdaemon"

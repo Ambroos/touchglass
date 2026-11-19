@@ -8,6 +8,7 @@ public final class FakeHost: @unchecked Sendable {
     private let server: IPCServer
     private let condition = NSCondition()
     private var collected: [IPCMessage] = []
+    private var collectedHellos: [Hello] = []
     private var accepted: [Int32] = []
     private let onMessage: (@Sendable (IPCMessage) -> Void)?
 
@@ -37,6 +38,13 @@ public final class FakeHost: @unchecked Sendable {
         condition.lock()
         defer { condition.unlock() }
         return collected
+    }
+
+    /// Every hello received so far.
+    public var hellos: [Hello] {
+        condition.lock()
+        defer { condition.unlock() }
+        return collectedHellos
     }
 
     /// Waits until at least `count` messages have arrived or `timeout` passes, then returns all of them.
@@ -73,7 +81,12 @@ public final class FakeHost: @unchecked Sendable {
                     condition.unlock()
                 }
                 while let message = try? connection.receive() {
-                    if case .hello = message { continue }
+                    if case .hello(let hello) = message {
+                        condition.lock()
+                        collectedHellos.append(hello)
+                        condition.unlock()
+                        continue
+                    }
                     onMessage?(message)
                     condition.lock()
                     collected.append(message)

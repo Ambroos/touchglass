@@ -197,6 +197,29 @@ struct HostEventSinkLaunchTests {
         #expect(launches.load(ordering: .relaxed) == 2)
     }
 
+    /// The proxy reports its release to the first host only. A later host comes from the same bundle path,
+    /// so reporting again could only make a host of the same release exit again.
+    @Test func onlyTheFirstHelloCarriesTheBuild() throws {
+        let (directory, socket) = socketPath()
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        let sink = HostEventSink(path: socket, build: "0.2.0")
+        let first = try FakeHost(path: socket)
+        sink.send(opStart("1:p"))
+        sink.flush(timeout: 5)
+        #expect(first.waitForMessages(count: 1).count == 1)
+        #expect(first.hellos.map(\.build) == ["0.2.0"])
+
+        first.close()
+        first.dropConnections()
+        usleep(200_000)
+        let second = try FakeHost(path: socket)
+        defer { second.close() }
+        sink.send(opStart("1:s1"))
+        sink.flush(timeout: 5)
+        #expect(second.waitForMessages(count: 1).count == 1)
+        #expect(second.hellos.map(\.build) == [nil])
+    }
+
     @Test func launchesAreRateLimitedAndOnlyForOpStartAndTouchWait() throws {
         let (directory, socket) = socketPath()
         defer { try? FileManager.default.removeItem(atPath: directory) }
