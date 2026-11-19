@@ -1,9 +1,11 @@
 #!/bin/sh
 # Builds build/TouchGlass.app with SwiftPM and signs it ad hoc.
 # Usage: scripts/build-app.sh [debug|release]   (default: release)
+# TOUCHGLASS_VERSION sets CFBundleShortVersionString and CFBundleVersion (default 0.1.0).
 set -eu
 
 configuration="${1:-release}"
+version="${TOUCHGLASS_VERSION:-0.1.0}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 
@@ -23,6 +25,11 @@ for helper in touchglass-pinentry touchglass-scdaemon; do
     fi
 done
 
+# The install CLI. The Homebrew cask links it onto PATH; run from here, it works on this bundle.
+mkdir -p "$app/Contents/Resources"
+cp scripts/touchglass "$app/Contents/Resources/touchglass"
+chmod 755 "$app/Contents/Resources/touchglass"
+
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -39,9 +46,9 @@ cat > "$app/Contents/Info.plist" <<PLIST
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>$version</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>$version</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>LSMinimumSystemVersion</key>
