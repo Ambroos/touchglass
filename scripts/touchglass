@@ -1273,6 +1273,26 @@ cmd_status() {
     else
         say "Launchers:         not installed"
     fi
+    if [ -e "$launch_pinentry" ] || [ -e "$launch_scd" ]; then
+        stale="out of date (refreshes on next use, or run $prog refresh-launchers)"
+        # The older launcher counts: refresh-launchers rewrites both.
+        lf="$( { launcher_file_format "$launch_pinentry"; launcher_file_format "$launch_scd"; } | sort -n | head -n 1)"
+        if [ "$lf" -lt "$launcher_format" ]; then
+            say "Launcher format:   $lf, $stale"
+        elif [ "$lf" -gt "$launcher_format" ]; then
+            say "Launcher format:   $lf, from a later TouchGlass than this command, which writes $launcher_format"
+        else
+            say "Launcher format:   $lf, current"
+        fi
+        cr="$(cli_release "$cli_copy")"
+        if [ ! -f "$cli_copy" ]; then
+            say "Command copy:      missing; run $prog refresh-launchers"
+        elif release_newer "$cli_version" "$cr"; then
+            say "Command copy:      release $cr, $stale"
+        else
+            say "Command copy:      release ${cr:-unknown}"
+        fi
+    fi
 
     app="$(app_from_conf)"
     [ -n "$app" ] || app="${launched:-$default_app}"
