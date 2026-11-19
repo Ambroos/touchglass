@@ -78,6 +78,19 @@ let config: Config = {
     }
 }()
 
+/// The signal dispositions this process started with, as `<name>=default|ignore|handler` lines, recorded
+/// before it changes any of them.
+let startSignals: String = {
+    let names: [(String, Int32)] = [("HUP", SIGHUP), ("INT", SIGINT), ("PIPE", SIGPIPE), ("TERM", SIGTERM), ("USR1", SIGUSR1), ("USR2", SIGUSR2)]
+    return names.map { name, number in
+        var action = sigaction()
+        sigaction(number, nil, &action)
+        let handler = unsafeBitCast(action.__sigaction_u.__sa_handler, to: Int.self)
+        let disposition = handler == unsafeBitCast(SIG_DFL, to: Int.self) ? "default" : handler == unsafeBitCast(SIG_IGN, to: Int.self) ? "ignore" : "handler"
+        return "\(name)=\(disposition)"
+    }.joined(separator: "\n")
+}()
+
 signal(SIGPIPE, SIG_IGN)
 
 // MARK: - Card state, shared by all connections like the real card
@@ -98,7 +111,7 @@ func now() -> Double { Date().timeIntervalSince1970 }
 if let dir = config.record_dir {
     let env = ProcessInfo.processInfo.environment.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: "\n")
     let args = CommandLine.arguments.joined(separator: "\n")
-    try? Data("ARGS\n\(args)\nENV\n\(env)\n".utf8).write(to: URL(fileURLWithPath: dir + "/scd-start.txt"))
+    try? Data("ARGS\n\(args)\nENV\n\(env)\nSIGNALS\n\(startSignals)\n".utf8).write(to: URL(fileURLWithPath: dir + "/scd-start.txt"))
 }
 
 func record(_ name: String, _ suffix: String, _ bytes: UnsafeRawBufferPointer) {

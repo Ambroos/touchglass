@@ -10,9 +10,13 @@ import TouchGlassIPC
 ///   `_assuan_pipe_connect_pid` and signals it on card events.
 /// - The agent waits on this process's PID, so it exits only after the child exits, with the child's status.
 /// - At end of file from the agent, the proxy closes the child's stdin and keeps forwarding its output.
-/// - `SIGTERM`, `SIGINT` and `SIGHUP` are forwarded to the child instead of ending the proxy.
+/// - `SIGTERM`, `SIGINT` and `SIGHUP` are forwarded to the child instead of ending the proxy. Before the
+///   child exists, they end the proxy as their default action does.
 /// - `SIGUSR1` and `SIGUSR2` are ignored. scdaemon sends its event signal to the peer of a socket session,
 ///   which is the proxy for a relayed one; ending the proxy would make the agent think scdaemon exited.
+/// - The child starts with these five signals at their default actions, as it does under gpg-agent, and with
+///   every other disposition and the signal mask as the proxy inherited them. gpg-agent ignores `SIGPIPE`,
+///   so scdaemon inherits that through the proxy.
 public final class ScdaemonProxy: @unchecked Sendable {
     private let config: ProxyConfig
     private let detector: OperationDetector
@@ -39,12 +43,15 @@ public final class ScdaemonProxy: @unchecked Sendable {
 
     /// Starts the child, forwards traffic until it exits, then exits with its status.
     public func run(arguments: [String]) -> Never {
+        // Before the spawn, so an event signal that arrives early doesn't end the proxy.
+        installSignalHandlers()
         guard let pipes = makePipes(), let child = spawn(arguments: arguments, pipes: pipes) else {
             FileHandle.standardError.write(Data("touchglass-scdaemon: cannot start \(config.scdaemonPath)\n".utf8))
             exit(2)
         }
         Self.childPID = child
-        installSignalHandlers()
+        // After the spawn, so scdaemon inherits SIGPIPE as the proxy did.
+        Posix.ignoreSIGPIPE()
         Posix.close(pipes.childStdin)
         Posix.close(pipes.childStdout)
 
@@ -114,7 +121,13 @@ public final class ScdaemonProxy: @unchecked Sendable {
         posix_spawnattr_init(&attributes)
         defer { posix_spawnattr_destroy(&attributes) }
         // Close every other descriptor in the child, as gpg-agent does when it starts scdaemon itself.
-        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
+        // Reset the signals that the proxy handles or ignores: an ignored disposition survives exec, and
+        // scdaemon handles SIGUSR1, SIGUSR2 and the others itself, but an ignored signal never reaches it.
+        var defaults = sigset_t()
+        sigemptyset(&defaults)
+        for signal in Self.handledSignals + Self.ignoredSignals { sigaddset(&defaults, signal) }
+        posix_spawnattr_setsigdefault(&attributes, &defaults)
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGDEF))
 
         let argv0 = (config.scdaemonPath as NSString).lastPathComponent
         let argv = [argv0] + arguments
@@ -126,20 +139,31 @@ public final class ScdaemonProxy: @unchecked Sendable {
         return result == 0 ? child : nil
     }
 
+    /// The signals that the proxy forwards to the child.
+    static let handledSignals = [SIGTERM, SIGINT, SIGHUP]
+    /// scdaemon's event signals, which the proxy ignores.
+    static let ignoredSignals = [SIGUSR1, SIGUSR2]
+
     private func installSignalHandlers() {
-        Posix.ignoreSIGPIPE()
         let forward: @convention(c) (Int32) -> Void = { signal in
-            if ScdaemonProxy.childPID > 0 { kill(ScdaemonProxy.childPID, signal) }
+            let child = ScdaemonProxy.childPID
+            if child > 0 {
+                kill(child, signal)
+            } else {
+                // No child to forward to yet: take the default action. The signal stays blocked until the
+                // handler returns, so the raised one ends the process then.
+                Darwin.signal(signal, SIG_DFL)
+                raise(signal)
+            }
         }
-        for sig in [SIGTERM, SIGINT, SIGHUP] {
+        for sig in Self.handledSignals {
             var action = sigaction()
             action.__sigaction_u.__sa_handler = forward
             action.sa_flags = SA_RESTART
             sigemptyset(&action.sa_mask)
             sigaction(sig, &action, nil)
         }
-        signal(SIGUSR1, SIG_IGN)
-        signal(SIGUSR2, SIG_IGN)
+        for sig in Self.ignoredSignals { signal(sig, SIG_IGN) }
     }
 
     /// Starts the host app and reaps `open` on a background thread. Runs on the sink's thread.

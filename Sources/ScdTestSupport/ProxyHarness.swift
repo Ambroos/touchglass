@@ -78,7 +78,9 @@ public final class ProxyHarness: @unchecked Sendable {
     ///   - touchDelayMs: The proxy's touch-wait detection delay.
     ///   - hostPath: Host socket path; defaults to `<dir>/host/host.sock`.
     ///   - extraEnvironment: Added to the proxy's environment, to check that it reaches scdaemon.
-    public init(card: Card = Card(), withSocket: Bool = true, touchDelayMs: Int = 250, hostPath: String? = nil, extraEnvironment: [String: String] = [:]) throws {
+    ///   - ignoredSignals: Signal names, such as `PIPE`, that the proxy starts with ignored, as it inherits
+    ///     them from gpg-agent. A shell sets them and then runs the proxy in its place.
+    public init(card: Card = Card(), withSocket: Bool = true, touchDelayMs: Int = 250, hostPath: String? = nil, extraEnvironment: [String: String] = [:], ignoredSignals: [String] = []) throws {
         let base = NSTemporaryDirectory() + "tg-\(getpid())-\(UInt32.random(in: 0...UInt32.max))"
         directory = base
         recordDirectory = base + "/rec"
@@ -100,8 +102,14 @@ public final class ProxyHarness: @unchecked Sendable {
         try JSONEncoder().encode(config).write(to: URL(fileURLWithPath: configPath))
 
         process = Process()
-        process.executableURL = URL(fileURLWithPath: Self.executable("touchglass-scdaemon"))
-        process.arguments = ["--multi-server"]
+        let proxy = Self.executable("touchglass-scdaemon")
+        if ignoredSignals.isEmpty {
+            process.executableURL = URL(fileURLWithPath: proxy)
+            process.arguments = ["--multi-server"]
+        } else {
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = ["-c", "trap '' \(ignoredSignals.joined(separator: " ")) && exec \"$0\" \"$@\"", proxy, "--multi-server"]
+        }
         var env = ProcessInfo.processInfo.environment
         env["TOUCHGLASS_SCDAEMON_PROGRAM"] = Self.executable("fake-scdaemon")
         env["TOUCHGLASS_SOCKET"] = hostSocketPath

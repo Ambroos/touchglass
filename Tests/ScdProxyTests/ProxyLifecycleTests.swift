@@ -80,6 +80,19 @@ struct ProxyLifecycleTests {
         #expect(harness.finish()?.status == 0)
     }
 
+    /// scdaemon starts with the dispositions it has under gpg-agent: the signals that the proxy handles or
+    /// ignores at their defaults, whatever the proxy inherited, and `SIGPIPE` as the proxy inherited it.
+    @Test(arguments: [[], ["PIPE", "USR1", "USR2", "TERM"]])
+    func scdaemonStartsWithTheAgentsSignalDispositions(ignoredSignals: [String]) throws {
+        let harness = try ProxyHarness(card: .init(), ignoredSignals: ignoredSignals)
+        defer { harness.cleanUp() }
+        try harness.start()
+        #expect(harness.finish()?.status == 0)
+        let record = harness.scdaemonStartRecord.components(separatedBy: "\nSIGNALS\n")
+        let pipe = ignoredSignals.contains("PIPE") ? "ignore" : "default"
+        #expect(record.last == "HUP=default\nINT=default\nPIPE=\(pipe)\nTERM=default\nUSR1=default\nUSR2=default\n")
+    }
+
     @Test func hostAppSetting() throws {
         let base = [ProxyConfig.scdaemonEnvironmentKey: "/usr/bin/true"]
         #expect(try #require(ProxyConfig.resolve(environment: base.merging(["TOUCHGLASS_HOST_APP": "none"]) { $1 })).hostApp == nil)
