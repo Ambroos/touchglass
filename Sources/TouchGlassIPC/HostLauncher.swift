@@ -37,36 +37,9 @@ public enum HostLauncher {
     }
 
     /// Runs `/usr/bin/open -g` for `target`, an app bundle path or an app name, without activating it.
-    /// Returns the PID of `open`, which the caller reaps. Stdio goes to `/dev/null` and no other descriptor
-    /// is inherited, so `open` never holds a helper's agent pipes or sockets.
+    /// Returns the PID of `open`, which the caller reaps. See `DetachedProcess.spawn` for what `open` inherits.
     public static func launch(_ target: String) -> pid_t? {
         let arguments = target.hasPrefix("/") ? ["-g", target] : ["-g", "-a", target]
-        var actions: posix_spawn_file_actions_t?
-        posix_spawn_file_actions_init(&actions)
-        defer { posix_spawn_file_actions_destroy(&actions) }
-        posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
-        posix_spawn_file_actions_addopen(&actions, 1, "/dev/null", O_WRONLY, 0)
-        posix_spawn_file_actions_addopen(&actions, 2, "/dev/null", O_WRONLY, 0)
-
-        var attributes: posix_spawnattr_t?
-        posix_spawnattr_init(&attributes)
-        defer { posix_spawnattr_destroy(&attributes) }
-        // Helpers ignore or catch some signals; `open` starts with the defaults.
-        var defaults = sigset_t()
-        sigemptyset(&defaults)
-        for sig in [SIGINT, SIGTERM, SIGHUP, SIGPIPE, SIGUSR1, SIGUSR2] {
-            sigaddset(&defaults, sig)
-        }
-        var empty = sigset_t()
-        sigemptyset(&empty)
-        posix_spawnattr_setsigdefault(&attributes, &defaults)
-        posix_spawnattr_setsigmask(&attributes, &empty)
-        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_CLOEXEC_DEFAULT))
-
-        let path = "/usr/bin/open"
-        let argv = ([path] + arguments).map { strdup($0) } + [nil]
-        defer { argv.forEach { free($0) } }
-        var pid: pid_t = 0
-        return posix_spawn(&pid, path, &actions, &attributes, argv, environ) == 0 ? pid : nil
+        return DetachedProcess.spawn("/usr/bin/open", arguments: arguments)
     }
 }
