@@ -46,6 +46,9 @@ else
     # A release is built from committed sources only, so the tag matches what was signed.
     [ -z "$(git status --porcelain)" ] || die "the working tree has uncommitted changes; commit or stash them first"
     if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then die "the tag v$version exists already"; fi
+    # A release is a commit that main's tests ran for. Fetch first, so origin/main is current.
+    git merge-base --is-ancestor HEAD origin/main 2>/dev/null ||
+        die "HEAD is not on origin/main; push it to main, run 'git fetch origin', then run this again"
     identity="${TOUCHGLASS_SIGN_IDENTITY:-}"
     identity_name="$identity"
     if [ -z "$identity" ]; then
@@ -139,6 +142,13 @@ cat <<EOF
 Next steps:
 
   git tag v$version && git push origin v$version
+
+The tag push starts a Tests run. Wait until it passes; gh run watch lets you pick it:
+
+  gh run watch --exit-status
+
+Then create the GitHub release:
+
   gh release create v$version "$root/$zip" --title "TouchGlass $version" --generate-notes
 
 Then run the Release workflow in homebrew-touchglass. It updates the formula to the tag and

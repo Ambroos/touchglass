@@ -93,9 +93,9 @@ A release has three steps: build the notarized zip, push the tag and create the 
    scripts/release.sh 1.2.3
    ```
 
-   The script builds the app with that version for Apple silicon and Intel Macs, signs the helpers and the app with the hardened runtime, notarizes the zip with `xcrun notarytool`, and staples the ticket. It writes `build/release/TouchGlass-<version>.zip` and prints the commands for the next step. It creates no tag or release itself.
+   The script builds the app with that version for Apple silicon and Intel Macs, signs the helpers and the app with the hardened runtime, notarizes the zip with `xcrun notarytool`, and staples the ticket. It writes `build/release/TouchGlass-<version>.zip` and prints the commands for the next step. It creates no tag or release itself. Except with `--dry-run`, it refuses a commit that isn't on `origin/main`, so the tag points at a commit that the Tests workflow ran for on `main`; push to `main` and run `git fetch origin` first.
 
-2. Push the tag and create the GitHub release with the commands that the script prints. The tag must look like `v1.2.3`. The Tests workflow runs the unit and installer tests on the tag.
+2. Push the tag with the command that the script prints. The tag must look like `v1.2.3`. The Tests workflow runs the unit and installer tests on the tag; wait until that run passes, then create the GitHub release with the command that the script prints.
 
 3. Run the Release workflow in [homebrew-touchglass](https://github.com/ambroos/homebrew-touchglass), from its Actions tab or with the GitHub CLI:
 
