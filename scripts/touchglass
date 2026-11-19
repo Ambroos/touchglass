@@ -106,6 +106,7 @@ Usage:
   touchglass uninstall [--apply] [--remove-app] [--dry-run]
   touchglass uninstall --check
   touchglass status
+  touchglass refresh-launchers
   touchglass --version
 
 install    Sets up ~/Library/Application Support/TouchGlass: the launchers that
@@ -133,8 +134,13 @@ uninstall  Prints how to restore the original pinentry-program and
            --check exits with status 1 while gpg-agent.conf or the launchers
            still refer to TouchGlass, to check before you delete TouchGlass's
            files.
-status     Shows what gpg-agent.conf points at, where the launchers lead and
-           whether the host and the scdaemon proxy run.
+status     Shows what gpg-agent.conf points at, where the launchers lead, whether
+           they are current, and whether the host and the scdaemon proxy run.
+refresh-launchers
+           Rewrites the launchers and the copy of this command in the format
+           of this release, for the app that the launchers already run, and
+           changes nothing else. The helpers run it themselves after an
+           upgrade. Does nothing without an install.
 
 --dry-run prints what would change, including gpg-agent.conf as a diff, and writes nothing.
 GNUPGHOME selects the GnuPG home directory (default ~/.gnupg).
@@ -351,6 +357,35 @@ write_launchers() { # app
         write_atomic "$cli_copy" 755 "$self"
     fi
     say "Wrote the launchers for $1 to $bin_dir."
+}
+
+# The format that a launcher records: 0 for a launcher from before the stamp, nothing if the file is missing.
+launcher_file_format() { # launcher
+    [ -f "$1" ] || return 0
+    f="$(sed -n 's/^# touchglass-launcher \([0-9][0-9]*\)$/\1/p' "$1" | head -n 1)"
+    printf '%s\n' "${f:-0}"
+}
+
+# The release that a copy of this script came from: the value of its cli_version line.
+cli_release() { # file
+    [ -f "$1" ] || return 0
+    sed -n 's/^cli_version=//p' "$1" | head -n 1
+}
+
+# True if release a is later than release b. Both must be dotted numbers, such as "0.2.0"; anything
+# else, such as "dev", is never later. BuildInfo.isNewer in TouchGlassIPC compares the same way.
+release_newer() { # a b
+    awk -v a="$1" -v b="$2" '
+    function ok(v) { return v ~ /^[0-9]+(\.[0-9]+)*$/ }
+    BEGIN {
+        if (!ok(a) || !ok(b)) exit 1
+        n = split(a, x, "."); m = split(b, y, "."); k = (n > m) ? n : m
+        for (i = 1; i <= k; i++) {
+            p = (i <= n) ? x[i] + 0 : 0; q = (i <= m) ? y[i] + 0 : 0
+            if (p != q) exit((p > q) ? 0 : 1)
+        }
+        exit 1
+    }'
 }
 
 remove_launchers() {
@@ -727,6 +762,57 @@ cmd_install() {
     say "  scdaemon-program $launch_scd"
     # Stopping gpg-agent stops its scdaemon too.
     reload_agent
+}
+
+# Rewrites the launchers for the app that they already run, and the copy of this script next to them.
+# Changes nothing else: not gpg-agent.conf, the settings or the app. A helper that a launcher with an
+# older format started runs this from its own bundle, so `brew upgrade` needs no new install. Every
+# file is replaced by rename, so a launcher that gpg-agent runs meanwhile reads either version whole,
+# and two helpers that refresh at once write the same bytes. Never replaces a launcher of a later
+# format or a copy of a later release.
+cmd_refresh_launchers() {
+    [ $# -eq 0 ] || die "refresh-launchers takes no options"
+    if [ ! -e "$launch_pinentry" ] && [ ! -e "$launch_scd" ]; then
+        say "No launchers in $bin_dir, so nothing to refresh; '$prog install' writes them."
+        return 0
+    fi
+    for launcher in "$launch_pinentry" "$launch_scd"; do
+        f="$(launcher_file_format "$launcher")"
+        if [ -n "$f" ] && [ "$f" -gt "$launcher_format" ]; then
+            die "$launcher has launcher format $f, which a later TouchGlass wrote; this command writes format $launcher_format, so it changed nothing."
+        fi
+    done
+    app="$(launcher_app "$launch_pinentry")"
+    [ -n "$app" ] || app="$(launcher_app "$launch_scd")"
+    [ -n "$app" ] || die "the launchers in $bin_dir name no app; run '$prog install' again"
+
+    tmp_launcher="$(mktemp "${TMPDIR:-/tmp}/touchglass.XXXXXX")"
+    staged=""
+    trap 'rm -f "$tmp_launcher" ${staged:+"$staged"}' EXIT
+    rewrote=0
+    for kind in pinentry scdaemon; do
+        target="$bin_dir/touchglass-$kind"
+        launcher_script "$kind" "$app" > "$tmp_launcher"
+        if ! cmp -s "$tmp_launcher" "$target"; then
+            write_atomic "$target" 755 "$tmp_launcher"
+            rewrote=1
+        fi
+    done
+    if [ "$rewrote" = 1 ]; then
+        say "Rewrote the launchers for $app in $bin_dir."
+    else
+        say "The launchers in $bin_dir are current."
+    fi
+
+    copy_release="$(cli_release "$cli_copy")"
+    if [ "$self" = "$(realpath "$cli_copy" 2>/dev/null || true)" ]; then
+        :
+    elif release_newer "$copy_release" "$cli_version"; then
+        say "Kept $cli_copy, which is from the later release $copy_release."
+    elif ! cmp -s "$self" "$cli_copy"; then
+        write_atomic "$cli_copy" 755 "$self"
+        say "Copied $prog $cli_version to $cli_copy."
+    fi
 }
 
 # Prints how to change gpg-agent.conf by hand to what install --apply writes, markers included, so that
@@ -1233,6 +1319,7 @@ case "$command" in
     install) cmd_install "$@"; exit "$exit_status" ;;
     uninstall) cmd_uninstall "$@"; exit "$exit_status" ;;
     status) cmd_status "$@" ;;
+    refresh-launchers) cmd_refresh_launchers "$@" ;;
     version | --version) say "$prog $cli_version" ;;
     help | -h | --help) usage ;;
     *) usage >&2; exit 2 ;;

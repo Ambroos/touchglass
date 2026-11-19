@@ -828,5 +828,93 @@ touch "$T/running-touchglass-scdaemon"
 tg status
 check "running" out_has "scdaemon proxy:    running"
 
+# Turns the launchers into ones of format 0, as installs wrote them before the format stamp.
+make_format_0() {
+    for launcher in "$LP" "$LS"; do
+        sed -e '/^# touchglass-launcher /d' -e 's/TOUCHGLASS_LAUNCHER=1; export TOUCHGLASS_LAUNCHER; //' "$launcher" > "$T/stale"
+        cat "$T/stale" > "$launcher"
+    done
+}
+inode() { ls -i "$1" | awk '{ print $1 }'; }
+
+begin "refresh-launchers rewrites stale launchers as install writes them"
+printf '%s\n' "pinentry-program $EX" > "$CONF"
+tg install --apply --from "$app"
+mkdir -p "$T/installed"
+cp -p "$LP" "$LS" "$SUPPORT/bin/touchglass" "$SUPPORT/pinentry.conf" "$SUPPORT/scdaemon-program" "$CONF" "$T/installed/"
+make_format_0
+check "stale launchers lack the stamp" sh -c "! grep -q '^# touchglass-launcher' '$LP'"
+sed 's/^cli_version=.*/cli_version=0.0.1/' "$tool" > "$SUPPORT/bin/touchglass"
+reloads="$(kills)"
+tg refresh-launchers
+check "pinentry launcher as install wrote it" cmp -s "$LP" "$T/installed/touchglass-pinentry"
+check "scdaemon launcher as install wrote it" cmp -s "$LS" "$T/installed/touchglass-scdaemon"
+check "launchers stay executable" test "$(/usr/bin/stat -f %Lp "$LP")" = 755 -a "$(/usr/bin/stat -f %Lp "$LS")" = 755
+check "CLI copy replaced" cmp -s "$SUPPORT/bin/touchglass" "$tool"
+check "gpg-agent.conf untouched" cmp -s "$CONF" "$T/installed/gpg-agent.conf"
+check "pinentry.conf untouched" cmp -s "$SUPPORT/pinentry.conf" "$T/installed/pinentry.conf"
+check "scdaemon path untouched" cmp -s "$SUPPORT/scdaemon-program" "$T/installed/scdaemon-program"
+check "no backup" test "$(backups)" = 1
+check "gpg-agent left running" test "$(kills)" = "$reloads"
+check "says what it rewrote" out_has "Rewrote the launchers for $APP"
+check "no staged files left" test -z "$(ls -A "$SUPPORT/bin" | grep '^\.')"
+before="$(inode "$LP")"
+tg refresh-launchers
+check "second run reports current launchers" out_has "are current"
+check "second run writes nothing" test "$(inode "$LP")" = "$before"
+
+begin "refresh-launchers keeps the app that the launchers run"
+tg install --from "$app"
+cp "$LP" "$T/expected"
+mkdir -p "$app/Contents/Resources"
+cp "$tool" "$app/Contents/Resources/touchglass"
+make_format_0
+"$app/Contents/Resources/touchglass" refresh-launchers > "$T/out" 2>&1 || fail "refresh from the bundle failed"
+check "launchers still run the installed app" cmp -s "$LP" "$T/expected"
+
+begin "refresh-launchers without an install does nothing"
+printf '%s\n' "pinentry-program $EX" > "$CONF"
+cp "$CONF" "$T/original"
+tg refresh-launchers
+check "says there is nothing to refresh" out_has "nothing to refresh"
+check "no support files" test ! -e "$SUPPORT"
+check "gpg-agent.conf untouched" cmp -s "$CONF" "$T/original"
+
+begin "refresh-launchers never downgrades"
+tg install --from "$app"
+sed 's/^# touchglass-launcher 1$/# touchglass-launcher 2/' "$LP" > "$T/later"
+cat "$T/later" > "$LP"
+sed -e '/^# touchglass-launcher /d' "$LS" > "$T/stale-scd"
+cat "$T/stale-scd" > "$LS"
+if "$tool" refresh-launchers > "$T/out" 2>&1; then fail "refresh over a later launcher format exited 0"; fi
+check "explains the refusal" out_has "a later TouchGlass wrote"
+check "later launcher kept" cmp -s "$LP" "$T/later"
+check "other launcher left alone too" cmp -s "$LS" "$T/stale-scd"
+# A copy of the command from a later release stays; one from an earlier release is replaced.
+tg install --from "$app"
+mkdir -p "$T/release"
+sed 's/^cli_version=.*/cli_version=1.2.0/' "$tool" > "$T/release/touchglass"
+chmod +x "$T/release/touchglass"
+sed 's/^cli_version=.*/cli_version=1.10.0/' "$tool" > "$SUPPORT/bin/touchglass"
+cp "$SUPPORT/bin/touchglass" "$T/later-cli"
+"$T/release/touchglass" refresh-launchers > "$T/out" 2>&1 || fail "refresh with a later CLI copy failed"
+check "later CLI copy kept" cmp -s "$SUPPORT/bin/touchglass" "$T/later-cli"
+check "says why" out_has "from the later release 1.10.0"
+sed 's/^cli_version=.*/cli_version=1.1.9/' "$tool" > "$SUPPORT/bin/touchglass"
+"$T/release/touchglass" refresh-launchers > "$T/out" 2>&1 || fail "refresh with an earlier CLI copy failed"
+check "earlier CLI copy replaced" cmp -s "$SUPPORT/bin/touchglass" "$T/release/touchglass"
+
+begin "two refreshes at once"
+tg install --from "$app"
+cp "$LP" "$LS" "$T/"
+make_format_0
+"$tool" refresh-launchers > "$T/out1" 2>&1 & first=$!
+"$tool" refresh-launchers > "$T/out2" 2>&1 & second=$!
+wait "$first" || fail "first refresh failed"
+wait "$second" || fail "second refresh failed"
+check "pinentry launcher whole" cmp -s "$LP" "$T/touchglass-pinentry"
+check "scdaemon launcher whole" cmp -s "$LS" "$T/touchglass-scdaemon"
+check "no staged files left" test -z "$(ls -A "$SUPPORT/bin" | grep '^\.')"
+
 printf '\n%d sandboxes, %d failures\n' "$count" "$failures"
 [ "$failures" = 0 ]
