@@ -50,6 +50,24 @@ import TouchGlassIPC
     }
 }
 
+@Suite struct ConfigTests {
+    /// A fallback in pinentry.conf counts while it is executable; after that, the defaults take over.
+    @Test func fallbackFromTheFileMustBeExecutable() throws {
+        let sandbox = Sandbox()
+        let path = sandbox.directory + "/pinentry.conf"
+        try "fallback-pinentry = /bin/sh\n".write(toFile: path, atomically: true, encoding: .utf8)
+        #expect(Config.load(environment: ["TOUCHGLASS_CONFIG": path]).fallbackPinentry == "/bin/sh")
+
+        let missing = sandbox.directory + "/gone/pinentry-mac"
+        try "fallback-pinentry = \(missing)\n".write(toFile: path, atomically: true, encoding: .utf8)
+        let installed = Config.defaultFallbacks.first { FileManager.default.isExecutableFile(atPath: $0) }
+        #expect(Config.load(environment: ["TOUCHGLASS_CONFIG": path]).fallbackPinentry == installed ?? missing)
+
+        // The environment variable is taken as it is.
+        #expect(Config.load(environment: ["TOUCHGLASS_CONFIG": path, "TOUCHGLASS_FALLBACK_PINENTRY": missing]).fallbackPinentry == missing)
+    }
+}
+
 /// Answers every request like a user who types `secret` and presses OK.
 func answering(secret: String) -> @Sendable (IPCMessage) -> IPCMessage? {
     { message in

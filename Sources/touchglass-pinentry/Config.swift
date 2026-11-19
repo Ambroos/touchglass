@@ -7,7 +7,7 @@ import TouchGlassIPC
 ///
 /// | Key | Environment | Default |
 /// |---|---|---|
-/// | `fallback-pinentry` | `TOUCHGLASS_FALLBACK_PINENTRY` | first of `/opt/homebrew/bin/pinentry-mac`, `/usr/local/bin/pinentry-mac` that exists |
+/// | `fallback-pinentry` | `TOUCHGLASS_FALLBACK_PINENTRY` | the first executable of `defaultFallbacks`; also used when the file names a pinentry that isn't executable |
 /// | `host-app` | `TOUCHGLASS_HOST_APP` | the `TouchGlass.app` that contains this executable, else the app named `TouchGlass`; an absolute path opens that bundle; `none` disables launching |
 /// | `connect-timeout-ms` | `TOUCHGLASS_CONNECT_TIMEOUT_MS` | 300 |
 /// | `launch-timeout-ms` | `TOUCHGLASS_LAUNCH_TIMEOUT_MS` | 2000 |
@@ -26,7 +26,9 @@ struct Config {
     var hostStallTimeout: TimeInterval
     var logFile: String?
 
-    static let defaultFallbacks = ["/opt/homebrew/bin/pinentry-mac", "/usr/local/bin/pinentry-mac"]
+    /// pinentry-mac, then Homebrew's pinentry, which GnuPG depends on: `brew uninstall touchglass` can
+    /// remove pinentry-mac with it. The pinentry launcher tries the same list.
+    static let defaultFallbacks = ["/opt/homebrew/bin/pinentry-mac", "/usr/local/bin/pinentry-mac", "/opt/homebrew/bin/pinentry", "/usr/local/bin/pinentry"]
 
     static func load(environment: [String: String] = ProcessInfo.processInfo.environment) -> Config {
         let configPath = environment["TOUCHGLASS_CONFIG"] ?? IPCPaths.supportDirectory + "/pinentry.conf"
@@ -40,8 +42,13 @@ struct Config {
             (value(key, variable).flatMap(Double.init) ?? defaultMs) / 1000
         }
 
-        let fallback = value("fallback-pinentry", "TOUCHGLASS_FALLBACK_PINENTRY")
-            ?? defaultFallbacks.first { FileManager.default.isExecutableFile(atPath: $0) }
+        // The environment variable is exact, for tests; the file's value counts while it is executable.
+        let executable = { (path: String) in FileManager.default.isExecutableFile(atPath: path) }
+        let fromFile = file["fallback-pinentry"].flatMap { $0.isEmpty ? nil : $0 }
+        let fallback = environment["TOUCHGLASS_FALLBACK_PINENTRY"].flatMap { $0.isEmpty ? nil : $0 }
+            ?? fromFile.flatMap { executable($0) ? $0 : nil }
+            ?? defaultFallbacks.first(where: executable)
+            ?? fromFile
             ?? defaultFallbacks[0]
         let app = value("host-app", "TOUCHGLASS_HOST_APP") ?? HostLauncher.defaultTarget()
 
