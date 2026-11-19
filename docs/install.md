@@ -30,7 +30,8 @@ Install writes TouchGlass's own files and changes nothing else:
 2. It writes the path of the real scdaemon to `~/Library/Application Support/TouchGlass/scdaemon-program`. The path comes from the `scdaemon-program` line that `gpg-agent.conf` had before TouchGlass, else from an earlier install, else from `gpgconf --list-components`. For Homebrew's GnuPG, install prefers a stable path such as `/opt/homebrew/opt/gnupg/libexec/scdaemon` over the versioned `Cellar` path, which a GnuPG upgrade removes.
 3. If `~/Library/Application Support/TouchGlass/pinentry.conf` doesn't exist, it writes the file with `fallback-pinentry` set to the pinentry that `gpg-agent.conf` named before, else `pinentry-mac`, else the pinentry that `gpgconf --list-components` reports. A pinentry that isn't executable doesn't count. On a later install, it replaces a `fallback-pinentry` that no longer exists and keeps one that works. If it finds no pinentry, it warns and leaves the setting out.
 4. It writes two launchers, `touchglass-pinentry` and `touchglass-scdaemon`, to `~/Library/Application Support/TouchGlass/bin`, and copies the `touchglass` command next to them. Each launcher runs the helper of the same name in the app. While the app is missing, for example during `brew upgrade`, the pinentry launcher runs the fallback pinentry and the scdaemon launcher runs the real scdaemon, so card operations keep working without the panel.
-5. It prints the change to make in `gpg-agent.conf` and the command that restarts gpg-agent.
+5. If a card is attached and gpg-agent runs, it reads the touch policy of each key on the card and stores it in `~/Library/Application Support/TouchGlass/cards.conf`, as `touchglass card` does; see [Touch policies](configuration.md#touch-policies). It never starts gpg-agent for this, and it reads the card before `--apply` stops gpg-agent.
+6. It prints the change to make in `gpg-agent.conf` and the command that restarts gpg-agent.
 
 The printed change replaces your `pinentry-program` and `scdaemon-program` lines with these two, with your home directory in the paths:
 
@@ -89,7 +90,7 @@ From a checkout, run `scripts/touchglass install` again after you pull changes. 
 touchglass status
 ```
 
-Status shows what `gpg-agent.conf` points at, which app the launchers run, whether the launchers and the command copy are out of date, whether the host and the scdaemon proxy are running, which pinentry the launchers fall back to, and the `gpg-agent.conf` backups.
+Status shows what `gpg-agent.conf` points at, which app the launchers run, whether the launchers and the command copy are out of date, whether the host and the scdaemon proxy are running, which pinentry the launchers fall back to, the touch policies that TouchGlass learned, the `touch-cache` setting, and the `gpg-agent.conf` backups.
 
 ## Uninstall
 
@@ -117,7 +118,7 @@ To check whether anything still refers to TouchGlass before you delete its files
 Uninstall leaves these behind:
 
 - The `gpg-agent.conf.touchglass-backup-<timestamp>` files next to `gpg-agent.conf`.
-- `~/Library/Application Support/TouchGlass`, which holds `pinentry.conf`, `scdaemon-program`, `host.conf` if you wrote one, and the host's socket. A later install reuses `pinentry.conf`.
+- `~/Library/Application Support/TouchGlass`, which holds `pinentry.conf`, `scdaemon-program`, `host.conf` if you wrote one, the learned touch policies in `cards.conf`, and the host's socket. A later install reuses `pinentry.conf`.
 - The app's preferences, such as the sound settings.
 - The installed app, unless you pass `--remove-app`.
 - A running host. To quit it, run `pkill -x TouchGlass`.

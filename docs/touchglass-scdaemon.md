@@ -8,7 +8,7 @@ gpg-agent starts `touchglass-scdaemon --multi-server` with a pipe on stdin and s
 
 The proxy exits when scdaemon exits, with the same exit status, or by the same signal. When gpg-agent closes the pipe, the proxy closes scdaemon's stdin and keeps forwarding scdaemon's output until scdaemon exits. `SIGTERM`, `SIGINT` and `SIGHUP` are forwarded to scdaemon. `SIGUSR1` and `SIGUSR2` are ignored: scdaemon sends its card event signal to the peer of a socket session, which is the proxy for a relayed session, and the default action would end the proxy. scdaemon itself starts with all five signals at their default actions and `SIGPIPE` as gpg-agent left it, the same as without the proxy.
 
-The proxy's parent is the gpg-agent that started it. Each `op_start` carries that agent's PID as `agent_pid`, so the host looks for the client that asked for the operation among that agent's connections only.
+The proxy's parent is the gpg-agent that started it. Each `op_start` carries that agent's PID as `agent_pid`, so the host looks for the client that asked for the operation among that agent's connections only. The proxy's `hello` carries that agent's GnuPG home, from the `--homedir` argument that gpg-agent passes for a home other than its default, else `GNUPGHOME`, and the `bin` directory next to the real scdaemon's `libexec` directory. The host uses them to ask gpg-agent for a card's touch policy.
 
 ### Socket relay
 
@@ -21,8 +21,9 @@ gpg-agent uses the pipe for one session at a time. Sessions that overlap it, suc
 | `op_start` | `PKSIGN`, `PKAUTH` or `PKDECRYPT` reaches scdaemon. The slot and card serial come from the `S KEYINFO` line the agent requests before each operation. `PKSIGN` with the slot 3 key reports `auth`, because scdaemon runs it as an authentication. `agent_pid` is the proxy's parent, the gpg-agent; the field is optional, so hosts and proxies of different versions still understand each other. |
 | `pin_needed` | scdaemon sends `INQUIRE NEEDPIN`. |
 | `pin_sent` | The agent answers that inquiry with `END`. |
-| `touch_wait` | An operation is outstanding, no inquiry is open, and 400 ms passed since the operation command, the last inquiry answer or `S PINCACHE_PUT`. The card sends nothing while it waits for a touch, so this delay is the only signal. `at` is the start of that delay. A `POPUPPINPADPROMPT --ack` inquiry reports it at once. |
+| `touch_wait` | An operation is outstanding, no inquiry is open, and 400 ms passed since the operation command, the last inquiry answer or `S PINCACHE_PUT`. The card sends nothing while it waits for a touch, so this delay is the only signal. `at` is the start of that delay. A `POPUPPINPADPROMPT --ack` inquiry reports it at once and sets `pinpad`. |
 | `op_end` | scdaemon answers `OK` or `ERR`. `ERR` codes map to `bad_pin`, `timeout`, `cancelled` or `error`; `code` carries the raw value. |
+| `touch_policy` | scdaemon sends `S UIF-1`, `S UIF-2` or `S UIF-3`, the touch policy of the signature, decryption or authentication key, after an `S SERIALNO` on the same connection named the card. scdaemon sends these lines for `LEARN`, which gpg-agent sends for `gpg --card-status`, and for `GETATTR UIF`. `uif` is the first byte of the value; see [Touch policies](configuration.md#touch-policies). Without an earlier `S SERIALNO`, the proxy reports nothing, because it can't tell which card the line is about. |
 
 Each connection has an ID of the form `<proxy pid>:p` for the pipe and `<proxy pid>:s<n>` for relayed socket sessions.
 
@@ -32,9 +33,9 @@ The tap never buffers the payload of a `D` line. PINs, PIN cache values, signatu
 
 A YubiKey with the `cached` touch policy keeps a touch for 15 seconds, restarts that window on every operation that uses it, and lets one touch cover every key on the card. An operation inside the window can still stay silent for longer than 400 ms, for example during a rebase that signs many commits, so the proxy reports a `touch_wait` for an operation that needs no touch.
 
-The host, not the proxy, handles this, because the window belongs to the card: an SSH login on one scdaemon session uses the touch of a signature on another, and only the host sees every proxy and the queue of touch waits. Each successful `op_end` restarts the window of its card serial for `touch-cache` seconds; see [Configure TouchGlass](configuration.md#panel-settings). A `touch_wait` whose command started inside the window shows the touch step only 1.5 s after that command. If the operation ends first, the panel shows nothing for it: no touch step and no result. When the panel does show, the countdown still runs from the command's `at`, so it shows the time the card has left. A touch wait queued behind another one counts from the end of the operation before it, which restarted the window. After a PIN prompt, the touch step replaces the verifying state at once, as outside the window.
+The host, not the proxy, handles this, because the window belongs to the card: an SSH login on one scdaemon session uses the touch of a signature on another, and only the host sees every proxy and the queue of touch waits. Each successful `op_end` restarts the window of its card serial, unless the key's touch policy is `off`; see [Touch policies](configuration.md#touch-policies). A `touch_wait` whose command started inside the window shows the touch step only 1.5 s after that command. If the operation ends first, the panel shows nothing for it: no touch step and no result. When the panel does show, the countdown still runs from the command's `at`, so it shows the time the card has left. A touch wait queued behind another one counts from the end of the operation before it, which restarted the window. After a PIN prompt, the touch step replaces the verifying state at once, as outside the window.
 
-The card's policy isn't visible on the wire, so the host restarts the window after any successful operation. If your card's touch policy is `on` or `fixed`, each operation needs a fresh touch; set `touch-cache = 0` so the touch step shows after 400 ms.
+The window applies only to keys whose touch policy is `cached` or `cached-fixed`, and to keys whose policy the host doesn't know. For a key with the `on` or `fixed` policy, the touch step shows after 400 ms, inside the window too. For a key with the `off` policy, the host shows no inferred touch wait.
 
 ### Logging
 

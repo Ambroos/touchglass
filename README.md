@@ -37,6 +37,8 @@ touchglass install --apply
 
 `--apply` backs up `gpg-agent.conf` first. gpg-agent forgets its cached PINs when it restarts, so the next card operation asks for the PIN again. `brew upgrade touchglass` needs no new `touchglass install`.
 
+TouchGlass times the touch prompt by your YubiKey's touch policy, which it reads from the card without a PIN or a touch. To see what it learned, or to read the card again after you change a policy, run `touchglass card`.
+
 Without Homebrew, download the notarized `TouchGlass-<version>.zip` from the [TouchGlass releases on GitHub](https://github.com/ambroos/touchglass/releases), move `TouchGlass.app` to `/Applications`, and run `/Applications/TouchGlass.app/Contents/Resources/touchglass install`.
 
 ## Uninstall
@@ -51,7 +53,7 @@ brew uninstall touchglass
 ## Learn more
 
 - [Install and uninstall in detail](docs/install.md): what each command changes, upgrades, and troubleshooting.
-- [Configure TouchGlass](docs/configuration.md): the panel's look, sounds, the touch countdown and the fallback pinentry.
+- [Configure TouchGlass](docs/configuration.md): the panel's look, sounds, the touch countdown, your card's touch policies and the fallback pinentry.
 - [How touchglass-scdaemon works](docs/touchglass-scdaemon.md): the proxy between gpg-agent and scdaemon.
 - [Contribute to TouchGlass](CONTRIBUTING.md): build from source, run the tests and the demo, and publish a release.
 

@@ -1,6 +1,6 @@
 # Configure TouchGlass
 
-TouchGlass works without configuration. Three places hold its settings: `host.conf` for the panel, the app's user defaults for sounds, and `pinentry.conf` for the pinentry helper. Both files are in `~/Library/Application Support/TouchGlass`, with one `key = value` per line and `#` at the start of a comment line. The host and the pinentry ignore unknown keys and invalid values.
+TouchGlass works without configuration. Three places hold its settings: `host.conf` for the panel, the app's user defaults for sounds, and `pinentry.conf` for the pinentry helper. Both files are in `~/Library/Application Support/TouchGlass`, with one `key = value` per line and `#` at the start of a comment line. The host and the pinentry ignore unknown keys and invalid values. TouchGlass also learns the touch policy of each YubiKey you use and keeps it in `cards.conf` in the same directory; see [Touch policies](#touch-policies).
 
 ## Panel settings
 
@@ -11,7 +11,7 @@ The host reads `~/Library/Application Support/TouchGlass/host.conf` when it star
 | `appearance` | `readable` (default), `smoked` | `readable` is regular glass with standard label colours. `smoked` is clear glass with dark smoke and HDR white text. |
 | `show-client` | `yes` (default), `no` | Shows what asked for the card operation under the detail line, such as `git commit · touchglass` or `ssh build-box`. See [How TouchGlass labels what asked](#how-touchglass-labels-what-asked). |
 | `touch-timeout` | Seconds, 1 to 600 | Sets the length of the touch countdown. Without it, the countdown uses the card's touch timeout that `touchglass-scdaemon` reports, 15 seconds. Set it only if your card waits for a different time. |
-| `touch-cache` | Seconds, 0 to 600; default `15` | How long the card keeps a touch under the YubiKey's `cached` touch policy. Within this time after an operation that the card completed, the panel shows the touch step only after the card stays silent for 1.5 seconds instead of 0.4, and shows nothing for an operation that finishes sooner. `0` turns this off. Set `0` if your card's touch policy is `on` or `fixed`. |
+| `touch-cache` | `auto` (default), or seconds, 0 to 600 | How the panel times the touch step after an operation that the card completed. `auto` follows the touch policy of each key; see [Touch policies](#touch-policies). A number of seconds applies to every card and key, whatever TouchGlass learned: within that time after an operation that the card completed, the panel shows the touch step only after the card stays silent for 1.5 seconds instead of 0.4, and shows nothing for an operation that finishes sooner. `0` shows the touch step after 0.4 seconds for every operation. |
 
 The reminder sounds and the urgent phase of the countdown keep their proportions for any `touch-timeout`: they start at a third and at two thirds of the countdown. If `touch-timeout` is shorter than the card's own timeout, the countdown reaches 0 and the panel stays until the card answers.
 
@@ -29,6 +29,36 @@ pkill -x TouchGlass
 ```
 
 The helpers start the host again on the next prompt or card operation.
+
+## Touch policies
+
+A YubiKey sets a touch policy for each of its three OpenPGP keys: the signature, decryption and authentication key. The policy decides when the card waits for a touch, and the card sends nothing while it waits, so TouchGlass needs the policy to time the touch step. With `touch-cache = auto`, the default, the host times each operation by the policy of the key it uses:
+
+| Policy | What the card does | What the panel does |
+| --- | --- | --- |
+| `cached`, `cached-fixed` | Waits for a touch, then accepts operations without one for 15 seconds after each use. | Within 15 seconds after the card's last operation, shows the touch step only after the card stays silent for 1.5 seconds, and nothing for an operation that finishes sooner. Otherwise, after 0.4 seconds. |
+| `on`, `fixed` | Waits for a touch for every operation. | Shows the touch step after 0.4 seconds. |
+| `off` | Never waits for a touch. | Shows no touch step when the card is slow to answer. |
+| Not learned yet | Any of these. | As for `cached`. |
+
+The `fixed` variants can't change without replacing the key; for the panel, they behave as the others. For a card from another maker, the host uses the `cached` timing whatever the card reports, because the cached policies and the 15-second window are Yubico's.
+
+TouchGlass reads the policies from the card's User Interaction Flag data objects. Reading them needs no PIN and no touch. The host learns them in two ways:
+
+- When gpg-agent reads the card's data, for example for `gpg --card-status`, the policies pass through `touchglass-scdaemon`, which reports them to the host.
+- After an operation on a YubiKey whose policy the host doesn't know, the host asks gpg-agent once, 3 seconds after the operation ended and while no other operation runs. It runs `gpg-connect-agent --no-autostart --homedir <your GnuPG home> 'scd serialno --demand=<card serial>' 'scd getattr UIF' /bye`. The first command picks the card the way gpg-agent does before each operation, so with several cards attached, the host reads the right one. The host asks again if a key it learned as `off` waits for a touch until the card times out, at most once a minute.
+
+The host stores the policies in `~/Library/Application Support/TouchGlass/cards.conf`, one card per line, and reads the file again when it changes. A reading replaces what the file held for that card.
+
+To read the policies of the attached cards yourself and store them, run:
+
+```sh
+touchglass card
+```
+
+The command shows each card's serial and the policy of each key. `touchglass install` does the same when a card is attached, and `touchglass status` lists what TouchGlass learned. After you change a policy with `ykman openpgp keys set-touch`, run `touchglass card`, so the panel doesn't wait for an operation to show the change.
+
+To ignore the learned policies, set `touch-cache` in `host.conf` to a number of seconds; see [Panel settings](#panel-settings). `gpg --card-status` prints the `cached` policies as `on`, so to see a key's exact policy, use `touchglass card` or `ykman openpgp info`.
 
 ## Read the log
 
@@ -48,7 +78,7 @@ log show --last 10m --predicate 'subsystem == "io.ambroos.touchglass"' --info
 
 With `--level debug` for `log stream`, or `--debug` for `log show`, the log also shows every scdaemon command with its duration and each Assuan keyword that the pinentry handles. To show one component, add a category to the predicate, such as `subsystem == "io.ambroos.touchglass" AND category == "scdaemon"`.
 
-To tune `touch-cache`, look at the `op end` lines of the `scdaemon` category. Each one gives the time the card took after the command or the PIN. Operations that the cached touch covers take that time without a touch; the host's `touch wait inside … cache window` and `nothing shown` lines show which operations it held back.
+To check the touch timing, look at the `op end` lines of the `scdaemon` category. Each one gives the time the card took after the command or the PIN. Operations that the cached touch covers take that time without a touch; the host's `touch wait inside … cache window` and `nothing shown` lines show which operations it held back. The host's `touch policy` lines show what it learned for each card, and when it asked gpg-agent.
 
 If focus leaves your terminal unexpectedly, look at the `panel: make key` and `panel: release key` lines of the `host` category. Each one names the panel state, why the panel asked for focus, and the frontmost app before and after.
 
