@@ -3,12 +3,12 @@
 TouchGlass puts the PIN prompt and the touch prompt of your YubiKey in one floating macOS panel, for every commit signature, SSH login and decryption that goes through GnuPG.
 
 <p>
-<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/pin-entry-dark.png"><img src="docs/images/pin-entry.png" width="400" alt="The panel asks: Enter PIN to sign, YubiKey 12345678, git commit · touchglass, with six characters typed"></picture>
-<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/touch-dark.png"><img src="docs/images/touch.png" width="400" alt="The panel asks: Touch your YubiKey, signing with YubiKey 12345678, git push origin · touchglass, 12 seconds left"></picture>
+<img src="docs/images/pin-entry.png" width="400" alt="The panel asks: Enter PIN to sign, YubiKey 12345678, git commit · touchglass, with six characters typed">
+<img src="docs/images/touch-dark.png" width="400" alt="The panel asks: Touch your YubiKey, signing with YubiKey 12345678, git push origin · touchglass, 12 seconds left">
 </p>
 <p>
-<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/ssh-dark.png"><img src="docs/images/ssh.png" width="400" alt="The panel asks: Touch your YubiKey, SSH login with YubiKey 12345678, ssh github.com, 12 seconds left"></picture>
-<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/success-dark.png"><img src="docs/images/success.png" width="400" alt="The panel shows Signed with a full ring"></picture>
+<img src="docs/images/ssh-dark.png" width="400" alt="The panel asks: Touch your YubiKey, SSH login with YubiKey 12345678, ssh github.com, 12 seconds left">
+<img src="docs/images/success.png" width="400" alt="The panel shows Signed with a full ring">
 </p>
 
 When a card operation needs you, the panel asks for the PIN, then shows "Touch your YubiKey" with a countdown to the card's 15-second touch timeout. Under the title, it names the command that asked, such as `git commit · touchglass` or `ssh github.com`. After the card answers, the panel confirms and closes itself. It also asks for the passphrases of keys that aren't on a card.
