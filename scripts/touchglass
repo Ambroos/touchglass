@@ -30,7 +30,7 @@ prog=touchglass
 cli_version=dev
 # The format of the launcher scripts that launcher_script prints. Bump it whenever their text changes:
 # a helper that runs through a launcher with an older format starts 'touchglass refresh-launchers', so a
-# Homebrew upgrade rewrites the launchers without a new install. LauncherRefresh.format in TouchGlassIPC
+# Homebrew upgrade rewrites the launchers without a new install. LauncherRefresher.format in TouchGlassIPC
 # must match it.
 launcher_format=1
 marker='# touchglass: '
@@ -775,7 +775,7 @@ cmd_install() {
 # older format started runs this from its own bundle, so `brew upgrade` needs no new install. Every
 # file is replaced by rename, so a launcher that gpg-agent runs meanwhile reads either version whole,
 # and two helpers that refresh at once write the same bytes. Never replaces a launcher of a later
-# format or a copy of a later release.
+# format or a copy of a later release, and a checkout or HEAD build never replaces a release's copy.
 cmd_refresh_launchers() {
     [ $# -eq 0 ] || die "refresh-launchers takes no options"
     if [ ! -e "$launch_pinentry" ] && [ ! -e "$launch_scd" ]; then
@@ -799,6 +799,11 @@ cmd_refresh_launchers() {
     for kind in pinentry scdaemon; do
         target="$bin_dir/touchglass-$kind"
         launcher_script "$kind" "$app" > "$tmp_launcher"
+        # Never put a launcher in place that can't run the helper: launcher_script runs command
+        # substitutions whose failure set -e doesn't catch.
+        if ! sh -n "$tmp_launcher" 2>/dev/null || [ "$(launcher_app "$tmp_launcher")" != "$app" ]; then
+            die "could not generate the $kind launcher for $app; the launchers are unchanged"
+        fi
         if ! cmp -s "$tmp_launcher" "$target"; then
             refresh_atomic "$target" 755 "$tmp_launcher"
             rewrote=1
@@ -810,14 +815,18 @@ cmd_refresh_launchers() {
         say "The launchers in $bin_dir are current."
     fi
 
+    # A copy from a later release stays, and a checkout or HEAD build, whose release isn't a dotted
+    # number, never replaces a copy from a release.
     copy_release="$(cli_release "$cli_copy")"
-    if [ "$self" = "$(realpath "$cli_copy" 2>/dev/null || true)" ]; then
+    if [ "$self" = "$(realpath "$cli_copy" 2>/dev/null || true)" ] || cmp -s "$self" "$cli_copy"; then
         :
-    elif release_newer "$copy_release" "$cli_version"; then
-        say "Kept $cli_copy, which is from the later release $copy_release."
-    elif ! cmp -s "$self" "$cli_copy"; then
+    elif [ -z "$copy_release" ] || [ "$copy_release" = "$cli_version" ] || release_newer "$cli_version" "$copy_release"; then
         refresh_atomic "$cli_copy" 755 "$self"
         say "Copied $prog $cli_version to $cli_copy."
+    elif release_newer "$copy_release" "$cli_version"; then
+        say "Kept $cli_copy, which is from the later release $copy_release."
+    else
+        say "Kept $cli_copy, which is from release $copy_release; this command is a $cli_version build, which never replaces a release's copy."
     fi
 }
 

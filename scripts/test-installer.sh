@@ -852,7 +852,8 @@ tg refresh-launchers
 check "pinentry launcher as install wrote it" cmp -s "$LP" "$T/installed/touchglass-pinentry"
 check "scdaemon launcher as install wrote it" cmp -s "$LS" "$T/installed/touchglass-scdaemon"
 check "launchers stay executable" test "$(/usr/bin/stat -f %Lp "$LP")" = 755 -a "$(/usr/bin/stat -f %Lp "$LS")" = 755
-check "CLI copy replaced" cmp -s "$SUPPORT/bin/touchglass" "$tool"
+check "a checkout build keeps a release's CLI copy" sh -c "grep -q '^cli_version=0.0.1\$' '$SUPPORT/bin/touchglass'"
+check "says why it kept the copy" out_has "never replaces a release's copy"
 check "gpg-agent.conf untouched" cmp -s "$CONF" "$T/installed/gpg-agent.conf"
 check "pinentry.conf untouched" cmp -s "$SUPPORT/pinentry.conf" "$T/installed/pinentry.conf"
 check "scdaemon path untouched" cmp -s "$SUPPORT/scdaemon-program" "$T/installed/scdaemon-program"
@@ -864,6 +865,11 @@ before="$(inode "$LP")"
 tg refresh-launchers
 check "second run reports current launchers" out_has "are current"
 check "second run writes nothing" test "$(inode "$LP")" = "$before"
+mkdir -p "$T/release"
+sed 's/^cli_version=.*/cli_version=0.0.2/' "$tool" > "$T/release/touchglass"
+chmod +x "$T/release/touchglass"
+"$T/release/touchglass" refresh-launchers > "$T/out" 2>&1 || fail "refresh from a later release failed"
+check "a later release replaces the CLI copy" cmp -s "$SUPPORT/bin/touchglass" "$T/release/touchglass"
 
 begin "refresh-launchers keeps the app that the launchers run"
 tg install --from "$app"
