@@ -18,11 +18,11 @@ struct PanelContentView: View {
             // The ring and countdown follow the clock, not an animation.
             if reduceMotion {
                 TimelineView(.periodic(from: wait.shownAt, by: 1)) { context in
-                    content(now: context.date)
+                    content(now: model.frozenClock ?? context.date)
                 }
             } else {
                 TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
-                    content(now: context.date)
+                    content(now: model.frozenClock ?? context.date)
                 }
             }
         } else {
@@ -421,6 +421,8 @@ private struct SecureEntry: View {
         .controlSize(.large)
         .defaultFocus($focused, true)
         .onAppear {
+            // Placeholder characters for screenshots; never a real secret.
+            if model.sampleSecretLength > 0 { text = String(repeating: "x", count: model.sampleSecretLength) }
             DispatchQueue.main.async { focused = true }
         }
         .onChange(of: model.shakeCount) {

@@ -18,6 +18,12 @@ public final class PanelController {
     private let sounds = Sounds()
     /// Tests set this, so they make no sound.
     var muted = false
+    /// Screenshots: the panel keeps each state until the process ends, takes key status in every
+    /// state so the glass shows its key look, ignores the pointer so hover effects stay off, and
+    /// makes no sound.
+    public var holdsState = false {
+        didSet { panel.ignoresMouseEvents = holdsState }
+    }
     /// Incremented on every entrance and exit, so a stale exit completion cannot order out a re-opened panel.
     private var generation = 0
     private var autoClose: DispatchWorkItem?
@@ -48,6 +54,8 @@ public final class PanelController {
     }
 
     public var isPanelKey: Bool { panel.isKeyWindow }
+    /// The panel window, for screenshot tooling that places a backdrop behind it and finds its frame.
+    public var window: NSWindow { panel }
     public var isPanelVisible: Bool { panel.isVisible }
     /// The class name of the panel's first responder, for focus diagnostics.
     public var firstResponderDescription: String {
@@ -78,7 +86,8 @@ public final class PanelController {
             withTransaction(Transaction(animation: nil)) { model.state = state }
         case .close:
             close()
-        case .setKey(let allowsKey):
+        case .setKey(var allowsKey):
+            allowsKey = allowsKey || holdsState
             panel.allowsKey = allowsKey
             if allowsKey, panel.isVisible {
                 panel.makeKey()
@@ -87,10 +96,11 @@ public final class PanelController {
                 releaseKey()
             }
         case .play(let cue):
-            if !muted { sounds.play(cue) }
+            if !muted, !holdsState { sounds.play(cue) }
         case .announce(let text):
             announce(text)
         case .scheduleAutoClose(let delay):
+            guard !holdsState else { return }
             let item = DispatchWorkItem { [weak self] in self?.send(.autoCloseFired) }
             autoClose = item
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
@@ -98,7 +108,7 @@ public final class PanelController {
             autoClose?.cancel()
             autoClose = nil
         case .startEscalation(let wait):
-            startEscalation(wait)
+            if !holdsState { startEscalation(wait) }
         case .stopEscalation:
             escalation.forEach { $0.cancel() }
             escalation = []
@@ -156,9 +166,9 @@ public final class PanelController {
         if let screen = Placement.targetScreen() {
             panel.setFrameOrigin(Placement.origin(on: screen))
         }
-        panel.allowsKey = state.allowsKey
+        panel.allowsKey = state.allowsKey || holdsState
         panel.orderFrontRegardless()
-        if state.allowsKey {
+        if panel.allowsKey {
             panel.makeKey()
             guardKeyAfterOwnChange()
         }
