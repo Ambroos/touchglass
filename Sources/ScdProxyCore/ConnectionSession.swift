@@ -6,6 +6,10 @@ import Foundation
 /// Each direction runs on its own thread with blocking `read` and `write`. The only work on the forwarding
 /// path is the line tap (a byte scan with a small bounded buffer) and, for the reply to `GETINFO socket_name`,
 /// the rewriter. Neither waits on the detector or the host.
+///
+/// Both directions hand their lines to the detector before forwarding the bytes. The peer can answer only
+/// after the write, so the detector sees an `INQUIRE NEEDPIN` before the agent's `END` and a `PKSIGN` before
+/// scdaemon's reply, even when the other direction's thread runs first.
 public final class ConnectionSession: @unchecked Sendable {
     public let id: String
     private let detector: OperationDetector
@@ -29,9 +33,8 @@ public final class ConnectionSession: @unchecked Sendable {
             if let rewriter, lines.contains(where: SocketNameRewriter.isSocketNameQuery) {
                 rewriter.arm()
             }
-            let ok = Posix.writeAll(destination, chunk)
             detector.observe(connection: id, direction: .toServer, lines: lines, time: Date().timeIntervalSince1970)
-            return ok
+            return Posix.writeAll(destination, chunk)
         }
     }
 
@@ -39,15 +42,12 @@ public final class ConnectionSession: @unchecked Sendable {
     /// Returns true on end of file, false if either side failed.
     public func pumpServerToClient(from source: Int32, to destination: Int32) -> Bool {
         pump(from: source) { chunk in
-            let ok: Bool
-            if let rewritten = rewriter?.process(chunk) {
-                ok = Posix.writeAll(destination, rewritten)
-            } else {
-                ok = Posix.writeAll(destination, chunk)
-            }
             let lines = serverTap.feed(chunk)
             detector.observe(connection: id, direction: .toClient, lines: lines, time: Date().timeIntervalSince1970)
-            return ok
+            if let rewritten = rewriter?.process(chunk) {
+                return Posix.writeAll(destination, rewritten)
+            }
+            return Posix.writeAll(destination, chunk)
         }
     }
 

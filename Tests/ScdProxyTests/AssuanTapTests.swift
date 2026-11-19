@@ -170,6 +170,85 @@ import TouchGlassIPC
     }
 }
 
+/// The detector must see each line before the peer can answer it. Otherwise, when the forwarding thread
+/// stalls after its write, the agent's `END` reaches the detector before scdaemon's `INQUIRE NEEDPIN`, and
+/// the host gets neither `pin_sent` nor `touch_wait`.
+@Suite struct ConnectionSessionTests {
+    /// Runs one pump over `bytes` while its destination pipe is full, so the forwarding write blocks, and
+    /// returns the detector's events from that moment, waiting up to 2 s for `count` of them. Then drains the
+    /// pipe and lets the pump finish.
+    func eventsWhileForwardingBlocks(
+        _ bytes: String,
+        expecting count: Int,
+        prepare: (OperationDetector) -> Void = { _ in },
+        pump: @escaping @Sendable (ConnectionSession, Int32, Int32) -> Void
+    ) -> [String] {
+        let sink = OperationDetectorTests.Collector()
+        let detector = OperationDetector(sink: sink, touchDelay: 10)
+        prepare(detector)
+        let session = ConnectionSession(id: "c", detector: detector, rewriter: nil)
+        var source: [Int32] = [0, 0]
+        var destination: [Int32] = [0, 0]
+        guard pipe(&source) == 0, pipe(&destination) == 0 else { return [] }
+        defer { [source[0], destination[0], destination[1]].forEach { close($0) } }
+
+        Posix.setNonBlocking(destination[1], true)
+        var filler = [UInt8](repeating: 0x20, count: 4096)
+        var queued = 0
+        while true {
+            let n = write(destination[1], &filler, filler.count)
+            if n <= 0 { break }
+            queued += n
+        }
+        Posix.setNonBlocking(destination[1], false)
+
+        Posix.writeAll(source[1], Array(bytes.utf8))
+        close(source[1])
+        let done = DispatchSemaphore(value: 0)
+        let (input, output) = (source[0], destination[1])
+        Thread.detachNewThread {
+            pump(session, input, output)
+            done.signal()
+        }
+
+        let deadline = Date(timeIntervalSinceNow: 2)
+        var events: [String] = []
+        while Date() < deadline {
+            detector.drain()
+            events = sink.summaries
+            if events.count >= count { break }
+            usleep(10_000)
+        }
+
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        var remaining = queued + bytes.utf8.count
+        while remaining > 0 {
+            let n = read(destination[0], &buffer, buffer.count)
+            if n <= 0 { break }
+            remaining -= n
+        }
+        done.wait()
+        return events
+    }
+
+    @Test func serverLinesReachTheDetectorBeforeTheAgent() {
+        let events = eventsWhileForwardingBlocks("INQUIRE NEEDPIN ||Please enter the PIN\n", expecting: 2) { detector in
+            var tap = AssuanTap(direction: .toServer)
+            detector.observe(connection: "c", direction: .toServer, lines: tap.feed(Array("PKSIGN X\n".utf8)), time: Date().timeIntervalSince1970)
+        } pump: { session, input, output in
+            _ = session.pumpServerToClient(from: input, to: output)
+        }
+        #expect(events == ["op_start c sign", "pin_needed c"])
+    }
+
+    @Test func clientLinesReachTheDetectorBeforeScdaemon() {
+        let events = eventsWhileForwardingBlocks("PKSIGN X\n", expecting: 1) { session, input, output in
+            _ = session.pumpClientToServer(from: input, to: output)
+        }
+        #expect(events == ["op_start c sign"])
+    }
+}
+
 extension IPCMessage {
     var shortSummary: String {
         switch self {
