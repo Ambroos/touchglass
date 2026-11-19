@@ -38,7 +38,7 @@ scripts/test-installer.sh
 
 The installer tests run each case with a temporary `HOME` and `GNUPGHOME` and stub `gpgconf`, `pgrep` and `pkill` commands. They don't touch your GnuPG setup, stop your gpg-agent or quit your TouchGlass host. The launcher tests run stub helpers that print their arguments and input.
 
-The Tests workflow runs both suites and builds the app on macOS 26 for pull requests, pushes to `main` and version tags.
+The Tests workflow runs both suites and builds the app on macOS 26 for pull requests, pushes to `main` and version tags. A headless runner renders no animation frames, so when the `CI` environment variable is set, the panel tests skip the check that they saw the entrance animation's scale.
 
 To drive the scdaemon proxy with a fake card instead of a YubiKey, see [Test tools](docs/touchglass-scdaemon.md#test-tools).
 
