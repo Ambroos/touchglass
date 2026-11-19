@@ -38,7 +38,7 @@ let package = Package(
         // touchglass-scdaemon: the scdaemon proxy and its test tools.
         // Assuan line tap, operation detector, relay and host event sink. Foundation and Darwin only.
         .target(name: "ScdProxyCore", dependencies: ["TouchGlassIPC"]),
-        .executableTarget(name: "touchglass-scdaemon", dependencies: ["ScdProxyCore"]),
+        .executableTarget(name: "touchglass-scdaemon", dependencies: ["ScdProxyCore", "TouchGlassIPC"]),
         // Fake agent driver and fake host shared by the test tools and the tests.
         .target(name: "ScdTestSupport", dependencies: ["ScdProxyCore", "TouchGlassIPC"]),
         .executableTarget(name: "fake-scdaemon"),

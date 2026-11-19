@@ -83,6 +83,11 @@ public enum LogEvent: Sendable, Equatable {
     case hostUnreachable
     case eventDropped(queueFull: Bool)
 
+    // touchglass-pinentry and touchglass-scdaemon
+    /// The helper found the launchers or the command copy out of date and started `touchglass refresh-launchers`,
+    /// or failed to start it.
+    case launcherRefresh(LauncherRefreshReason, started: Bool)
+
     // TouchGlass host
     case hostStarted(version: String?, touchTimeout: TimeInterval?, touchCache: TimeInterval)
     case connectionOpened(id: Int)
@@ -151,6 +156,14 @@ public enum LogEvent: Sendable, Equatable {
             return "host unreachable: event dropped"
         case let .eventDropped(queueFull):
             return queueFull ? "event queue full: event dropped" : "event too old: dropped"
+        case let .launcherRefresh(reason, started):
+            let outcome = started ? "started touchglass refresh-launchers" : "could not start touchglass refresh-launchers"
+            switch reason {
+            case let .launcherFormat(installed, current):
+                return "launchers: format \(installed) is older than \(current): \(outcome)"
+            case let .commandRelease(installed, helper):
+                return "command copy: release \(installed) is older than helper release \(helper): \(outcome)"
+            }
         case let .hostStarted(version, timeout, cache):
             return "host started: release \(version ?? "dev"), touch-timeout \(timeout.map { Self.seconds($0) } ?? "card"), touch-cache \(Self.seconds(cache))"
         case let .connectionOpened(id):
