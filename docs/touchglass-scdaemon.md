@@ -1,6 +1,6 @@
 # touchglass-scdaemon
 
-`touchglass-scdaemon` sits between gpg-agent and scdaemon and tells the TouchGlass host when a card operation starts, needs a PIN, waits for a touch, and ends. gpg-agent runs it as its `scdaemon-program`. It never changes what gpg-agent and scdaemon say to each other, with one exception described in [Socket relay](#socket-relay).
+`touchglass-scdaemon` sits between gpg-agent and scdaemon and tells the TouchGlass host when a card operation starts, needs a PIN, waits for a touch, and ends. gpg-agent runs it as its `scdaemon-program`, through the launcher `~/Library/Application Support/TouchGlass/bin/touchglass-scdaemon`, which replaces itself with the proxy using `exec`; while `TouchGlass.app` is missing, the launcher runs the real scdaemon instead. The proxy never changes what gpg-agent and scdaemon say to each other, with one exception described in [Socket relay](#socket-relay).
 
 ## How it works
 
@@ -33,7 +33,7 @@ The tap never buffers the payload of a `D` line. PINs, PIN cache values, signatu
 The proxy finds the real scdaemon in this order:
 
 1. The `TOUCHGLASS_SCDAEMON_PROGRAM` environment variable.
-2. The first line of `~/Library/Application Support/TouchGlass/scdaemon-program`, which the installer writes from `gpgconf --list-components`.
+2. The first line of `~/Library/Application Support/TouchGlass/scdaemon-program`, which the installer writes from the `scdaemon-program` line that `gpg-agent.conf` had before TouchGlass, or from `gpgconf --list-components`. The launcher reads the same file.
 3. `/opt/homebrew/libexec/scdaemon`, `/usr/local/libexec/scdaemon`, `/usr/local/MacGPG2/libexec/scdaemon`, `/opt/local/libexec/scdaemon`.
 
 The proxy starts the app bundle it lives in, `TouchGlass.app/Contents/MacOS/touchglass-scdaemon`, with `open -g`. Outside a bundle, it opens the app named `TouchGlass`. The `TOUCHGLASS_HOST_APP` environment variable overrides this with a bundle path or an app name; `none` never starts the host.

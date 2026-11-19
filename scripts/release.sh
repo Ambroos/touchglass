@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds, signs, notarizes and zips a TouchGlass release for the Homebrew cask.
+# Builds, signs, notarizes and zips a TouchGlass release, the direct download on GitHub.
 # Usage: scripts/release.sh [--dry-run | --no-notarize] <version>
 #
 # Signs with TOUCHGLASS_SIGN_IDENTITY, or else with the only "Developer ID Application" identity in the
@@ -128,8 +128,10 @@ Next steps:
   git tag v$version && git push origin v$version
   gh release create v$version "$root/$zip" --title "TouchGlass $version" --generate-notes
 
-Then set the cask in homebrew-touchglass/Casks/touchglass.rb to:
+Then, in homebrew-touchglass, open a pull request that sets the url in Formula/touchglass.rb to
+the v$version tag and sha256 to the checksum of GitHub's source tarball:
 
-  version "$version"
-  sha256 "$sha"
+  curl -fsSL https://github.com/ambroos/touchglass/archive/refs/tags/v$version.tar.gz | shasum -a 256
+
+SHA-256 of the zip, for the release notes: $sha
 EOF
