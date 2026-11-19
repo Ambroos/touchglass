@@ -161,6 +161,9 @@ struct HostEventSinkLaunchTests {
 
         first.close()
         first.dropConnections()
+        // The fake host's connection thread then closes the descriptor; until it has, a write can still
+        // succeed. A host that quits closes everything at once.
+        usleep(200_000)
         started.withLock { $0 = nil }
         sink.send(opStart("1:s1"))
         sink.flush(timeout: 5)
