@@ -119,7 +119,7 @@ The demo shows scripted panel states with simulated card replies:
 build/TouchGlass.app/Contents/MacOS/TouchGlass --demo sign
 ```
 
-Scenarios: `sign`, `touch`, `timeout`, `wrong-pin`, `ssh`, `decrypt`, `blocked`, `passphrase`, `insert-card`, `message`, `removed`, `error`, `client`, and `all`, which runs every scenario in sequence. `--help` describes each one.
+Scenarios: `sign`, `touch`, `timeout`, `wrong-pin`, `ssh`, `decrypt`, `blocked`, `passphrase`, `insert-card`, `message`, `removed`, `error`, `client`, `back-to-back`, and `all`, which runs every scenario in sequence. `--help` describes each one.
 
 In the demo, any text in the PIN field continues. To simulate the touch, click **Simulate touch** in the demo controls window, or press Space while that window is focused. Without a touch, the demo touches after 4 seconds.
 

@@ -31,10 +31,11 @@ enum DemoScenario: String, CaseIterable {
     case removed
     case error
     case client
+    case backToBack = "back-to-back"
     case all
 
     static let sequence: [DemoScenario] = [
-        .sign, .touch, .ssh, .decrypt, .wrongPIN, .blocked, .passphrase, .insertCard, .message, .removed, .error, .client, .timeout,
+        .sign, .touch, .ssh, .decrypt, .wrongPIN, .blocked, .passphrase, .insertCard, .message, .removed, .error, .client, .backToBack, .timeout,
     ]
 
     var summary: String {
@@ -52,6 +53,7 @@ enum DemoScenario: String, CaseIterable {
         case .removed: "touch, then the YubiKey is removed"
         case .error: "touch, then a card error"
         case .client: "PIN, then touch, with a long client label that arrives late"
+        case .backToBack: "touch, success, a second touch within the close grace, then a PIN prompt during the exit"
         case .all: "every scenario in sequence"
         }
     }
@@ -195,6 +197,15 @@ final class DemoRunner {
             // The host shows the panel at once and fills the label in when its lookup finishes.
             guard await pinStep(PinRequest(operation: .sign, cardSerial: Self.serial, minimumLengthOverride: 1), lateClient: client) else { return }
             await touchStep(.sign, client: client)
+        case .backToBack:
+            // The second touch arrives within the close grace, so it replaces the success in place.
+            await touchStep(.sign, client: client, waitsForExit: false)
+            await sleep(TouchTiming.closeGrace / 2)
+            await touchStep(.sshLogin, client: "ssh build-box", waitsForExit: false)
+            // The PIN prompt arrives once the exit animation has begun, so it turns the exit around.
+            await sleep(TouchTiming.closeGrace + 0.15 * options.animationScale)
+            guard await pinStep(PinRequest(operation: .sign, cardSerial: Self.serial, minimumLengthOverride: 1, client: client)) else { return }
+            await touchStep(.sign, client: client)
         case .passphrase:
             await passphraseStep()
         case .insertCard:
@@ -246,7 +257,8 @@ final class DemoRunner {
         case failure(Failure, after: TimeInterval)
     }
 
-    private func touchStep(_ operation: OperationKind, client: String? = nil, outcome: TouchOutcome = .touched) async {
+    /// With `waitsForExit` false, returns once the result ends, while the panel still shows it for the close grace.
+    private func touchStep(_ operation: OperationKind, client: String? = nil, outcome: TouchOutcome = .touched, waitsForExit: Bool = true) async {
         let wait = TouchWait.detected(operation: operation, cardSerial: Self.serial, client: client)
         controller.send(.show(.touchWait(wait)))
         if options.focusReport { reportFocus(after: 1.0, label: "touch") }
@@ -262,7 +274,7 @@ final class DemoRunner {
             if touched != nil || options.touchAfter < untilDeadline {
                 controls.touchEnabled = false
                 controller.send(.show(.success(operation, client: wait.client)))
-                await waitUntilClosed()
+                await waitUntilClosed(waitsForExit: waitsForExit)
             } else {
                 await failure(.touchTimeout(seconds: Int(TouchTiming.cardTimeout)))
             }
@@ -271,7 +283,7 @@ final class DemoRunner {
             if await inbox.next([.touched], timeout: untilDeadline) != nil {
                 controls.touchEnabled = false
                 controller.send(.show(.success(operation, client: wait.client)))
-                await waitUntilClosed()
+                await waitUntilClosed(waitsForExit: waitsForExit)
             } else {
                 await failure(.touchTimeout(seconds: Int(TouchTiming.cardTimeout)))
             }
@@ -314,10 +326,11 @@ final class DemoRunner {
 
     // MARK: Helpers
 
-    private func waitUntilClosed() async {
+    private func waitUntilClosed(waitsForExit: Bool = true) async {
         while controller.machine.state != nil {
             await sleep(0.05)
         }
+        guard waitsForExit else { return }
         // Let the exit animation finish.
         await sleep(0.6 * options.animationScale)
     }
