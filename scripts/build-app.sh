@@ -1,33 +1,38 @@
 #!/bin/sh
 # Builds build/TouchGlass.app with SwiftPM and signs it ad hoc.
 # Usage: scripts/build-app.sh [debug|release]   (default: release)
+#        scripts/build-app.sh --prebuilt DIR    (bundles the executables in DIR; builds nothing)
 # TOUCHGLASS_VERSION sets CFBundleShortVersionString and CFBundleVersion (default 0.1.0).
+# --prebuilt is for builds that run swift build themselves, such as the Homebrew formula.
 set -eu
 
-configuration="${1:-release}"
 version="${TOUCHGLASS_VERSION:-0.1.0}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
+products="TouchGlass touchglass-pinentry touchglass-scdaemon"
 
-swift build -c "$configuration" --product TouchGlass
-bin_dir="$(swift build -c "$configuration" --show-bin-path)"
+if [ "${1:-}" = --prebuilt ]; then
+    [ $# -eq 2 ] || { echo "usage: $0 --prebuilt DIR" >&2; exit 2; }
+    bin_dir="$(cd "$2" && pwd)"
+else
+    configuration="${1:-release}"
+    for product in $products; do
+        swift build -c "$configuration" --product "$product"
+    done
+    bin_dir="$(swift build -c "$configuration" --show-bin-path)"
+fi
 
 app="build/TouchGlass.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS"
-cp "$bin_dir/TouchGlass" "$app/Contents/MacOS/TouchGlass"
-
-# Helper executables ship inside the bundle when the package defines them.
-for helper in touchglass-pinentry touchglass-scdaemon; do
-    if grep -q "name: \"$helper\"" Package.swift; then
-        swift build -c "$configuration" --product "$helper"
-        cp "$bin_dir/$helper" "$app/Contents/MacOS/$helper"
-    fi
+for product in $products; do
+    cp "$bin_dir/$product" "$app/Contents/MacOS/$product"
 done
 
-# The install CLI. The Homebrew cask links it onto PATH; run from here, it works on this bundle.
+# The install CLI, stamped with the version. Homebrew links it onto PATH; run from here, it works on
+# this bundle.
 mkdir -p "$app/Contents/Resources"
-cp scripts/touchglass "$app/Contents/Resources/touchglass"
+sed "s/^cli_version=dev\$/cli_version=$version/" scripts/touchglass > "$app/Contents/Resources/touchglass"
 chmod 755 "$app/Contents/Resources/touchglass"
 
 cat > "$app/Contents/Info.plist" <<PLIST

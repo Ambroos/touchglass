@@ -19,6 +19,8 @@ set -eu
 export LC_ALL=C
 
 prog=touchglass
+# scripts/build-app.sh replaces "dev" with the release version in the copy it bundles.
+cli_version=dev
 marker='# touchglass: '
 gnupg_home="${GNUPGHOME:-$HOME/.gnupg}"
 conf="$gnupg_home/gpg-agent.conf"
@@ -93,6 +95,7 @@ Usage:
   touchglass uninstall [--apply] [--remove-app] [--dry-run]
   touchglass uninstall --check
   touchglass status
+  touchglass --version
 
 install    Sets up ~/Library/Application Support/TouchGlass: the launchers that
            gpg-agent runs as pinentry-program and scdaemon-program, the real
@@ -1016,6 +1019,7 @@ case "$command" in
     install) cmd_install "$@"; exit "$exit_status" ;;
     uninstall) cmd_uninstall "$@"; exit "$exit_status" ;;
     status) cmd_status "$@" ;;
+    version | --version) say "$prog $cli_version" ;;
     help | -h | --help) usage ;;
     *) usage >&2; exit 2 ;;
 esac
