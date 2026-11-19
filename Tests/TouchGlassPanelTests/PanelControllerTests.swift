@@ -13,9 +13,16 @@ import TouchGlassCore
         _ = NSApplication.shared
     }
 
-    func makeController() -> PanelController {
-        let controller = PanelController(animationScale: 0.05)
+    /// Off every screen, so the tests put nothing in front of the person at the Mac.
+    static let offScreen = NSPoint(x: -30_000, y: -30_000)
+
+    /// A controller whose panel opens off screen and fully transparent. The window still orders in and
+    /// out, takes key status and runs its animations, so the tests see what the controller does.
+    func makeController(animationScale: Double = 0.05) -> PanelController {
+        let controller = PanelController(animationScale: animationScale)
         controller.muted = true
+        controller.testOrigin = Self.offScreen
+        controller.panel.alphaValue = 0
         return controller
     }
 
@@ -178,8 +185,7 @@ import TouchGlassCore
     /// At full animation length, a state that arrives while the exit runs turns it around: the window
     /// never orders out, and the stale exit completion leaves the new state alone.
     @Test func aStateDuringTheExitAnimationReversesIt() async throws {
-        let controller = PanelController(animationScale: 1)
-        controller.muted = true
+        let controller = makeController(animationScale: 1)
         controller.send(.show(touch()))
         controller.send(.dismiss)
         try await Task.sleep(for: .seconds(TouchTiming.closeGrace + 0.1))
@@ -191,6 +197,43 @@ import TouchGlassCore
         #expect(controller.isPanelVisible)
         #expect(controller.model.state == pin)
         controller.send(.dismiss)
+    }
+
+    @Test func aClickOnAnErrorClosesAtOnce() async {
+        let controller = makeController()
+        controller.send(.show(.failure(.wrongPIN)))
+        controller.model.actions.dismiss()
+        await waitUntil { !controller.isPanelVisible }
+        #expect(!controller.isPanelVisible)
+        #expect(controller.machine.lingering == nil)
+    }
+
+    /// The window server lists the test panel, but nowhere on a screen and with alpha 0.
+    @Test func testPanelsStayOffEveryScreen() async throws {
+        let controller = makeController()
+        controller.send(.show(pin))
+        #expect(controller.isPanelVisible)
+        let number = controller.panel.windowNumber
+        func serverInfo() -> [String: Any]? {
+            let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
+            return list.first { ($0[kCGWindowNumber as String] as? Int) == number }
+        }
+        func bounds(_ info: [String: Any]?) -> CGRect {
+            guard let dictionary = info?[kCGWindowBounds as String] else { return .zero }
+            return CGRect(dictionaryRepresentation: dictionary as! CFDictionary) ?? .zero
+        }
+        // The window server takes the new frame and alpha after the run loop commits them.
+        await waitUntil { bounds(serverInfo()).width > 0 }
+        let info = try #require(serverInfo())
+        let frame = bounds(info)
+        #expect(frame.width > 0)
+        #expect((info[kCGWindowAlpha as String] as? Double) == 0)
+        // Window server coordinates have their origin at the top left of the main display; the panel
+        // is thousands of points away from any display in either convention.
+        for screen in NSScreen.screens {
+            #expect(!frame.intersects(screen.frame))
+        }
+        controller.send(.userClosed)
     }
 
     @Test func holdingKeepsResultStatesOpenAndTakesKey() async throws {

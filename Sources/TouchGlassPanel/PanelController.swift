@@ -24,6 +24,9 @@ public final class PanelController {
     public var holdsState = false {
         didSet { panel.ignoresMouseEvents = holdsState }
     }
+    /// Tests: where the panel opens instead of its place on screen. The tests put it off every screen,
+    /// with alpha 0, so a test run shows nothing.
+    var testOrigin: NSPoint?
     /// Incremented on every entrance and exit, so a stale exit completion cannot order out a re-opened panel.
     private var generation = 0
     private var autoClose: DispatchWorkItem?
@@ -50,7 +53,7 @@ public final class PanelController {
             self?.actions.hide()
         }
         forwarded.dismiss = { [weak self] in
-            self?.send(.dismiss)
+            self?.send(.userClosed)
             self?.actions.dismiss()
         }
         model.actions = forwarded
@@ -179,7 +182,9 @@ public final class PanelController {
         // Resolve the layout now, with animations off, so the entrance only animates opacity and scale.
         panel.contentView?.layoutSubtreeIfNeeded()
 
-        if let screen = Placement.targetScreen() {
+        if let testOrigin {
+            panel.setFrameOrigin(testOrigin)
+        } else if let screen = Placement.targetScreen() {
             panel.setFrameOrigin(Placement.origin(on: screen))
         }
         panel.allowsKey = state.allowsKey || holdsState
