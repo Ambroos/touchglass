@@ -160,12 +160,14 @@ public final class PanelController {
         return holdsState || (machine.isVisible && machine.holdsKey)
     }
 
-    /// Makes the panel key, logs it, and starts the guard against our own content changes.
+    /// Makes the panel key, logs it, and, for our own change, starts the guard against the resigns that the
+    /// change causes. A re-take doesn't restart the guard: otherwise each click elsewhere within half a
+    /// second of the last re-take would take the keyboard back again.
     private func takeKey(_ reason: PanelKeyReason) {
         let before = Self.frontmostApp()
         panel.makeKey()
         log(.panelKeyTaken(state: shownStateName, reason: reason, isKey: panel.isKeyWindow, frontmostBefore: before, frontmostAfter: Self.frontmostApp()))
-        guardKeyAfterOwnChange()
+        if reason != .retake { guardKeyAfterOwnChange() }
     }
 
     private static func frontmostApp() -> String? {
