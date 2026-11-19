@@ -403,7 +403,13 @@ launcher_keep_reason() { # agent_stopped (1 when this run stopped gpg-agent)
     started="$(oldest_agent_start)"
     [ -n "$started" ] || return 0
     # Without gpg-agent.conf, nothing tells when the agent read it; keep the launchers until it stops.
-    if [ ! -f "$conf" ] || [ "$started" -le "$(stat -L -f %m "$conf")" ]; then echo agent; fi
+    # The same if either time doesn't parse. /usr/bin/stat, because GNU stat reads -f differently.
+    changed=""
+    if [ -f "$conf" ]; then changed="$(/usr/bin/stat -L -f %m "$conf" 2>/dev/null || true)"; fi
+    case "$started:$changed" in
+        *: | *[!0-9:]*) echo agent ;;
+        *) if [ "$started" -le "$changed" ]; then echo agent; fi ;;
+    esac
 }
 
 # Removes the launchers unless a gpg-agent can still run them; then says why they stay.
@@ -466,7 +472,8 @@ replace_conf() { # tmpfile
     if [ -L "$conf" ]; then target="$(realpath "$conf")"; fi
     staged="$(mktemp "$(dirname "$target")/.gpg-agent.conf.touchglass.XXXXXX")"
     cat "$1" > "$staged"
-    if [ -e "$target" ]; then chmod "$(stat -f %Lp "$target")" "$staged"; fi
+    # /usr/bin/stat: GNU coreutils' stat, first on PATH for some Homebrew users, reads -f differently.
+    if [ -e "$target" ]; then chmod "$(/usr/bin/stat -f %Lp "$target")" "$staged"; fi
     mv -f "$staged" "$target"
     staged=""
 }

@@ -755,6 +755,35 @@ tg uninstall --apply
 check "first home restored" cmp -s "$CONF" "$T/original"
 check "then removed" test ! -e "$SUPPORT/bin"
 
+begin "GNU stat first on PATH"
+# GNU coreutils' stat reads -f as "file system status" and the format as a file name. This stub
+# behaves like that for -f and fails the tests if the script calls stat through PATH at all.
+cat > "$T/bin/stat" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$T/stat.log"
+for arg in "\$@"; do
+    case "\$arg" in -*) ;; *) printf '  File: "%s"\n    ID: 1000004 Namelen: 255 Type: apfs\n' "\$arg" ;; esac
+done
+exit 1
+EOF
+chmod +x "$T/bin/stat"
+printf '%s\n' "pinentry-program $EX" > "$CONF"
+chmod 640 "$CONF"
+cp "$CONF" "$T/original"
+tg install --apply --from "$app"
+check "install --apply writes the conf" grep -qx "pinentry-program $LP" "$CONF"
+check "mode kept" test "$(/usr/bin/stat -f %Lp "$CONF")" = 640
+# A manual uninstall while a gpg-agent from before the change runs keeps the launchers.
+cp "$T/original" "$CONF"
+echo "02:00:00" > "$T/agent-etime"
+tg uninstall
+check "launchers kept" test -x "$LP" -a -x "$LS"
+rm "$T/agent-etime"
+tg install --apply --from "$app"
+tg uninstall --apply
+check "uninstall --apply restores the conf" cmp -s "$CONF" "$T/original"
+check "the stub was never called" test ! -e "$T/stat.log"
+
 begin "status reports the scdaemon proxy"
 printf '%s\n' "pinentry-program $EX" > "$CONF"
 tg install --apply --from "$app"
