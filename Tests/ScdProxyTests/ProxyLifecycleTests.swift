@@ -138,6 +138,30 @@ struct HostEventSinkLaunchTests {
         #expect(launches.load(ordering: .relaxed) == 1)
     }
 
+    /// A host that exits right after it received the `op_start`, such as one that retired, is started
+    /// again for the touch wait, so the touch prompt still shows.
+    @Test func touchWaitLaunchesTheHostToo() throws {
+        let (directory, socket) = socketPath()
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        let launches = Atomic<Int>(0)
+        let started = Mutex<FakeHost?>(nil)
+        let sink = HostEventSink(path: socket) {
+            launches.add(1, ordering: .relaxed)
+            Thread.detachNewThread {
+                usleep(200_000)
+                let host = try? FakeHost(path: socket)
+                started.withLock { $0 = host }
+            }
+            return true
+        }
+        sink.send(.touchWait(TouchWait(conn: "1:p", at: Date().timeIntervalSince1970)))
+        sink.flush(timeout: 5)
+        let host = try #require(started.withLock { $0 })
+        defer { host.close() }
+        #expect(host.waitForMessages(count: 1).map(\.summary) == ["touch_wait p"])
+        #expect(launches.load(ordering: .relaxed) == 1)
+    }
+
     /// A host that the sink started and that later quit, such as one that retired for a later release, is
     /// started again at the next operation, without the wait that follows a failed launch.
     @Test func aHostThatCameUpAndQuitIsStartedAgain() throws {
@@ -173,7 +197,7 @@ struct HostEventSinkLaunchTests {
         #expect(launches.load(ordering: .relaxed) == 2)
     }
 
-    @Test func launchesAreRateLimitedAndOnlyForOpStart() throws {
+    @Test func launchesAreRateLimitedAndOnlyForOpStartAndTouchWait() throws {
         let (directory, socket) = socketPath()
         defer { try? FileManager.default.removeItem(atPath: directory) }
         let launches = Atomic<Int>(0)
@@ -182,6 +206,7 @@ struct HostEventSinkLaunchTests {
             return false
         }
         sink.send(.pinNeeded(ConnRef(conn: "1:p")))
+        sink.send(.opEnd(OpEnd(conn: "1:p", result: .ok)))
         sink.flush(timeout: 2)
         #expect(launches.load(ordering: .relaxed) == 0)
 

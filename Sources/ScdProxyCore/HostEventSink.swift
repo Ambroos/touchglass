@@ -8,10 +8,12 @@ import TouchGlassIPC
 /// short deadline and closes the connection when the host stops reading, so a stopped host costs at most
 /// that deadline per event and never touches the forwarding threads.
 ///
-/// When the host is down at an `op_start`, the writer starts it through `launchHost`, and waits up to
-/// `launchWait` for it to listen, so the touch wait that follows still reaches it. After a launch that
-/// didn't bring the host up, it waits `launchInterval` before it tries again. A host that came up and
-/// later quit, such as one that retired for a later release, is started again at the next `op_start`.
+/// When the host is down at an `op_start` or a `touch_wait`, the writer starts it through `launchHost`,
+/// and waits up to `launchWait` for it to listen, so the event and the ones that follow still reach it.
+/// The touch wait counts too, because a host can exit right after it received the `op_start`. After a
+/// launch that didn't bring the host up, it waits `launchInterval` before it tries again. A host that
+/// came up and later quit, such as one that retired for a later release, is started again at the next
+/// such event.
 public final class HostEventSink: EventSink, @unchecked Sendable {
     public static let queueCapacity = 64
     /// How long one line may take to write before the connection is dropped.
@@ -26,7 +28,8 @@ public final class HostEventSink: EventSink, @unchecked Sendable {
     private struct Item {
         var line: Data
         var queuedAt: Double
-        var startsOperation: Bool
+        /// The event needs the panel, so a host that isn't running is started for it.
+        var launches: Bool
     }
 
     private let path: String
@@ -53,12 +56,15 @@ public final class HostEventSink: EventSink, @unchecked Sendable {
 
     public func send(_ message: IPCMessage) {
         guard let line = try? IPCLine.encode(message) else { return }
-        let startsOperation = if case .opStart = message { true } else { false }
+        let launches = switch message {
+        case .opStart, .touchWait: true
+        default: false
+        }
         condition.lock()
         if queue.count >= Self.queueCapacity {
             droppedCount += 1
         } else {
-            queue.append(Item(line: line, queuedAt: Posix.monotonicSeconds(), startsOperation: startsOperation))
+            queue.append(Item(line: line, queuedAt: Posix.monotonicSeconds(), launches: launches))
             condition.signal()
         }
         condition.unlock()
@@ -98,7 +104,7 @@ public final class HostEventSink: EventSink, @unchecked Sendable {
             // reconnect once and resend this event instead of losing it.
             dropConnection()
         }
-        guard let fresh = connect(launching: item.startsOperation) else { return }
+        guard let fresh = connect(launching: item.launches) else { return }
         if !write(item.line, to: fresh) { dropConnection() }
     }
 

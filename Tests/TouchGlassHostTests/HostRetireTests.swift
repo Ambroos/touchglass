@@ -15,18 +15,29 @@ import TouchGlassIPC
         .hello(Hello(role: role, pid: 99, build: build))
     }
 
-    func retireTimers(_ outputs: [HostOutput]) -> [TimeInterval] {
-        outputs.compactMap { if case .schedule(let delay, .retire) = $0 { delay } else { nil } }
+    /// The retire timers in `outputs`; each must have the default delay.
+    func retireTimers(_ outputs: [HostOutput]) -> [HostTimer] {
+        outputs.compactMap { output in
+            guard case .schedule(let delay, let timer) = output, case .retire = timer else { return nil }
+            #expect(delay == HostCoordinator.defaultRetireAfterIdle)
+            return timer
+        }
     }
 
-    @Test func newerPinentryRetiresTheHostAfterItCloses() {
+    /// The one retire timer in `outputs`.
+    func retireTimer(_ outputs: [HostOutput]) throws -> HostTimer {
+        let timers = retireTimers(outputs)
+        #expect(timers.count == 1)
+        return try #require(timers.first)
+    }
+
+    @Test func newerPinentryRetiresTheHostAfterItCloses() throws {
         var c = HostCoordinator(version: "0.1.0")
         #expect(c.handle(hello(.pinentry, build: "0.2.0"), from: pinentry, now: now).isEmpty)
         #expect(c.retiring)
 
-        let closed = c.connectionClosed(pinentry)
-        #expect(retireTimers(closed) == [HostCoordinator.defaultRetireAfterIdle])
-        #expect(c.fire(.retire, now: now) == [.exit])
+        let timer = try retireTimer(c.connectionClosed(pinentry))
+        #expect(c.fire(timer, now: now) == [.exit])
     }
 
     @Test func sameOlderOrUnknownBuildsKeepTheHost() {
@@ -44,13 +55,13 @@ import TouchGlassIPC
     }
 
     /// A newer proxy retires the host at once when nothing else holds it; its own connection doesn't count.
-    @Test func newerProxyRetiresAnIdleHost() {
+    @Test func newerProxyRetiresAnIdleHost() throws {
         var c = HostCoordinator(version: "0.1.0")
-        #expect(retireTimers(c.handle(hello(.proxy, build: "0.2.0"), from: proxy, now: now)) == [HostCoordinator.defaultRetireAfterIdle])
-        #expect(c.fire(.retire, now: now) == [.exit])
+        let timer = try retireTimer(c.handle(hello(.proxy, build: "0.2.0"), from: proxy, now: now))
+        #expect(c.fire(timer, now: now) == [.exit])
     }
 
-    @Test func runningOperationKeepsTheHostUntilItEnds() {
+    @Test func runningOperationKeepsTheHostUntilItEnds() throws {
         var c = HostCoordinator(version: "0.1.0")
         _ = c.handle(.opStart(OpStart(conn: "100:p", op: .sign, slot: 1, at: now.timeIntervalSince1970)), from: proxy, now: now)
         _ = c.handle(.touchWait(TouchGlassIPC.TouchWait(conn: "100:p", at: now.timeIntervalSince1970)), from: proxy, now: now)
@@ -60,23 +71,36 @@ import TouchGlassIPC
         // The success state may still show; the delay outlasts it.
         let ended = c.handle(.opEnd(OpEnd(conn: "100:p", result: .ok)), from: proxy, now: now)
         #expect(ended.contains(.panel(.show(.success(.sign)))))
-        #expect(retireTimers(ended) == [HostCoordinator.defaultRetireAfterIdle])
-        #expect(c.fire(.retire, now: now) == [.exit])
+        let timer = try retireTimer(ended)
+        #expect(c.fire(timer, now: now) == [.exit])
+    }
+
+    /// A timer from before the host was busy again does nothing, so the result that the panel shows now
+    /// gets the full delay.
+    @Test func timerFromAnEarlierIdleSpellDoesNothing() throws {
+        var c = HostCoordinator(version: "0.1.0")
+        let early = try retireTimer(c.handle(hello(.proxy, build: "0.2.0"), from: proxy, now: now))
+        _ = c.handle(.opStart(OpStart(conn: "100:p", op: .sign, slot: 1, at: now.timeIntervalSince1970)), from: proxy, now: now)
+        let ended = c.handle(.opEnd(OpEnd(conn: "100:p", result: .badPin)), from: proxy, now: now)
+        let late = try retireTimer(ended)
+        #expect(late != early)
+
+        #expect(c.fire(early, now: now).isEmpty)
+        #expect(c.fire(late, now: now) == [.exit])
     }
 
     /// A pinentry that connects while the host waits to exit keeps it; the host exits after that one closes.
-    @Test func pinentryThatConnectsMeanwhileKeepsTheHost() {
+    @Test func pinentryThatConnectsMeanwhileKeepsTheHost() throws {
         var c = HostCoordinator(version: "0.1.0")
         _ = c.handle(hello(.pinentry, build: "0.2.0"), from: pinentry, now: now)
-        #expect(retireTimers(c.connectionClosed(pinentry)).count == 1)
+        let early = try retireTimer(c.connectionClosed(pinentry))
 
         _ = c.handle(hello(.pinentry, build: "0.2.0"), from: 3, now: now)
-        #expect(c.fire(.retire, now: now).isEmpty)
+        #expect(c.fire(early, now: now).isEmpty)
         _ = c.handle(.getPin(GetPin(id: "r1", desc: "Passphrase")), from: 3, now: now)
         #expect(retireTimers(c.handle(.submit("x"))).isEmpty)
 
-        let closed = c.connectionClosed(3)
-        #expect(retireTimers(closed) == [HostCoordinator.defaultRetireAfterIdle])
-        #expect(c.fire(.retire, now: now) == [.exit])
+        let timer = try retireTimer(c.connectionClosed(3))
+        #expect(c.fire(timer, now: now) == [.exit])
     }
 }

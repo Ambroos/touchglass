@@ -24,8 +24,9 @@ public enum HostTimer: Sendable, Equatable {
     case verifyWatchdog(requestID: String)
     /// Drop an operation whose touch wait passed its deadline without an `op_end`.
     case touchExpired(operation: String, deadline: Date)
-    /// Exit if the host is still idle; see `HostOutput.exit`.
-    case retire
+    /// Exit if the host is still idle; see `HostOutput.exit`. A timer whose generation is not the
+    /// coordinator's current one was scheduled before the host was busy again, and does nothing.
+    case retire(generation: Int)
 }
 
 /// One card operation. A proxy connection runs its operations one after another under the same ID, so the
@@ -132,6 +133,9 @@ public struct HostCoordinator: Sendable {
     /// A helper of a later release said hello: exit when idle.
     public private(set) var retiring = false
     private var retireScheduled = false
+    /// Raised whenever the host stops being idle, so that a retire timer from an earlier idle spell can't
+    /// end a result that the panel shows only now.
+    private var retireGeneration = 0
     /// See `defaultRetireAfterIdle`.
     public var retireAfterIdle = Self.defaultRetireAfterIdle
 
@@ -279,7 +283,8 @@ public struct HostCoordinator: Sendable {
         case .touchExpired(let conn, let deadline):
             guard let operation = operations[conn], operation.touchDeadline == deadline else { return [] }
             return operationEnded(OpEnd(conn: conn, result: .cancelled))
-        case .retire:
+        case .retire(let generation):
+            guard generation == retireGeneration else { return [] }
             retireScheduled = false
             return isIdle ? [.exit] : []
         }
@@ -342,7 +347,8 @@ public struct HostCoordinator: Sendable {
         }
     }
 
-    /// Records the last panel state in `outputs`, for `refreshClient`.
+    /// Records the last panel state in `outputs`, for `refreshClient`. While retiring, schedules the retire
+    /// timer when the host becomes idle and invalidates it when the host stops being idle.
     private mutating func tracking(_ outputs: [HostOutput]) -> [HostOutput] {
         for output in outputs {
             switch output {
@@ -351,9 +357,15 @@ public struct HostCoordinator: Sendable {
             default: break
             }
         }
-        if retiring, isIdle, !retireScheduled, !outputs.contains(.exit) {
+        guard retiring else { return outputs }
+        if !isIdle {
+            if retireScheduled {
+                retireScheduled = false
+                retireGeneration += 1
+            }
+        } else if !retireScheduled, !outputs.contains(.exit) {
             retireScheduled = true
-            return outputs + [.schedule(after: retireAfterIdle, .retire)]
+            return outputs + [.schedule(after: retireAfterIdle, .retire(generation: retireGeneration))]
         }
         return outputs
     }
