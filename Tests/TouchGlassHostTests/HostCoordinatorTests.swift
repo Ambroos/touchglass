@@ -88,7 +88,8 @@ import TouchGlassIPC
     }
 
     @Test func queuedTouchWaitRearmsAfterTheFirstOperation() throws {
-        var coordinator = HostCoordinator()
+        // Without the touch cache window; `queuedTouchInsideTheCacheWindowIsHeldBack` covers it with.
+        var coordinator = HostCoordinator(touchCache: 0)
         start(&coordinator, conn: "100:p")
         start(&coordinator, conn: "100:s1", op: .decrypt)
         _ = coordinator.handle(.touchWait(TouchGlassIPC.TouchWait(conn: "100:p", at: now.timeIntervalSince1970)), from: proxy, now: now)

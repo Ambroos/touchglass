@@ -23,6 +23,8 @@ public final class HostSession {
     private let resolverQueue = DispatchQueue(label: "TouchGlass client lookup", qos: .userInitiated)
     /// Runs after the session stopped for `HostOutput.exit`. The app exits the process here.
     private let onRetire: @MainActor () -> Void
+    private let log = TouchGlassLog(.host)
+    private var lastPanelLog: LogEvent?
 
     /// - Parameters:
     ///   - version: The release this host runs; see `HostCoordinator.version`.
@@ -32,6 +34,7 @@ public final class HostSession {
         panel: PanelDriving,
         resolver: ClientResolving? = nil,
         touchTimeout: TimeInterval? = nil,
+        touchCache: TimeInterval = TouchTiming.touchCacheWindow,
         version: String? = nil,
         retireAfterIdle: TimeInterval = HostCoordinator.defaultRetireAfterIdle,
         onRetire: @escaping @MainActor () -> Void = {}
@@ -40,7 +43,7 @@ public final class HostSession {
         self.panel = panel
         self.resolver = resolver
         self.onRetire = onRetire
-        coordinator = HostCoordinator(touchTimeout: touchTimeout, version: version)
+        coordinator = HostCoordinator(touchTimeout: touchTimeout, touchCache: touchCache, version: version)
         coordinator.retireAfterIdle = retireAfterIdle
 
         var actions = PanelActions()
@@ -53,6 +56,7 @@ public final class HostSession {
     }
 
     public func start() {
+        log(.hostStarted(version: coordinator.version, touchTimeout: coordinator.touchTimeout, touchCache: coordinator.touchCache))
         server.start(
             onMessage: { [weak self] message, connection in self?.receive(message, from: connection) },
             onClose: { [weak self] connection in self?.closed(connection) }
@@ -68,7 +72,8 @@ public final class HostSession {
     }
 
     public func closed(_ connection: ConnectionID) {
-        perform(coordinator.connectionClosed(connection))
+        log(.connectionClosed(id: connection))
+        perform(coordinator.connectionClosed(connection, now: Date()))
     }
 
     public func user(_ action: UserAction) {
@@ -76,9 +81,15 @@ public final class HostSession {
     }
 
     private func perform(_ outputs: [HostOutput]) {
+        for event in coordinator.takeLog() { log(event) }
         for output in outputs {
             switch output {
             case .panel(let event):
+                // A label that fills in re-sends the same state; log changes of state only.
+                if let entry = Self.logEvent(for: event), entry != lastPanelLog {
+                    lastPanelLog = entry
+                    log(entry)
+                }
                 panel.send(event)
             case .shakeField:
                 panel.shakeField()
@@ -104,6 +115,28 @@ public final class HostSession {
                 onRetire()
                 return
             }
+        }
+    }
+
+    /// The panel event as the log names it: the state's name, never its text.
+    static func logEvent(for event: PanelEvent) -> LogEvent? {
+        switch event {
+        case .show(let state):
+            let name: PanelStateName = switch state {
+            case .pinEntry: .pinEntry
+            case .verifying: .verifying
+            case .passphrase: .passphrase
+            case .touchWait: .touchWait
+            case .success: .success
+            case .failure: .failure
+            case .confirm: .confirm
+            case .message: .message
+            }
+            return .panelShow(name)
+        case .dismiss: return .panelDismiss
+        case .userClosed: return .panelUserClosed
+        case .userHid: return .panelUserHid
+        default: return nil
         }
     }
 }

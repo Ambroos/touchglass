@@ -6,6 +6,15 @@ public enum TouchTiming {
     public static let cardTimeout: TimeInterval = 15
     /// How long a card command must stay silent before the host assumes it waits for a touch.
     public static let detectionThreshold: TimeInterval = 0.4
+    /// How long the YubiKey's "cached" touch policy keeps a touch, by default. The card restarts this window on
+    /// every operation that uses the cached touch, and one touch covers every key on the card.
+    public static let touchCacheWindow: TimeInterval = 15
+    /// How long a card command must stay silent before the host shows the touch step inside the touch cache
+    /// window, counted from the command. Inside the window the card almost always answers without a touch:
+    /// a cached signature took 0.14 to 0.15 s from the gpg command line, but during a rebase that signed 45
+    /// commits most took longer than `detectionThreshold`, so every one flashed a touch panel. 1.5 s is ten
+    /// times the measured time and still shows most of the 15 s countdown when the card does want a touch.
+    public static let cachedDetectionThreshold: TimeInterval = 1.5
     /// How long the success state shows before the panel closes. The ring and checkmark settle in
     /// 0.25 s, so this leaves about a second to read the result; 0.7 s closed the panel before the
     /// eye got to the title.

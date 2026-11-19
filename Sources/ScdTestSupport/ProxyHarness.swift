@@ -28,6 +28,7 @@ public final class ProxyHarness: @unchecked Sendable {
         public var pincache_hit = "CAFEF00D"
         public var touch_ms = 0
         public var touch_cache_ms = 0
+        public var cached_ms = 0
         public var touch_timeout = false
         public var exit_on_eof: Int32 = 0
         public var eof_linger_ms = 0

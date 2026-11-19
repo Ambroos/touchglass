@@ -18,11 +18,15 @@ public struct HostSettings: Sendable, Equatable {
     public var showClient = true
     /// Overrides the touch countdown length that the scdaemon proxy reports, in seconds.
     public var touchTimeout: TimeInterval?
+    /// How long a touch stays cached on the card, in seconds; see `TouchTiming.touchCacheWindow`. 0 turns the
+    /// longer detection delay inside the window off.
+    public var touchCache: TimeInterval = TouchTiming.touchCacheWindow
 
-    public init(appearance: PanelAppearance = .readable, showClient: Bool = true, touchTimeout: TimeInterval? = nil) {
+    public init(appearance: PanelAppearance = .readable, showClient: Bool = true, touchTimeout: TimeInterval? = nil, touchCache: TimeInterval = TouchTiming.touchCacheWindow) {
         self.appearance = appearance
         self.showClient = showClient
         self.touchTimeout = touchTimeout
+        self.touchCache = touchCache
     }
 
     /// Parses the file's text. Unknown keys and invalid values are ignored.
@@ -44,6 +48,8 @@ public struct HostSettings: Sendable, Equatable {
                 }
             case "touch-timeout":
                 if let seconds = Double(value), seconds >= 1, seconds <= maximumTouchTimeout { settings.touchTimeout = seconds }
+            case "touch-cache":
+                if let seconds = Double(value), seconds >= 0, seconds <= maximumTouchTimeout { settings.touchCache = seconds }
             default:
                 continue
             }

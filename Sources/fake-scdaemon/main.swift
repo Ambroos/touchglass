@@ -31,8 +31,11 @@ struct Config: Decodable {
     var pincache_hit: String = "CAFEF00D"
     /// Delay before the card answers a crypto command when it needs a touch, in ms.
     var touch_ms: Int = 0
-    /// After a touch, operations within this window need no touch, in ms (YubiKey "cached" policy).
+    /// After a touch, operations within this window need no touch, in ms (YubiKey "cached" policy). Each
+    /// operation restarts the window, as the YubiKey does.
     var touch_cache_ms: Int = 0
+    /// Delay before the card answers a crypto command that needs no touch, in ms.
+    var cached_ms: Int = 0
     /// Answer the touch with ERR Timeout instead of a result.
     var touch_timeout: Bool = false
     /// Exit code after end of file on stdin.
@@ -43,7 +46,7 @@ struct Config: Decodable {
     var split_writes: Bool = false
 
     enum CodingKeys: String, CodingKey {
-        case socket, record_dir, serial, keys, pin, verified, pincache, pincache_hit, touch_ms, touch_cache_ms
+        case socket, record_dir, serial, keys, pin, verified, pincache, pincache_hit, touch_ms, touch_cache_ms, cached_ms
         case touch_timeout, exit_on_eof, eof_linger_ms, split_writes
     }
 
@@ -61,6 +64,7 @@ struct Config: Decodable {
         pincache_hit = try c.decodeIfPresent(String.self, forKey: .pincache_hit) ?? pincache_hit
         touch_ms = try c.decodeIfPresent(Int.self, forKey: .touch_ms) ?? touch_ms
         touch_cache_ms = try c.decodeIfPresent(Int.self, forKey: .touch_cache_ms) ?? touch_cache_ms
+        cached_ms = try c.decodeIfPresent(Int.self, forKey: .cached_ms) ?? cached_ms
         touch_timeout = try c.decodeIfPresent(Bool.self, forKey: .touch_timeout) ?? touch_timeout
         exit_on_eof = try c.decodeIfPresent(Int32.self, forKey: .exit_on_eof) ?? exit_on_eof
         eof_linger_ms = try c.decodeIfPresent(Int.self, forKey: .eof_linger_ms) ?? eof_linger_ms
@@ -347,8 +351,10 @@ func cryptoOperation(_ conn: Connection, command: String, grip: String) {
             conn.send(errTimeout)
             return
         }
-        card.lastTouch = now()
+    } else {
+        usleep(UInt32(config.cached_ms) * 1000)
     }
+    card.lastTouch = now()
     if command == "PKDECRYPT" { conn.send("S PADDING 0") }
     conn.sendData(resultBytes)
     conn.send("OK")

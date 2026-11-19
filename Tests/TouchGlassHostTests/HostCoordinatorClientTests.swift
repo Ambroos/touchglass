@@ -82,7 +82,8 @@ import TouchGlassIPC
     }
 
     @Test func aLabelForAnEndedOperationSkipsTheNextOneOnTheSameConnection() throws {
-        var coordinator = HostCoordinator()
+        // Without the touch cache window, so the second operation's touch wait shows at once.
+        var coordinator = HostCoordinator(touchCache: 0)
         _ = start(&coordinator)
         _ = coordinator.handle(.opEnd(OpEnd(conn: "100:p", result: .ok)), from: proxy, now: now)
         // The pipe session reuses its connection ID for the next operation.

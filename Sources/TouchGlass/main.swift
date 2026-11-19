@@ -27,7 +27,8 @@ let usage = """
       --color-scheme <scheme>   light or dark, instead of the system appearance.
 
     The host reads its settings from host.conf in its support directory:
-    appearance = readable|smoked, show-client = yes|no, touch-timeout = <seconds>.
+    appearance = readable|smoked, show-client = yes|no, touch-timeout = <seconds>,
+    touch-cache = <seconds>.
 
     In the demo, any text in the PIN field continues. Press Space with the demo controls
     window focused, or click Simulate Touch, to touch.

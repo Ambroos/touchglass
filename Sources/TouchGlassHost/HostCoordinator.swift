@@ -24,6 +24,9 @@ public enum HostTimer: Sendable, Equatable {
     case verifyWatchdog(requestID: String)
     /// Drop an operation whose touch wait passed its deadline without an `op_end`.
     case touchExpired(operation: String, deadline: Date)
+    /// Show a touch wait that was held back inside the touch cache window, if the operation still waits.
+    /// `at` tells this timer from one of an earlier touch wait of the same operation.
+    case showTouch(operation: String, at: Date)
     /// Exit if the host is still idle; see `HostOutput.exit`. A timer whose generation is not the
     /// coordinator's current one was scheduled before the host was busy again, and does nothing.
     case retire(generation: Int)
@@ -99,6 +102,10 @@ public struct HostCoordinator: Sendable {
         var client: String?
         /// `client` came from the pinentry's owner PID, which beats a guess among the agent's clients.
         var clientIsExact = false
+        /// When the card command that waits for the touch started: the touch countdown runs from here.
+        var touchStart: Date?
+        /// When a touch wait held back inside the touch cache window is due to show; nil when none is held back.
+        var touchShowAt: Date?
     }
 
     enum Shown: Sendable, Equatable {
@@ -139,9 +146,24 @@ public struct HostCoordinator: Sendable {
     /// See `defaultRetireAfterIdle`.
     public var retireAfterIdle = Self.defaultRetireAfterIdle
 
-    public init(touchTimeout: TimeInterval? = nil, version: String? = nil) {
+    /// How long the card keeps a touch, in seconds: the `touch-cache` setting. 0 turns the cache window off.
+    public var touchCache: TimeInterval
+    /// When each card's touch cache window ends, by display serial. Every successful operation on the card
+    /// restarts it, from any proxy: the cache belongs to the card, not to one scdaemon session.
+    private(set) var touchCacheEnds: [String: Date] = [:]
+    /// Diagnostic events for the unified log, taken by `takeLog()`. Pure state: the session writes them.
+    private(set) var log: [LogEvent] = []
+
+    public init(touchTimeout: TimeInterval? = nil, touchCache: TimeInterval = TouchTiming.touchCacheWindow, version: String? = nil) {
         self.touchTimeout = touchTimeout
+        self.touchCache = touchCache
         self.version = version
+    }
+
+    /// Returns the diagnostic events since the last call and forgets them.
+    public mutating func takeLog() -> [LogEvent] {
+        defer { log.removeAll() }
+        return log
     }
 
     // MARK: Messages
@@ -166,6 +188,7 @@ public struct HostCoordinator: Sendable {
             operations[ref.conn]?.pinNeeded = true
             operations[ref.conn]?.reporter = connection
             operations[ref.conn]?.touchDeadline = nil
+            operations[ref.conn]?.touchShowAt = nil
             queuedTouch.removeAll { $0 == ref.conn }
             return []
         case .pinSent:
@@ -173,7 +196,7 @@ public struct HostCoordinator: Sendable {
         case .touchWait(let wait):
             return touchWait(wait, from: connection, now: now)
         case .opEnd(let end):
-            return operationEnded(end)
+            return operationEnded(end, now: now)
         case .getPin(let request):
             return getPin(request, from: connection)
         case .confirm(let request):
@@ -184,7 +207,11 @@ public struct HostCoordinator: Sendable {
             return requestEnded(ref.id)
         case .hello(let hello):
             if hello.role == .pinentry { pinentryConnections.insert(connection) }
-            if let version, let build = hello.build, BuildInfo.isNewer(build, than: version) { retiring = true }
+            log.append(.hello(id: connection, role: hello.role, build: hello.build))
+            if let version, let build = hello.build, BuildInfo.isNewer(build, than: version) {
+                if !retiring { log.append(.retireDecision(hostVersion: version, helperBuild: build)) }
+                retiring = true
+            }
             return []
         case .ping, .pong, .pin, .confirmed, .notConfirmed, .cancelled, .fallback, .unknown:
             return []
@@ -193,15 +220,15 @@ public struct HostCoordinator: Sendable {
 
     /// A connection closed. Operations its proxy reported end silently: a proxy that stops sends no
     /// `op_end`. Prompts it owned that the user has not answered are withdrawn.
-    public mutating func connectionClosed(_ connection: ConnectionID) -> [HostOutput] {
-        tracking(closeConnection(connection))
+    public mutating func connectionClosed(_ connection: ConnectionID, now: Date = Date()) -> [HostOutput] {
+        tracking(closeConnection(connection, now: now))
     }
 
-    private mutating func closeConnection(_ connection: ConnectionID) -> [HostOutput] {
+    private mutating func closeConnection(_ connection: ConnectionID, now: Date) -> [HostOutput] {
         pinentryConnections.remove(connection)
         var outputs: [HostOutput] = []
         for conn in operationOrder where operations[conn]?.reporter == connection {
-            outputs += operationEnded(OpEnd(conn: conn, result: .cancelled))
+            outputs += operationEnded(OpEnd(conn: conn, result: .cancelled), now: now)
         }
         if let shown, let id = Self.requestID(of: shown), Self.connection(of: shown) == connection {
             outputs += requestEnded(id)
@@ -268,25 +295,40 @@ public struct HostCoordinator: Sendable {
             while let next = queuedTouch.first {
                 queuedTouch.removeFirst()
                 guard var operation = operations[next] else { continue }
-                // The queued command reaches the card only now, so its touch window starts now.
+                // The queued command reaches the card only once the operation before it ended, so its touch
+                // countdown starts about now. When that operation succeeded, it restarted the touch cache
+                // window: the card most likely answers this one without a touch, so hold it back as well,
+                // counting from that operation's end.
                 let timeout = operation.touchTimeout ?? touchTimeout ?? TouchTiming.cardTimeout
-                let deadline = now.addingTimeInterval(timeout - TouchTiming.detectionThreshold)
+                var start = now.addingTimeInterval(-TouchTiming.detectionThreshold)
+                let cached = cacheWindowStart(serial: operation.serial, at: now)
+                if let cached { start = max(cached, start) }
+                let deadline = start.addingTimeInterval(timeout)
+                operation.touchStart = start
                 operation.touchDeadline = deadline
                 operations[next] = operation
+                if cached != nil, let held = holdBack(next, operation: &operation, start: start, now: now) { return held }
                 return showTouch(next, operation: operation, deadline: deadline, now: now)
             }
             return []
+        case .showTouch(let conn, let at):
+            guard var operation = operations[conn], operation.touchShowAt == at, let deadline = operation.touchDeadline else { return [] }
+            operation.touchShowAt = nil
+            operations[conn] = operation
+            return placeTouch(conn, operation: operation, deadline: deadline, now: now, deferred: true)
         case .verifyWatchdog(let requestID):
             guard case .cardPIN(requestID, _, _, _, true) = shown else { return [] }
             shown = nil
             return [.panel(.dismiss)] + rearmIfQueued()
         case .touchExpired(let conn, let deadline):
             guard let operation = operations[conn], operation.touchDeadline == deadline else { return [] }
-            return operationEnded(OpEnd(conn: conn, result: .cancelled))
+            return operationEnded(OpEnd(conn: conn, result: .cancelled), now: now)
         case .retire(let generation):
             guard generation == retireGeneration else { return [] }
             retireScheduled = false
-            return isIdle ? [.exit] : []
+            guard isIdle else { return [] }
+            log.append(.retireExit)
+            return [.exit]
         }
     }
 
@@ -386,24 +428,64 @@ public struct HostCoordinator: Sendable {
         operation.touchTimeout = timeout
         operation.cardTimeout = cardTimeout
         operation.pinNeeded = false
+        operation.touchStart = start
+        operation.touchShowAt = nil
         operations[wait.conn] = operation
 
+        // After a PIN prompt, the touch step replaces the verifying state at once: the user is at the panel,
+        // and the card asks for the touch right after the PIN.
+        let followsPIN: Bool
+        if case .cardPIN(_, _, wait.conn?, _, true) = shown { followsPIN = true } else { followsPIN = false }
+        if !followsPIN, cacheWindowStart(serial: operation.serial, at: start) != nil,
+           let held = holdBack(wait.conn, operation: &operation, start: start, now: now) {
+            return held
+        }
+        return placeTouch(wait.conn, operation: operation, deadline: deadline, now: now, deferred: false)
+    }
+
+    /// When the touch cache window of `serial` is open at `date`, the time it last restarted: when the card
+    /// last finished an operation. Nil when the window is closed or off.
+    private func cacheWindowStart(serial: String, at date: Date) -> Date? {
+        guard touchCache > 0, let end = touchCacheEnds[serial], end > date else { return nil }
+        return end.addingTimeInterval(-touchCache)
+    }
+
+    /// Inside the touch cache window, holds the touch wait of `conn` back until `cachedDetectionThreshold`
+    /// after `start`, the card command's start. Returns nil when that time has passed already, so the caller
+    /// places the touch wait now.
+    private mutating func holdBack(_ conn: String, operation: inout CardOperation, start: Date, now: Date) -> [HostOutput]? {
+        let showAt = start.addingTimeInterval(TouchTiming.cachedDetectionThreshold)
+        let delay = showAt.timeIntervalSince(now)
+        guard delay > 0 else { return nil }
+        operation.touchShowAt = showAt
+        operations[conn] = operation
+        log.append(.touchDeferred(conn: conn, serial: operation.serial, showIn: delay, sinceCommand: now.timeIntervalSince(start)))
+        return [.schedule(after: delay, .showTouch(operation: conn, at: showAt))]
+    }
+
+    /// Shows the touch wait of `conn`, or queues it behind the touch wait or prompt that holds the panel.
+    private mutating func placeTouch(_ conn: String, operation: CardOperation, deadline: Date, now: Date, deferred: Bool) -> [HostOutput] {
         switch shown {
-        case .touch(let other) where other != wait.conn && operations[other] != nil:
+        case .touch(let other) where other != conn && operations[other] != nil:
             // Card operations serialise on the card: keep one panel and re-arm it later.
-            if !queuedTouch.contains(wait.conn) { queuedTouch.append(wait.conn) }
+            if !queuedTouch.contains(conn) { queuedTouch.append(conn) }
+            log.append(.touchQueued(conn: conn))
             return []
         case .cardPIN(_, _, _, _, false), .passphrase(_, _, _, false), .confirm, .message:
             // A prompt is waiting for the user; show this touch after it.
-            if !queuedTouch.contains(wait.conn) { queuedTouch.append(wait.conn) }
+            if !queuedTouch.contains(conn) { queuedTouch.append(conn) }
+            log.append(.touchQueued(conn: conn))
             return []
         default:
-            return showTouch(wait.conn, operation: operation, deadline: deadline, now: now)
+            return showTouch(conn, operation: operation, deadline: deadline, now: now, deferred: deferred)
         }
     }
 
-    private mutating func showTouch(_ conn: String, operation: CardOperation, deadline: Date, now: Date) -> [HostOutput] {
+    private mutating func showTouch(_ conn: String, operation: CardOperation, deadline: Date, now: Date, deferred: Bool = false) -> [HostOutput] {
         shown = .touch(operation: conn)
+        if let start = operation.touchStart {
+            log.append(.touchShown(conn: conn, sinceCommand: now.timeIntervalSince(start), deferred: deferred))
+        }
         let wait = TouchGlassCore.TouchWait(
             operation: operation.kind,
             cardSerial: operation.serial,
@@ -419,10 +501,19 @@ public struct HostCoordinator: Sendable {
         return [.panel(.show(.touchWait(wait))), .schedule(after: expiry, .touchExpired(operation: conn, deadline: deadline))]
     }
 
-    private mutating func operationEnded(_ end: OpEnd) -> [HostOutput] {
+    private mutating func operationEnded(_ end: OpEnd, now: Date) -> [HostOutput] {
         let operation = operations.removeValue(forKey: end.conn)
         operationOrder.removeAll { $0 == end.conn }
         queuedTouch.removeAll { $0 == end.conn }
+        if let operation, operation.touchShowAt != nil {
+            log.append(.touchSkipped(conn: end.conn, result: end.result))
+        }
+        // Each operation the card completes uses its touch, a fresh one or the cached one, and restarts the
+        // window. The policy isn't visible on the wire, so this holds for a key without a touch policy too.
+        if let operation, end.result == .ok, operation.kind != .unknown, touchCache > 0 {
+            touchCacheEnds[operation.serial] = now.addingTimeInterval(touchCache)
+            log.append(.touchCacheRestarted(serial: operation.serial, seconds: touchCache))
+        }
 
         let isShown: Bool
         switch shown {
