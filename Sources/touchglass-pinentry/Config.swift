@@ -95,6 +95,11 @@ struct Log {
         _ = try? handle?.seekToEnd()
     }
 
+    /// The last component of a path, for the trace: a full path in the user's home names the user.
+    static func basename(_ path: String) -> String {
+        (path as NSString).lastPathComponent
+    }
+
     func callAsFunction(_ message: @autoclosure () -> String) {
         let text = message()
         unified(.pinentryTrace(text))

@@ -30,7 +30,7 @@ extension PinentryServer {
 
     func startFallback() -> Child? {
         guard FileManager.default.isExecutableFile(atPath: config.fallbackPinentry) else {
-            log("fallback pinentry missing: \(config.fallbackPinentry)")
+            log("fallback pinentry missing: \(Log.basename(config.fallbackPinentry))")
             return nil
         }
         var toChild: [Int32] = [0, 0]

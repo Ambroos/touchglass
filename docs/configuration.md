@@ -32,7 +32,7 @@ The helpers start the host again on the next prompt or card operation.
 
 ## Read the log
 
-The helpers and the host write to the unified log under the subsystem `io.ambroos.touchglass`, with the categories `scdaemon`, `host` and `pinentry`. The log holds operation kinds, card serials, results, durations, panel state names, connection news, and each time the panel takes or gives back keyboard focus, with the bundle ID of the frontmost app. It never holds a PIN, a passphrase, the data that is signed or decrypted, or key material.
+The helpers and the host write to the unified log under the subsystem `io.ambroos.touchglass`, with the categories `scdaemon`, `host` and `pinentry`. The log holds operation kinds, the last 4 digits of card serials, results, durations, panel state names, connection news, and each time the panel takes or gives back keyboard focus, with the bundle ID of the frontmost app. It never holds a PIN, a passphrase, the data that is signed or decrypted, or key material.
 
 To watch the log while you use the card:
 

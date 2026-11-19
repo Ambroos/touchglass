@@ -307,7 +307,8 @@ func answering(secret: String) -> @Sendable (IPCMessage) -> IPCMessage? {
         #expect(pinentry.readLine(timeout: 25) == "OK stub ready")
         #expect(Date().timeIntervalSince(start) < 10)
         let log = sandbox.read(sandbox.pinentryLog)
-        #expect(log.contains("launching \(app)"))
+        #expect(log.contains("launching \((app as NSString).lastPathComponent)"))
+        #expect(!log.contains("/nonexistent/"))
         #expect(log.contains("open exited with status"))
     }
 

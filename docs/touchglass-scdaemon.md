@@ -38,7 +38,7 @@ The card's policy isn't visible on the wire, so the host restarts the window aft
 
 ### Logging
 
-The proxy writes to the unified log under the subsystem `io.ambroos.touchglass`, category `scdaemon`: when it starts and when scdaemon exits, each operation's start and end with its kind, slot, card serial, result and durations, each inferred touch wait with the time that passed, and the host connection. At debug level it also logs every scdaemon command by keyword, with its result and duration. Log calls take a fixed set of events with typed values, so no line from the Assuan stream reaches the log. See [Read the log](configuration.md#read-the-log).
+The proxy writes to the unified log under the subsystem `io.ambroos.touchglass`, category `scdaemon`: when it starts and when scdaemon exits, each operation's start and end with its kind, slot, the last 4 digits of the card serial, result and durations, each inferred touch wait with the time that passed, and the host connection. At debug level it also logs every scdaemon command by keyword, with its result and duration. Log calls take a fixed set of events with typed values, so no line from the Assuan stream reaches the log. See [Read the log](configuration.md#read-the-log).
 
 ## Configuration
 

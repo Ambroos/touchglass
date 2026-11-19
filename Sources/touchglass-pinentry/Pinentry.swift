@@ -84,7 +84,7 @@ final class PinentryServer {
             log("host not reachable; launching disabled")
             return nil
         }
-        log("host not reachable; launching \(app)")
+        log("host not reachable; launching \(Log.basename(app))")
         var opener = HostLauncher.launch(app)
         defer {
             if let opener {
@@ -121,7 +121,7 @@ final class PinentryServer {
 
     /// Replaces this process with pinentry-mac. Nothing has been read from or written to stdio yet, so pinentry-mac talks to the agent directly. Returns only if the exec fails.
     func execFallback() {
-        log("exec \(config.fallbackPinentry)")
+        log("exec \(Log.basename(config.fallbackPinentry))")
         let argv = ([config.fallbackPinentry] + arguments).map { strdup($0) } + [nil]
         execv(config.fallbackPinentry, argv)
         log("exec failed: errno \(errno); serving without host or fallback")

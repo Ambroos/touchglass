@@ -62,9 +62,9 @@ public enum PanelKeyReason: String, Sendable, Equatable {
 /// Something worth a line in the unified log.
 ///
 /// Log calls take only these events, and each case carries only typed, non-secret values: operation kinds,
-/// results, card serials (the panel shows them), connection IDs, releases, durations and the bundle IDs of
-/// frontmost apps. No case takes a
-/// line from the Assuan stream, a PIN, a passphrase, hash data or a `D` payload.
+/// results, the last 4 digits of card serials, connection IDs, releases, durations and the bundle IDs of
+/// frontmost apps. Connection IDs and releases that come from socket peers are checked before they are
+/// logged. No case takes a line from the Assuan stream, a PIN, a passphrase, hash data or a `D` payload.
 public enum LogEvent: Sendable, Equatable {
     // touchglass-scdaemon
     case proxyStarted(scdaemonPID: Int32, relaySocket: Bool)
@@ -136,20 +136,20 @@ public enum LogEvent: Sendable, Equatable {
         case let .scdaemonExited(status):
             return "scdaemon exited: status \(status)"
         case let .cardCommand(conn, command, ok, duration):
-            return "\(conn) \(command.rawValue) \(ok ? "OK" : "ERR") in \(Self.ms(duration))"
+            return "\(Self.conn(conn)) \(command.rawValue) \(ok ? "OK" : "ERR") in \(Self.ms(duration))"
         case let .operationStarted(conn, kind, slot, serial):
-            return "\(conn) op start: \(kind.rawValue) slot \(slot.map(String.init) ?? "?") card \(serial ?? "?")"
+            return "\(Self.conn(conn)) op start: \(kind.rawValue) slot \(slot.map(String.init) ?? "?") card \(Self.card(serial))"
         case let .pinRequested(conn):
-            return "\(conn) PIN requested"
+            return "\(Self.conn(conn)) PIN requested"
         case let .pinAnswered(conn):
-            return "\(conn) PIN answered"
+            return "\(Self.conn(conn)) PIN answered"
         case let .touchWaitInferred(conn, delay, pinpad):
-            return pinpad ? "\(conn) touch wait: pinpad prompt" : "\(conn) touch wait inferred after \(Self.ms(delay)) of silence"
+            return pinpad ? "\(Self.conn(conn)) touch wait: pinpad prompt" : "\(Self.conn(conn)) touch wait inferred after \(Self.ms(delay)) of silence"
         case let .operationEnded(conn, kind, result, code, total, sinceArmed, reported):
             let codeText = code.map { " code \($0)" } ?? ""
-            return "\(conn) op end: \(kind.rawValue) \(result.rawValue)\(codeText), card \(Self.ms(sinceArmed)) since command or PIN, total \(Self.ms(total)), touch wait \(reported ? "reported" : "not reported")"
+            return "\(Self.conn(conn)) op end: \(kind.rawValue) \(result.rawValue)\(codeText), card \(Self.ms(sinceArmed)) since command or PIN, total \(Self.ms(total)), touch wait \(reported ? "reported" : "not reported")"
         case let .hostConnected(build):
-            return "connected to host" + (build.map { ", reported release \($0)" } ?? "")
+            return "connected to host" + (build.map { ", reported release \(Self.release($0))" } ?? "")
         case let .hostLaunch(started):
             return started ? "host not running: starting it" : "host not running: start failed"
         case .hostUnreachable:
@@ -171,21 +171,21 @@ public enum LogEvent: Sendable, Equatable {
         case let .connectionClosed(id):
             return "connection \(id) closed"
         case let .hello(id, role, build):
-            return "connection \(id) hello: \(role.rawValue)" + (build.map { ", release \($0)" } ?? "")
+            return "connection \(id) hello: \(role.rawValue)" + (build.map { ", release \(Self.release($0))" } ?? "")
         case let .retireDecision(host, helper):
-            return "retiring: helper release \(helper) is newer than host release \(host); exiting when idle"
+            return "retiring: helper release \(Self.release(helper)) is newer than host release \(host); exiting when idle"
         case .retireExit:
             return "retiring: idle, exiting"
         case let .touchCacheRestarted(serial, seconds):
-            return "touch cache: card \(serial.isEmpty ? "?" : serial) window restarted, \(Self.seconds(seconds))"
+            return "touch cache: card \(Self.card(serial)) window restarted, \(Self.seconds(seconds))"
         case let .touchDeferred(conn, serial, showIn, since):
-            return "\(conn) touch wait inside card \(serial.isEmpty ? "?" : serial) cache window: panel deferred \(Self.ms(showIn)), \(Self.ms(since)) since command"
+            return "\(Self.conn(conn)) touch wait inside card \(Self.card(serial)) cache window: panel deferred \(Self.ms(showIn)), \(Self.ms(since)) since command"
         case let .touchShown(conn, since, deferred):
-            return "\(conn) touch panel shown \(Self.ms(since)) after command" + (deferred ? " (deferred)" : "")
+            return "\(Self.conn(conn)) touch panel shown \(Self.ms(since)) after command" + (deferred ? " (deferred)" : "")
         case let .touchQueued(conn):
-            return "\(conn) touch wait queued"
+            return "\(Self.conn(conn)) touch wait queued"
         case let .touchSkipped(conn, result):
-            return "\(conn) op ended \(result.rawValue) before its deferred touch panel: nothing shown"
+            return "\(Self.conn(conn)) op ended \(result.rawValue) before its deferred touch panel: nothing shown"
         case let .panelShow(state):
             return "panel: \(state.rawValue)"
         case .panelDismiss:
@@ -205,6 +205,41 @@ public enum LogEvent: Sendable, Equatable {
         case let .pinentryTrace(text):
             return text
         }
+    }
+
+    /// A connection ID as the proxy makes them, `<pid>:p` or `<pid>:s<n>`. The host gets them from socket
+    /// peers, so anything else is logged as "?".
+    static func conn(_ id: String) -> String {
+        let parts = id.split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count == 2, isDigits(parts[0]) else { return "?" }
+        let session = parts[1]
+        if session == "p" || (session.first == "s" && isDigits(session.dropFirst())) { return id }
+        return "?"
+    }
+
+    /// The last 4 digits of a card's serial: enough to tell cards apart, without the full number in a
+    /// sysdiagnose. A full OpenPGP application ID yields the digits of its serial number field.
+    static func card(_ serial: String?) -> String {
+        guard var serial, !serial.isEmpty else { return "?" }
+        if serial.utf8.count == 32, serial.uppercased().hasPrefix("D276000124") {
+            serial = String(serial.dropFirst(20).prefix(8))
+        }
+        let tail = serial.suffix(4)
+        return tail.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber) } ? "…" + tail : "?"
+    }
+
+    /// A release that a socket peer reported: a dotted number, or a build name such as "HEAD-1a2b3c4" of
+    /// letters, digits, ".", "+" and "-" only. Anything else is logged as "?", so a peer can't put free text
+    /// into a log line.
+    static func release(_ build: String) -> String {
+        let allowed = build.utf8.count <= 40 && !build.isEmpty && build.allSatisfy {
+            $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "." || $0 == "+" || $0 == "-")
+        }
+        return allowed ? build : "?"
+    }
+
+    private static func isDigits(_ text: Substring) -> Bool {
+        !text.isEmpty && text.allSatisfy { $0.isASCII && $0.isNumber }
     }
 
     static func name(_ state: PanelStateName?) -> String {

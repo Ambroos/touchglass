@@ -191,3 +191,24 @@ import Testing
         }
     }
 }
+
+@Suite struct LogEventTests {
+    @Test func cardSerialsShowTheLastFourDigits() {
+        let start = LogEvent.operationStarted(conn: "12:p", kind: .sign, slot: 1, serial: "D2760001240100000006123456780000")
+        #expect(start.message == "12:p op start: sign slot 1 card …5678")
+        #expect(LogEvent.touchCacheRestarted(serial: "12345678", seconds: 15).message == "touch cache: card …5678 window restarted, 15 s")
+        #expect(LogEvent.touchCacheRestarted(serial: "", seconds: 15).message == "touch cache: card ? window restarted, 15 s")
+        #expect(LogEvent.operationStarted(conn: "12:s3", kind: .auth, slot: 3, serial: nil).message.hasSuffix("card ?"))
+    }
+
+    @Test func peerValuesAreCheckedBeforeTheyAreLogged() {
+        #expect(LogEvent.touchQueued(conn: "4242:s17").message == "4242:s17 touch wait queued")
+        for bad in ["x", "12:q", "12:s", ":p", "12:p\nforged line", "12:s1:p"] {
+            #expect(LogEvent.touchQueued(conn: bad).message == "? touch wait queued")
+        }
+        #expect(LogEvent.hello(id: 3, role: .proxy, build: "0.1.0").message == "connection 3 hello: proxy, release 0.1.0")
+        #expect(LogEvent.hello(id: 3, role: .proxy, build: "HEAD-1a2b3c4").message == "connection 3 hello: proxy, release HEAD-1a2b3c4")
+        #expect(LogEvent.hello(id: 3, role: .proxy, build: "0.1.0\nforged line").message == "connection 3 hello: proxy, release ?")
+        #expect(LogEvent.retireDecision(hostVersion: "0.1.0", helperBuild: "9 or anything").message.contains("helper release ? is newer"))
+    }
+}
