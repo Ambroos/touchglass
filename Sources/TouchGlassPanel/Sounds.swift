@@ -18,20 +18,25 @@ final class Sounds {
         }
     }
 
-    /// `soundsEnabled` and `reminderSoundsEnabled` in user defaults; both default to on.
-    private func enabled(_ key: String) -> Bool {
-        UserDefaults.standard.object(forKey: key) as? Bool ?? true
-    }
-
     func play(_ cue: SoundCue) {
-        guard enabled("soundsEnabled") else { return }
+        guard Self.plays(cue, defaults: .standard) else { return }
         switch cue {
         case .touchStart: play("Tink")
-        case .reminder:
-            if enabled("reminderSoundsEnabled") { play("Ping") }
+        case .reminder: play("Ping")
         case .failure: play("Basso")
         case .rejected: NSSound.beep()
         }
+    }
+
+    /// Whether `cue` plays under the user defaults `soundsEnabled`, which defaults to off, and
+    /// `reminderSoundsEnabled`, which defaults to on and only matters while sounds are on. Read on
+    /// every cue, so a change applies without a restart.
+    nonisolated static func plays(_ cue: SoundCue, defaults: UserDefaults) -> Bool {
+        guard defaults.object(forKey: "soundsEnabled") as? Bool ?? false else { return false }
+        if cue == .reminder {
+            return defaults.object(forKey: "reminderSoundsEnabled") as? Bool ?? true
+        }
+        return true
     }
 
     private func play(_ name: String) {

@@ -147,4 +147,19 @@ import TouchGlassCore
         #expect(controller.isPanelVisible)
         controller.send(.dismiss)
     }
+
+    @Test func holdingKeepsResultStatesOpenAndTakesKey() async throws {
+        let controller = makeController()
+        controller.holdsState = true
+        controller.send(.show(touch()))
+        #expect(controller.panel.allowsKey)
+        #expect(controller.panel.ignoresMouseEvents)
+
+        controller.send(.show(.success(.sign)))
+        try await Task.sleep(for: .seconds(TouchTiming.successHold + 0.3))
+        #expect(controller.machine.state == .success(.sign))
+        #expect(controller.isPanelVisible)
+        #expect(controller.panel.allowsKey)
+        controller.send(.dismiss)
+    }
 }

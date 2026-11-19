@@ -32,6 +32,10 @@ public final class PanelModel {
     public var appearance: PanelAppearance = .readable
     /// Show what asked for the operation under the detail, and keep a line for it.
     public var showsClient = true
+    /// Screenshots only: the clock the touch ring and countdown read instead of the current time.
+    public var frozenClock: Date?
+    /// Screenshots only: the number of placeholder characters a secure field starts with, so it shows dots.
+    public var sampleSecretLength = 0
 
     @ObservationIgnored public var actions = PanelActions()
 

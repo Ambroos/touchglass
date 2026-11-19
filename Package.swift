@@ -48,5 +48,11 @@ let package = Package(
             name: "ScdProxyTests",
             dependencies: ["ScdProxyCore", "ScdTestSupport", "TouchGlassIPC", "touchglass-scdaemon", "fake-scdaemon", "fake-host"]
         ),
+
+        // Screenshot tooling for the README images. Not part of the app.
+        // Difference matting of two captures, over white and over black. CoreGraphics and ImageIO only.
+        .target(name: "ScreenshotMatte"),
+        .executableTarget(name: "touchglass-matte", dependencies: ["ScreenshotMatte"]),
+        .testTarget(name: "ScreenshotMatteTests", dependencies: ["ScreenshotMatte"]),
     ]
 )
