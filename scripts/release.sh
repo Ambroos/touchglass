@@ -141,10 +141,10 @@ Next steps:
   git tag v$version && git push origin v$version
   gh release create v$version "$root/$zip" --title "TouchGlass $version" --generate-notes
 
-Then, in homebrew-touchglass, open a pull request that sets the url in Formula/touchglass.rb to
-the v$version tag and sha256 to the checksum of GitHub's source tarball:
+Then run the Release workflow in homebrew-touchglass. It updates the formula to the tag and
+publishes its bottle:
 
-  curl -fsSL https://github.com/ambroos/touchglass/archive/refs/tags/v$version.tar.gz | shasum -a 256
+  gh workflow run release.yml -R ambroos/homebrew-touchglass -f version=$version
 
 SHA-256 of the zip, for the release notes: $sha
 EOF

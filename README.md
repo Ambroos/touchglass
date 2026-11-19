@@ -219,9 +219,11 @@ scripts/release.sh --dry-run 1.2.3
 scripts/release.sh 1.2.3
 ```
 
-The script builds the app with that version for Apple silicon and Intel Macs, signs the helpers and the app with the hardened runtime, notarizes the zip with `xcrun notarytool` and staples the ticket. It writes `build/release/TouchGlass-<version>.zip`, the direct download for the GitHub release, and prints the `gh release create` command. It creates no tag or release itself. The Homebrew formula in [homebrew-touchglass](https://github.com/ambroos/homebrew-touchglass) builds from the tagged source instead; its README describes how to update the formula and publish bottles.
+The script builds the app with that version for Apple silicon and Intel Macs, signs the helpers and the app with the hardened runtime, notarizes the zip with `xcrun notarytool` and staples the ticket. It writes `build/release/TouchGlass-<version>.zip`, the direct download for the GitHub release, and prints the `gh release create` command. It creates no tag or release itself.
 
 A release needs a Developer ID Application certificate in the keychain and notarization credentials stored with `xcrun notarytool store-credentials touchglass`. If the keychain holds more than one Developer ID identity, set `TOUCHGLASS_SIGN_IDENTITY`; `TOUCHGLASS_NOTARY_PROFILE` selects another credentials profile. `--dry-run` signs ad hoc and skips notarization, to test the script without a certificate. `--no-notarize` signs with the Developer ID identity and skips notarization, to check the signature before the notarization credentials exist. Gatekeeper rejects the zip of either.
+
+After you push the tag, the Tests workflow runs the unit and installer tests on the tag. To update the Homebrew formula, run the Release workflow in [homebrew-touchglass](https://github.com/ambroos/homebrew-touchglass), from its Actions tab or with `gh workflow run release.yml -R ambroos/homebrew-touchglass -f version=1.2.3`. The workflow points the formula at the tag, builds and tests a bottle, publishes it and commits the formula. Without a version, it releases the latest `v*.*.*` tag. The tap's README describes the workflow and how to run it again.
 
 ## Layout
 
