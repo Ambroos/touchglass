@@ -37,8 +37,6 @@ public enum Controls: Sendable, Equatable {
     /// `prompt` is the request's `promptID`: the field starts empty when it changes.
     case secureField(placeholder: String, minimumLength: Int, cancel: String, submit: String, busy: Bool, prompt: String?)
     case countdown(TouchWait)
-    /// Keeps the countdown slot's height in the success state, so the ring does not move.
-    case countdownPlaceholder
     case confirm(cancel: String, ok: String)
     case acknowledge(ok: String)
 }
@@ -60,6 +58,10 @@ public struct PanelPresentation: Sendable, Equatable {
     public var controls: Controls
     /// Identifies which states share a layout, so that changes inside a group do not crossfade.
     public var layoutGroup: String
+
+    /// A result: no controls, so the stage, title and detail form one group centred in the panel
+    /// instead of the stage taking the room above the text.
+    public var centresContent: Bool { controls == .none }
 
     public var announcement: String {
         [title, detail].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ". ")
@@ -186,11 +188,11 @@ extension PanelPresentation {
                 detail: nil,
                 detailIsError: false,
                 detailLineLimit: 2,
-                // Same reservation as the touch step, so the ring does not move.
-                reservesClientLine: true,
                 attemptsLine: nil,
-                controls: .countdownPlaceholder,
-                layoutGroup: "touch"
+                controls: .none,
+                // A layout of its own, centred like the failure states: the touch ring crossfades into
+                // the completed one.
+                layoutGroup: "result"
             )
         case .failure(let failure):
             let (glyph, title, detail) = Self.failureCopy(failure)

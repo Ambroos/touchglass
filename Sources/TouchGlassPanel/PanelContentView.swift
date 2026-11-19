@@ -37,20 +37,28 @@ struct PanelContentView: View {
         let crossfade = AnyTransition.opacity.animation(.easeInOut(duration: 0.2 * model.animationScale))
         let textKey = presentation.title + "\n" + (presentation.detail ?? "") + (presentation.attemptsLine ?? "")
 
+        // A result has no controls: its glyph, title and message form one group, centred in the panel.
+        // Other states give the stage the room that the text and controls leave.
+        let centred = presentation.centresContent
+
         return VStack(spacing: 0) {
+            if centred { Spacer(minLength: 0) }
+
             ZStack {
                 StageView(stage: presentation.stage, now: now)
                     .id(presentation.layoutGroup)
                     .transition(crossfade)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: centred ? nil : .infinity)
 
             ZStack {
-                TextBlock(presentation: presentation, showsClient: model.showsClient)
+                TextBlock(presentation: presentation, showsClient: model.showsClient, reservesDetail: !centred)
                     .id(textKey)
                     .transition(crossfade)
             }
-            .padding(.top, 16)
+            .padding(.top, centred ? PanelMetrics.centredStageSpacing : 16)
+
+            if centred { Spacer(minLength: 0) }
 
             if presentation.controls != .none {
                 ZStack {
@@ -269,6 +277,9 @@ struct TouchRingStage: View {
 struct TextBlock: View {
     let presentation: PanelPresentation
     var showsClient = true
+    /// Keeps a line for the detail while it is empty, so the stage stays put between states with and
+    /// without one. A centred group needs no such line.
+    var reservesDetail = true
     @Environment(\.panelInk) private var ink
 
     var body: some View {
@@ -283,12 +294,13 @@ struct TextBlock: View {
             case .hdr:
                 HDRText(text: presentation.title, font: .systemFont(ofSize: 17, weight: .semibold), color: HDRInk.white(), minimumScaleFactor: 0.85)
             }
-            // The detail slot keeps its height when empty, so the stage does not move between states.
-            Text(verbatim: presentation.detail ?? " ")
-                .font(.body)
-                .foregroundStyle(presentation.detailIsError ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary))
-                .lineLimit(presentation.detailLineLimit)
-                .opacity(presentation.detail == nil ? 0 : 1)
+            if presentation.detail != nil || reservesDetail {
+                Text(verbatim: presentation.detail ?? " ")
+                    .font(.body)
+                    .foregroundStyle(presentation.detailIsError ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary))
+                    .lineLimit(presentation.detailLineLimit)
+                    .opacity(presentation.detail == nil ? 0 : 1)
+            }
             if showsClient, presentation.reservesClientLine {
                 // What asked, such as "git commit · touchglass". The line stays while the label is
                 // unknown, so a label that arrives late fades in without moving anything.
@@ -330,8 +342,6 @@ private struct ControlsView: View {
                 .id(prompt)
         case .countdown(let wait):
             CountdownLine(wait: wait, now: now)
-        case .countdownPlaceholder:
-            Text(verbatim: " ").font(.callout).hidden()
         case .confirm(let cancel, let ok):
             HStack(spacing: 8) {
                 Button { model.actions.cancel() } label: { Text(verbatim: cancel).frame(maxWidth: .infinity) }

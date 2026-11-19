@@ -152,3 +152,32 @@ import Testing
         #expect(HostSettings.load(path: "/nonexistent/host.conf") == HostSettings())
     }
 }
+
+/// The layout each state asks for. The view centres a result's glyph, title and message as one group.
+@Suite struct PresentationLayoutTests {
+    let wait = TouchWait.detected(operation: .sign, cardSerial: "12345678")
+
+    @Test func resultsAreCentredGroupsWithoutControls() {
+        let results: [PanelState] = [.success(.sign), .success(.sshLogin), .failure(.wrongPIN), .failure(.touchTimeout(seconds: 15)), .failure(.cardRemoved)]
+        for state in results {
+            let presentation = PanelPresentation(state)
+            #expect(presentation.centresContent)
+            #expect(presentation.controls == .none)
+            #expect(!presentation.reservesClientLine)
+        }
+    }
+
+    @Test func promptsAndTheTouchStepAreNotCentred() {
+        let states: [PanelState] = [.pinEntry(PinRequest(operation: .sign, cardSerial: "12345678")), .touchWait(wait), .message(MessageRequest(title: "t", detail: "d"))]
+        for state in states {
+            #expect(!PanelPresentation(state).centresContent)
+        }
+    }
+
+    /// The touch ring and the result have different layouts, so the step crossfades in place instead
+    /// of moving the ring.
+    @Test func successIsItsOwnLayoutGroup() {
+        #expect(PanelPresentation(.success(.sign)).layoutGroup != PanelPresentation(.touchWait(wait)).layoutGroup)
+        #expect(PanelPresentation(.success(.sign)).stage == .ring(nil, completed: true))
+    }
+}

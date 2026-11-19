@@ -176,9 +176,9 @@ import TouchGlassIPC
         #expect(!presentation.announcement.contains("git commit"))
     }
 
-    @Test func cardStatesReserveTheLineAndOthersDoNot() {
+    @Test func promptsAndTouchReserveTheLineAndOthersDoNot() {
         #expect(PanelPresentation(.pinEntry(PinRequest(operation: .sign, cardSerial: ""))).reservesClientLine)
-        #expect(PanelPresentation(.success(.sign)).reservesClientLine)
+        #expect(!PanelPresentation(.success(.sign)).reservesClientLine)
         #expect(!PanelPresentation(.failure(.wrongPIN)).reservesClientLine)
         #expect(!PanelPresentation(.message(TouchGlassCore.MessageRequest(title: "t", detail: "d"))).reservesClientLine)
     }
