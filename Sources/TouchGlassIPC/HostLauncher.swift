@@ -23,9 +23,17 @@ public enum HostLauncher {
     }
 
     /// What a helper opens by default: its own bundle, or the app by name when it runs outside one.
+    ///
+    /// The bundle comes from the path the helper was started with, before symlinks are resolved. The launchers
+    /// run the helpers through Homebrew's `opt` link, which survives `brew upgrade`; resolving it gives the
+    /// versioned `Cellar` path, which the upgrade deletes while a long-running helper still holds it. Only
+    /// when that path isn't inside a bundle, such as a symlink to the helper itself, does the resolved path
+    /// count.
     public static func defaultTarget(executablePath: String? = Bundle.main.executablePath) -> String {
-        let resolved = executablePath.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }
-        return resolved.flatMap(bundlePath(containing:)) ?? appName
+        guard let executablePath else { return appName }
+        if let bundle = bundlePath(containing: executablePath) { return bundle }
+        let resolved = URL(fileURLWithPath: executablePath).resolvingSymlinksInPath().path
+        return bundlePath(containing: resolved) ?? appName
     }
 
     /// Runs `/usr/bin/open -g` for `target`, an app bundle path or an app name, without activating it.
