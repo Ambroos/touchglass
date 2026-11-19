@@ -29,6 +29,9 @@ jobs:
 
       - name: Run the unit tests
         run: scripts/test.sh
+        env:
+          # The runner has no user at the keyboard, so the panel tests may take key status.
+          TOUCHGLASS_FOCUS_TESTS: "1"
 
       - name: Run the installer tests
         run: scripts/test-installer.sh

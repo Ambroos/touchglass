@@ -30,6 +30,8 @@ scripts/test.sh
 
 The script passes the Swift Testing macro plugin path to `swift test`, because with only the Command Line Tools installed, the build sometimes fails to find that plugin. It passes other arguments on to `swift test`, such as `--filter ScdProxyTests`.
 
+The panel tests never take keyboard focus from the frontmost app unless `TOUCHGLASS_FOCUS_TESTS=1` or `CI` is set; without either, the tests that need the panel to become key are skipped.
+
 To run the installer tests:
 
 ```sh

@@ -15,6 +15,7 @@ private final class RecordingView: NSView {
 @Suite struct EditShortcutTests {
     init() {
         _ = NSApplication.shared
+        FocusTests.apply()
     }
 
     func key(_ character: String, _ modifiers: NSEvent.ModifierFlags) -> NSEvent {

@@ -4,6 +4,9 @@ import AppKit
 /// so the frontmost app stays active while the user types a PIN.
 final class PanelWindow: NSPanel {
     var allowsKey = false
+    /// Tests set this unless focus tests are on, so a test run never takes the keyboard from the
+    /// frontmost app, where someone may be typing.
+    static var refusesKey = false
 
     init() {
         super.init(
@@ -28,7 +31,7 @@ final class PanelWindow: NSPanel {
         acceptsMouseMovedEvents = true
     }
 
-    override var canBecomeKey: Bool { allowsKey }
+    override var canBecomeKey: Bool { allowsKey && !Self.refusesKey }
     override var canBecomeMain: Bool { false }
 
     /// The host has no main menu, so standard edit shortcuts have nothing to dispatch them.

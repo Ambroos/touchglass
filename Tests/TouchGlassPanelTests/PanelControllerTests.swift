@@ -12,6 +12,7 @@ import enum TouchGlassIPC.LogEvent
 
     init() {
         _ = NSApplication.shared
+        FocusTests.apply()
     }
 
     /// Off every screen, so the tests put nothing in front of the person at the Mac.
@@ -170,7 +171,7 @@ import enum TouchGlassIPC.LogEvent
 
     /// The window orders in empty and transparent, and the glass appears on the next pass of the main
     /// queue. Key status waits for the glass, so focus never leaves the frontmost app for an empty window.
-    @Test func aPromptTakesKeyOnlyOnceTheGlassStartsToAppear() async {
+    @Test(FocusTests.trait) func aPromptTakesKeyOnlyOnceTheGlassStartsToAppear() async {
         let controller = makeController()
         let requests = recordKeyRequests(controller)
         controller.send(.show(pin))
@@ -218,7 +219,7 @@ import enum TouchGlassIPC.LogEvent
     /// The user closed the prompt: the exit animation runs with the keyboard already back at the
     /// frontmost app, and a resign of key status meanwhile is not undone, even within the re-take window
     /// that guards the panel's own content changes.
-    @Test func aClosingPanelLetsGoOfTheKeyboard() async throws {
+    @Test(FocusTests.trait) func aClosingPanelLetsGoOfTheKeyboard() async throws {
         let controller = makeController(animationScale: 1)
         let requests = recordKeyRequests(controller)
         controller.send(.show(pin))
@@ -235,7 +236,7 @@ import enum TouchGlassIPC.LogEvent
     }
 
     /// A touch wait that follows a PIN prompt keeps the keyboard: the user just typed in the panel.
-    @Test func theTouchStepAfterAPINKeepsKey() async throws {
+    @Test(FocusTests.trait) func theTouchStepAfterAPINKeepsKey() async throws {
         let controller = makeController()
         let requests = recordKeyRequests(controller)
         let request = PinRequest(operation: .sign, cardSerial: "12345678", promptID: "r1")
