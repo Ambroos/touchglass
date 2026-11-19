@@ -67,6 +67,7 @@ public final class HostServer: @unchecked Sendable {
                 connections[id] = (connection, DispatchQueue(label: "TouchGlass send \(id)"))
                 return id
             }
+            TouchGlassLog(.host)(.connectionOpened(id: id))
             let thread = Thread { [self] in readLoop(id, connection) }
             thread.name = "TouchGlass connection \(id)"
             thread.start()

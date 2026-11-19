@@ -29,6 +29,7 @@ public final class OperationDetector: @unchecked Sendable {
     private let sink: EventSink
     private let touchDelay: TimeInterval
     private let agentPID: Int32?
+    private let log: TouchGlassLog
 
     // Accessed only on `queue`.
     private var keys: [String: (slot: Int, serial: String)] = [:]
@@ -40,6 +41,8 @@ public final class OperationDetector: @unchecked Sendable {
     }
 
     private struct Operation {
+        var kind: OperationKind
+        var startedAt: Double
         var touchArmedAt: Double = 0
         var timerGeneration = 0
         var touchReported = false
@@ -48,12 +51,15 @@ public final class OperationDetector: @unchecked Sendable {
     private struct ConnectionState {
         var operation: Operation?
         var inquiry: Inquiry?
+        /// The command scdaemon has not answered yet, and when it was sent, for the log.
+        var command: (keyword: ScdCommand, sentAt: Double)?
     }
 
     /// `agentPID` is the gpg-agent that started the proxy. Each `op_start` carries it, so the host looks for
     /// the requesting client among that agent's connections only.
-    public init(sink: EventSink, touchDelay: TimeInterval = 0.4, agentPID: Int32? = nil) {
+    public init(sink: EventSink, touchDelay: TimeInterval = 0.4, agentPID: Int32? = nil, log: TouchGlassLog = TouchGlassLog(.scdaemon)) {
         self.sink = sink
+        self.log = log
         self.touchDelay = touchDelay
         self.agentPID = agentPID
     }
@@ -104,6 +110,7 @@ public final class OperationDetector: @unchecked Sendable {
 
         switch line {
         case let .command(keyword, args):
+            state.command = (ScdCommand(keyword: keyword), time)
             guard ["PKSIGN", "PKAUTH", "PKDECRYPT"].contains(keyword) else {
                 state.inquiry = nil
                 return
@@ -121,13 +128,15 @@ public final class OperationDetector: @unchecked Sendable {
             default: kind = .decrypt
             }
             sink.send(.opStart(OpStart(conn: conn, op: kind, slot: key?.slot, serial: key?.serial, at: time, agentPid: agentPID)))
-            state.operation = Operation()
+            log(.operationStarted(conn: conn, kind: kind, slot: key?.slot, serial: key?.serial))
+            state.operation = Operation(kind: kind, startedAt: time)
             state.inquiry = nil
             armTouchTimer(conn, &state, from: time)
 
         case .end:
             if state.inquiry == .needPin {
                 sink.send(.pinSent(ConnRef(conn: conn)))
+                log(.pinAnswered(conn: conn))
             }
             if state.inquiry != nil {
                 state.inquiry = nil
@@ -162,34 +171,55 @@ public final class OperationDetector: @unchecked Sendable {
             case "NEEDPIN":
                 state.inquiry = .needPin
                 sink.send(.pinNeeded(ConnRef(conn: conn)))
+                log(.pinRequested(conn: conn))
             case "POPUPPINPADPROMPT" where args.first == "--ack":
                 // gnupg's own touch prompt, sent by some CCID readers. When it appears it is an exact signal.
                 state.inquiry = .other
                 if state.operation?.touchReported == false {
                     state.operation?.touchReported = true
                     sink.send(.touchWait(TouchWait(conn: conn, timeoutMs: Self.touchTimeoutMs, at: time)))
+                    log(.touchWaitInferred(conn: conn, delay: 0, pinpadPrompt: true))
                 }
             default:
                 state.inquiry = .other
             }
 
         case .ok:
-            if state.operation != nil {
+            if let operation = state.operation {
                 sink.send(.opEnd(OpEnd(conn: conn, result: .ok)))
+                logEnd(conn, operation, result: .ok, code: nil, time: time)
             }
+            logCommand(conn, &state, ok: true, time: time)
             state.operation = nil
             state.inquiry = nil
 
         case let .err(code):
-            if state.operation != nil {
-                sink.send(.opEnd(OpEnd(conn: conn, result: Self.result(forErrorCode: code), code: code)))
+            if let operation = state.operation {
+                let result = Self.result(forErrorCode: code)
+                sink.send(.opEnd(OpEnd(conn: conn, result: result, code: code)))
+                logEnd(conn, operation, result: result, code: code, time: time)
             }
+            logCommand(conn, &state, ok: false, time: time)
             state.operation = nil
             state.inquiry = nil
 
         case .command, .data, .end, .cancel, .comment, .other:
             break
         }
+    }
+
+    private func logEnd(_ conn: String, _ operation: Operation, result: OperationResult, code: Int?, time: Double) {
+        log(.operationEnded(
+            conn: conn, kind: operation.kind, result: result, code: code,
+            total: time - operation.startedAt, sinceArmed: time - operation.touchArmedAt,
+            touchWaitReported: operation.touchReported
+        ))
+    }
+
+    private func logCommand(_ conn: String, _ state: inout ConnectionState, ok: Bool, time: Double) {
+        guard let command = state.command else { return }
+        state.command = nil
+        log(.cardCommand(conn: conn, command: command.keyword, ok: ok, duration: time - command.sentAt))
     }
 
     private func recordKeyInfo(_ args: [String]) {
@@ -215,6 +245,7 @@ public final class OperationDetector: @unchecked Sendable {
             state.operation = operation
             self.connections[conn] = state
             self.sink.send(.touchWait(TouchWait(conn: conn, timeoutMs: Self.touchTimeoutMs, at: operation.touchArmedAt)))
+            self.log(.touchWaitInferred(conn: conn, delay: Date().timeIntervalSince1970 - operation.touchArmedAt, pinpadPrompt: false))
         }
     }
 

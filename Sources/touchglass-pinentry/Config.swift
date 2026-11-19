@@ -77,9 +77,11 @@ struct Config {
     }
 }
 
-/// Appends diagnostic lines to the configured log file. Callers must never pass secrets: the PIN is logged only as "[redacted]".
+/// Writes diagnostic lines to the unified log, at debug level, and appends them to the configured log file.
+/// Callers must never pass secrets: the PIN is logged only as "[redacted]".
 struct Log {
     private let handle: FileHandle?
+    private let unified = TouchGlassLog(.pinentry)
 
     init(path: String?) {
         guard let path else {
@@ -94,8 +96,10 @@ struct Log {
     }
 
     func callAsFunction(_ message: @autoclosure () -> String) {
+        let text = message()
+        unified(.pinentryTrace(text))
         guard let handle else { return }
-        let line = "touchglass-pinentry[\(getpid())]: \(message())\n"
+        let line = "touchglass-pinentry[\(getpid())]: \(text)\n"
         try? handle.write(contentsOf: Data(line.utf8))
     }
 }

@@ -1,0 +1,218 @@
+import Darwin
+import Foundation
+import os
+import Synchronization
+
+/// The unified log category of each component.
+public enum LogCategory: String, Sendable {
+    case scdaemon
+    case host
+    case pinentry
+}
+
+/// A command that gpg-agent sends to scdaemon, as the log names it. Only these keywords reach the log;
+/// anything else is `other`, so a line from the stream can never become log text.
+public enum ScdCommand: String, Sendable, Equatable, CaseIterable {
+    case serialno = "SERIALNO"
+    case keyinfo = "KEYINFO"
+    case setdata = "SETDATA"
+    case pksign = "PKSIGN"
+    case pkauth = "PKAUTH"
+    case pkdecrypt = "PKDECRYPT"
+    case getinfo = "GETINFO"
+    case getattr = "GETATTR"
+    case learn = "LEARN"
+    case readkey = "READKEY"
+    case checkpin = "CHECKPIN"
+    case restart = "RESTART"
+    case option = "OPTION"
+    case devinfo = "DEVINFO"
+    case bye = "BYE"
+    case other
+
+    public init(keyword: String) {
+        self = ScdCommand(rawValue: keyword.uppercased()) ?? .other
+    }
+}
+
+/// A panel state, by name only.
+public enum PanelStateName: String, Sendable, Equatable {
+    case pinEntry = "pin-entry"
+    case verifying
+    case passphrase
+    case touchWait = "touch-wait"
+    case success
+    case failure
+    case confirm
+    case message
+}
+
+/// Something worth a line in the unified log.
+///
+/// Log calls take only these events, and each case carries only typed, non-secret values: operation kinds,
+/// results, card serials (the panel shows them), connection IDs, releases and durations. No case takes a
+/// line from the Assuan stream, a PIN, a passphrase, hash data or a `D` payload.
+public enum LogEvent: Sendable, Equatable {
+    // touchglass-scdaemon
+    case proxyStarted(scdaemonPID: Int32, relaySocket: Bool)
+    case scdaemonExited(status: Int32)
+    case cardCommand(conn: String, command: ScdCommand, ok: Bool, duration: TimeInterval)
+    case operationStarted(conn: String, kind: OperationKind, slot: Int?, serial: String?)
+    case pinRequested(conn: String)
+    case pinAnswered(conn: String)
+    /// `delay` is the detection delay that passed since `armed`, the operation command or the last inquiry answer.
+    case touchWaitInferred(conn: String, delay: TimeInterval, pinpadPrompt: Bool)
+    /// `total` runs from the operation command, `sinceArmed` from the command or the last inquiry answer, which
+    /// is what the touch detection delay measures.
+    case operationEnded(conn: String, kind: OperationKind, result: OperationResult, code: Int?, total: TimeInterval, sinceArmed: TimeInterval, touchWaitReported: Bool)
+    case hostConnected(build: String?)
+    case hostLaunch(started: Bool)
+    case hostUnreachable
+    case eventDropped(queueFull: Bool)
+
+    // TouchGlass host
+    case hostStarted(version: String?, touchTimeout: TimeInterval?, touchCache: TimeInterval)
+    case connectionOpened(id: Int)
+    case connectionClosed(id: Int)
+    case hello(id: Int, role: PeerRole, build: String?)
+    case retireDecision(hostVersion: String, helperBuild: String)
+    case retireExit
+    case touchCacheRestarted(serial: String, seconds: TimeInterval)
+    case touchDeferred(conn: String, serial: String, showIn: TimeInterval, sinceCommand: TimeInterval)
+    case touchShown(conn: String, sinceCommand: TimeInterval, deferred: Bool)
+    case touchQueued(conn: String)
+    case touchSkipped(conn: String, result: OperationResult)
+    case panelShow(PanelStateName)
+    case panelDismiss
+    case panelUserClosed
+    case panelUserHid
+
+    // touchglass-pinentry
+    /// A line of the pinentry's diagnostic trace: fixed text, Assuan keywords, message types, request IDs and
+    /// paths. The pinentry writes the PIN only as "[redacted]".
+    case pinentryTrace(String)
+
+    public var level: OSLogType {
+        switch self {
+        case .cardCommand, .panelUserHid: .debug
+        // Each Assuan keyword and host message the pinentry passes on; the rest is connection and fallback news.
+        case .pinentryTrace(let text) where text.hasPrefix("<- ") || text.hasPrefix("-> "): .debug
+        case .hostUnreachable, .eventDropped: .default
+        default: .info
+        }
+    }
+
+    public var message: String {
+        switch self {
+        case let .proxyStarted(pid, relay):
+            return "proxy started: scdaemon pid \(pid), relay socket \(relay ? "on" : "off")"
+        case let .scdaemonExited(status):
+            return "scdaemon exited: status \(status)"
+        case let .cardCommand(conn, command, ok, duration):
+            return "\(conn) \(command.rawValue) \(ok ? "OK" : "ERR") in \(Self.ms(duration))"
+        case let .operationStarted(conn, kind, slot, serial):
+            return "\(conn) op start: \(kind.rawValue) slot \(slot.map(String.init) ?? "?") card \(serial ?? "?")"
+        case let .pinRequested(conn):
+            return "\(conn) PIN requested"
+        case let .pinAnswered(conn):
+            return "\(conn) PIN answered"
+        case let .touchWaitInferred(conn, delay, pinpad):
+            return pinpad ? "\(conn) touch wait: pinpad prompt" : "\(conn) touch wait inferred after \(Self.ms(delay)) of silence"
+        case let .operationEnded(conn, kind, result, code, total, sinceArmed, reported):
+            let codeText = code.map { " code \($0)" } ?? ""
+            return "\(conn) op end: \(kind.rawValue) \(result.rawValue)\(codeText), card \(Self.ms(sinceArmed)) since command or PIN, total \(Self.ms(total)), touch wait \(reported ? "reported" : "not reported")"
+        case let .hostConnected(build):
+            return "connected to host" + (build.map { ", reported release \($0)" } ?? "")
+        case let .hostLaunch(started):
+            return started ? "host not running: starting it" : "host not running: start failed"
+        case .hostUnreachable:
+            return "host unreachable: event dropped"
+        case let .eventDropped(queueFull):
+            return queueFull ? "event queue full: event dropped" : "event too old: dropped"
+        case let .hostStarted(version, timeout, cache):
+            return "host started: release \(version ?? "dev"), touch-timeout \(timeout.map { Self.seconds($0) } ?? "card"), touch-cache \(Self.seconds(cache))"
+        case let .connectionOpened(id):
+            return "connection \(id) opened"
+        case let .connectionClosed(id):
+            return "connection \(id) closed"
+        case let .hello(id, role, build):
+            return "connection \(id) hello: \(role.rawValue)" + (build.map { ", release \($0)" } ?? "")
+        case let .retireDecision(host, helper):
+            return "retiring: helper release \(helper) is newer than host release \(host); exiting when idle"
+        case .retireExit:
+            return "retiring: idle, exiting"
+        case let .touchCacheRestarted(serial, seconds):
+            return "touch cache: card \(serial.isEmpty ? "?" : serial) window restarted, \(Self.seconds(seconds))"
+        case let .touchDeferred(conn, serial, showIn, since):
+            return "\(conn) touch wait inside card \(serial.isEmpty ? "?" : serial) cache window: panel deferred \(Self.ms(showIn)), \(Self.ms(since)) since command"
+        case let .touchShown(conn, since, deferred):
+            return "\(conn) touch panel shown \(Self.ms(since)) after command" + (deferred ? " (deferred)" : "")
+        case let .touchQueued(conn):
+            return "\(conn) touch wait queued"
+        case let .touchSkipped(conn, result):
+            return "\(conn) op ended \(result.rawValue) before its deferred touch panel: nothing shown"
+        case let .panelShow(state):
+            return "panel: \(state.rawValue)"
+        case .panelDismiss:
+            return "panel: dismiss"
+        case .panelUserClosed:
+            return "panel: closed by user"
+        case .panelUserHid:
+            return "panel: hidden by user"
+        case let .pinentryTrace(text):
+            return text
+        }
+    }
+
+    static func ms(_ seconds: TimeInterval) -> String {
+        "\(Int((seconds * 1000).rounded())) ms"
+    }
+
+    static func seconds(_ seconds: TimeInterval) -> String {
+        seconds == seconds.rounded() ? "\(Int(seconds)) s" : String(format: "%.1f s", seconds)
+    }
+}
+
+/// Writes `LogEvent`s to the unified log under the subsystem `io.ambroos.touchglass`.
+///
+/// Read it with `log stream --predicate 'subsystem == "io.ambroos.touchglass"' --level info`; add
+/// `--level debug` for every card command.
+public struct TouchGlassLog: Sendable {
+    public static let subsystem = "io.ambroos.touchglass"
+    /// For tests: a file that receives a copy of every line, from every process that inherits the variable.
+    public static let mirrorEnvironmentKey = "TOUCHGLASS_LOG_MIRROR"
+
+    private static let mirrorFD = Mutex<Int32>(openMirror(ProcessInfo.processInfo.environment[mirrorEnvironmentKey]))
+
+    public let category: LogCategory
+    private let logger: Logger
+
+    public init(_ category: LogCategory) {
+        self.category = category
+        logger = Logger(subsystem: Self.subsystem, category: category.rawValue)
+    }
+
+    public func callAsFunction(_ event: LogEvent) {
+        let message = event.message
+        // Every value in `message` is non-secret by construction; see `LogEvent`.
+        logger.log(level: event.level, "\(message, privacy: .public)")
+        Self.mirrorFD.withLock { fd in
+            guard fd >= 0 else { return }
+            let bytes = Array("\(category.rawValue)[\(getpid())] \(message)\n".utf8)
+            _ = bytes.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
+        }
+    }
+
+    /// For tests in one process: copies every line from now on to `path`, or stops copying for `nil`.
+    public static func mirror(toFile path: String?) {
+        mirrorFD.withLock { fd in
+            if fd >= 0 { Darwin.close(fd) }
+            fd = openMirror(path)
+        }
+    }
+
+    private static func openMirror(_ path: String?) -> Int32 {
+        guard let path, !path.isEmpty else { return -1 }
+        return Darwin.open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0o600)
+    }
+}

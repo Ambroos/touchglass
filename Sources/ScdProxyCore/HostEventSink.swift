@@ -51,6 +51,7 @@ public final class HostEventSink: EventSink, @unchecked Sendable {
     /// and each proxy process makes a host exit at most once. Pinentries need no such rule: each runs
     /// for one prompt and reads its release from the bundle it starts the host from.
     private var buildReported = false
+    private let log = TouchGlassLog(.scdaemon)
     /// Counts events dropped because the queue was full, for tests.
     public private(set) var droppedCount = 0
 
@@ -75,6 +76,7 @@ public final class HostEventSink: EventSink, @unchecked Sendable {
         condition.lock()
         if queue.count >= Self.queueCapacity {
             droppedCount += 1
+            log(.eventDropped(queueFull: true))
         } else {
             queue.append(Item(line: line, queuedAt: Posix.monotonicSeconds(), launches: launches))
             condition.signal()
@@ -100,6 +102,8 @@ public final class HostEventSink: EventSink, @unchecked Sendable {
 
             if Posix.monotonicSeconds() - item.queuedAt <= Self.maxEventAge {
                 deliver(item)
+            } else {
+                log(.eventDropped(queueFull: false))
             }
 
             condition.lock()
@@ -116,7 +120,10 @@ public final class HostEventSink: EventSink, @unchecked Sendable {
             // reconnect once and resend this event instead of losing it.
             dropConnection()
         }
-        guard let fresh = connect(launching: item.launches) else { return }
+        guard let fresh = connect(launching: item.launches) else {
+            log(.hostUnreachable)
+            return
+        }
         if !write(item.line, to: fresh) { dropConnection() }
     }
 
@@ -126,7 +133,9 @@ public final class HostEventSink: EventSink, @unchecked Sendable {
         let now = Posix.monotonicSeconds()
         guard launching, let launchHost, now - lastLaunch >= Self.launchInterval else { return nil }
         lastLaunch = now
-        guard launchHost() else { return nil }
+        let started = launchHost()
+        log(.hostLaunch(started: started))
+        guard started else { return nil }
         while Posix.monotonicSeconds() - now < Self.launchWait {
             usleep(50_000)
             if let fresh = openConnection() {
@@ -147,6 +156,7 @@ public final class HostEventSink: EventSink, @unchecked Sendable {
             fresh.close()
             return nil
         }
+        log(.hostConnected(build: buildReported ? nil : build))
         buildReported = true
         connection = fresh
         return fresh

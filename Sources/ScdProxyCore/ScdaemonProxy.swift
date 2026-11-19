@@ -56,6 +56,7 @@ public final class ScdaemonProxy: @unchecked Sendable {
         Posix.close(pipes.childStdout)
 
         startRelayListener()
+        TouchGlassLog(.scdaemon)(.proxyStarted(scdaemonPID: child, relaySocket: proxySocketPath != nil))
         let pipeSession = ConnectionSession(id: "\(pid):p", detector: detector, rewriter: makeRewriter())
 
         let toChild = pipes.toChild
@@ -75,6 +76,7 @@ public final class ScdaemonProxy: @unchecked Sendable {
         }
 
         let status = waitForChild(child)
+        TouchGlassLog(.scdaemon)(.scdaemonExited(status: status))
         // scdaemon closes its stdout when it exits; give the output thread a moment to forward the rest.
         _ = outputDone.wait(timeout: .now() + 2)
         // End every open operation, the socket sessions' too: their relay threads may not finish before exit.
