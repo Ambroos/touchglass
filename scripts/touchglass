@@ -22,6 +22,11 @@ export LC_ALL=C
 prog=touchglass
 # scripts/build-app.sh replaces "dev" with the release version in the copy it bundles.
 cli_version=dev
+# The format of the launcher scripts that launcher_script prints. Bump it whenever their text changes:
+# a helper that runs through a launcher with an older format starts 'touchglass refresh-launchers', so a
+# Homebrew upgrade rewrites the launchers without a new install. LauncherRefresh.format in TouchGlassIPC
+# must match it.
+launcher_format=1
 marker='# touchglass: '
 gnupg_home="${GNUPGHOME:-$HOME/.gnupg}"
 conf="$gnupg_home/gpg-agent.conf"
@@ -296,15 +301,17 @@ conf_refers() {
 shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
 # Prints a launcher script. It runs the app's helper with exec, so gpg-agent talks to the helper
-# directly and the helper's parent is gpg-agent. It reads files only when the helper is missing.
+# directly and the helper's parent is gpg-agent. It reads files only when the helper is missing. The
+# helper learns the launcher's format from TOUCHGLASS_LAUNCHER, which only the helper gets.
 launcher_script() { # kind (pinentry|scdaemon) app
     say '#!/bin/sh'
-    say "# touchglass-$1 launcher for gpg-agent, written by 'touchglass install', which rewrites it."
+    say "# touchglass-launcher $launcher_format"
+    say "# touchglass-$1 launcher for gpg-agent, written by 'touchglass install' and 'touchglass refresh-launchers'."
     say "# Runs the helper in TouchGlass.app; while the app is missing, runs the plain $1 instead."
     say "app=$(shq "$2")"
     say "support=$(shq "$support_dir")"
     say "helper=\"\$app/Contents/MacOS/touchglass-$1\""
-    say 'if [ -x "$helper" ]; then exec "$helper" "$@"; fi'
+    say "if [ -x \"\$helper\" ]; then TOUCHGLASS_LAUNCHER=$launcher_format; export TOUCHGLASS_LAUNCHER; exec \"\$helper\" \"\$@\"; fi"
     if [ "$1" = pinentry ]; then
         # The fallback from pinentry.conf, else pinentry-mac, else Homebrew's pinentry, which GnuPG
         # depends on: brew uninstall can remove pinentry-mac together with TouchGlass.

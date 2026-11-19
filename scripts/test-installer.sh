@@ -364,7 +364,7 @@ check "still a link after uninstall" test -L "$CONF"
 
 # A stub executable that prints its name, its arguments and its PID, then copies stdin to stdout.
 echo_stub() { # path name
-    printf '#!/bin/sh\necho "%s pid=$$ args=$*"\ncat\n' "$2" > "$1"
+    printf '#!/bin/sh\necho "%s pid=$$ args=$*"\necho "%s launcher=${TOUCHGLASS_LAUNCHER-unset}"\ncat\n' "$2" "$2" > "$1"
     chmod +x "$1"
 }
 
@@ -497,6 +497,7 @@ check "same process: exec, no child" test "$(sed -n 's/^launcher pid=//p' "$T/ru
 printf 'GETINFO version\n' | "$LS" --multi-server > "$T/run"
 check "scdaemon helper ran with the arguments" grep -q '^helper-scdaemon pid=[0-9]* args=--multi-server$' "$T/run"
 check "scdaemon stdin passes through" grep -qx "GETINFO version" "$T/run"
+check "the helper learns the launcher format" grep -qx 'helper-scdaemon launcher=1' "$T/run"
 
 begin "launchers fall back while the app is missing"
 echo_stub "$T/bin/pinentry-mac" pinentry-mac
@@ -509,6 +510,7 @@ check "fallback gets stdin" grep -qx GETPIN "$T/run"
 printf 'SERIALNO\n' | "$LS" --multi-server > "$T/run"
 check "scdaemon falls back to the real scdaemon" grep -q '^real-scdaemon pid=[0-9]* args=--multi-server$' "$T/run"
 check "real scdaemon gets stdin" grep -qx SERIALNO "$T/run"
+check "only the helper gets the launcher format" grep -qx 'real-scdaemon launcher=unset' "$T/run"
 # Without pinentry.conf, the pinentry launcher tries pinentry-mac in the default directories.
 rm "$SUPPORT/pinentry.conf"
 mkdir -p "$T/no-pinentry-here"
