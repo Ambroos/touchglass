@@ -347,5 +347,31 @@ check "conf written" grep -q touchglass-pinentry "$CONF"
 if "$tool" uninstall > "$T/out" 2>&1; then fail "uninstall exited 0 although gpgconf --kill failed"; fi
 check "uninstall warns too" out_has "'gpgconf --kill gpg-agent' failed"
 
+begin "copy inside the app, run through a symlink: uses that app in place"
+mkdir -p "$app/Contents/Resources" "$T/prefix/bin"
+cp "$tool" "$app/Contents/Resources/touchglass"
+ln -s ../../src/TouchGlass.app/Contents/Resources/touchglass "$T/prefix/bin/touchglass"
+bundled="$(cd "$app" && pwd -P)"
+btg() { "$T/prefix/bin/touchglass" "$@" > "$T/out" 2>&1 || { echo "    touchglass $* failed:"; sed 's/^/      /' "$T/out"; return 1; }; }
+printf '%s\n' "pinentry-program /opt/example/bin/pinentry-mac" > "$CONF"
+cp "$CONF" "$T/original"
+btg install --dry-run
+check "dry run copies nothing" sh -c "! grep -q 'Would copy' '$T/out'"
+check "dry run writes nothing" cmp -s "$CONF" "$T/original"
+btg install
+check "conf points into the bundle" grep -qx "pinentry-program $bundled/Contents/MacOS/touchglass-pinentry" "$CONF"
+check "scdaemon too" grep -qx "scdaemon-program $bundled/Contents/MacOS/touchglass-scdaemon" "$CONF"
+check "no copy to ~/Applications" test ! -e "$APP"
+check "no scdaemon restart without a copy" test "$(scd_kills)" = 0
+btg status
+check "status finds the bundle" out_has "App:               $bundled (version 0.1.0)"
+btg uninstall
+check "round trip is byte-identical" cmp -s "$CONF" "$T/original"
+btg status
+check "status without conf lines falls back to the bundle" out_has "App:               $bundled (version 0.1.0)"
+btg install --app-dir "$HOME/Applications"
+check "--app-dir copies the bundle" test -x "$APP/Contents/MacOS/touchglass-pinentry"
+check "conf points at the copy" grep -qx "pinentry-program $APP/Contents/MacOS/touchglass-pinentry" "$CONF"
+
 printf '\n%d sandboxes, %d failures\n' "$count" "$failures"
 [ "$failures" = 0 ]

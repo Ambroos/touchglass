@@ -19,7 +19,19 @@ conf="$gnupg_home/gpg-agent.conf"
 support_dir="$HOME/Library/Application Support/TouchGlass"
 scd_path_file="$support_dir/scdaemon-program"
 pinentry_conf="$support_dir/pinentry.conf"
-repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+# Where this script lives, with symlinks resolved: Homebrew links the copy in TouchGlass.app into its
+# bin directory. Inside a bundle, the script works on that bundle; in a checkout, on the repository.
+self_dir="$(cd "$(dirname "$(realpath "$0")")" && pwd -P)"
+bundle_app=""
+repo_root=""
+case "$self_dir" in
+    */*.app/Contents/Resources)
+        if [ -x "$self_dir/../MacOS/TouchGlass" ]; then bundle_app="${self_dir%/Contents/Resources}"; fi
+        ;;
+esac
+if [ -z "$bundle_app" ]; then repo_root="$(cd "$self_dir/.." && pwd)"; fi
+# The app that uninstall and status look at when gpg-agent.conf names none.
+default_app="${bundle_app:-$HOME/Applications/TouchGlass.app}"
 # Where install looks for pinentry-mac besides PATH. The tests point it at their sandbox.
 pinentry_mac_dirs="${TOUCHGLASS_PINENTRY_MAC_DIRS:-/opt/homebrew/bin /usr/local/bin}"
 # Becomes 1 when a step fails after gpg-agent.conf was written; the script then exits with status 1.
@@ -36,11 +48,13 @@ Usage:
   touchglass uninstall [--remove-app] [--dry-run]
   touchglass status
 
-install    Copies TouchGlass.app to DIR (default ~/Applications), building it first
-           if needed, and points gpg-agent's pinentry-program and scdaemon-program
-           at the bundled helpers. Backs up gpg-agent.conf first. When it replaces
-           the app, it quits the running host and stops scdaemon so that the new
-           helpers take over; the next card operation asks for the PIN again.
+install    Points gpg-agent's pinentry-program and scdaemon-program at the helpers
+           in TouchGlass.app. Backs up gpg-agent.conf first. Run from a checkout,
+           it copies the app to DIR (default ~/Applications), building it first if
+           needed. Run from inside TouchGlass.app, as the Homebrew command is, it
+           uses that app where it is, unless --app-dir or --from is given. When it
+           replaces the app, it quits the running host and stops scdaemon so that
+           the new helpers take over; the next card operation asks for the PIN again.
            --from APP uses an already built TouchGlass.app instead of building.
 uninstall  Restores the original pinentry-program and scdaemon-program lines.
            --remove-app also deletes the installed TouchGlass.app. Keeps the
@@ -211,6 +225,7 @@ replace_conf() { # tmpfile
 cmd_install() {
     app_dir="$HOME/Applications"
     from=""
+    if [ -n "$bundle_app" ]; then app_dir="$(dirname "$bundle_app")"; from="$bundle_app"; fi
     dry_run=0
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -455,7 +470,7 @@ cmd_uninstall() {
     done
 
     app="$(app_from_conf)"
-    [ -n "$app" ] || app="$HOME/Applications/TouchGlass.app"
+    [ -n "$app" ] || app="$default_app"
 
     tmp="$(mktemp "${TMPDIR:-/tmp}/touchglass.XXXXXX")"
     notes="$(mktemp "${TMPDIR:-/tmp}/touchglass.XXXXXX")"
@@ -591,7 +606,7 @@ cmd_status() {
     say "scdaemon-program:  $(label "$s" touchglass-scdaemon)"
 
     app="$(app_from_conf)"
-    [ -n "$app" ] || app="$HOME/Applications/TouchGlass.app"
+    [ -n "$app" ] || app="$default_app"
     if [ -d "$app" ]; then
         version="$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist" 2>/dev/null || echo unknown)"
         say "App:               $app (version $version)"
