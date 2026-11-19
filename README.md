@@ -4,6 +4,21 @@ TouchGlass is a macOS panel for YubiKey operations through gpg-agent. When a sig
 
 Run without arguments, the app is the host: it listens on a Unix socket for `touchglass-pinentry` and `touchglass-scdaemon` and shows the panel for their prompts and card operations. To connect the helpers to gpg-agent, see [Install](#install).
 
+## Screenshots
+
+<p>
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/pin-entry-dark.png"><img src="docs/images/pin-entry.png" width="270" alt="The panel asks: Enter PIN to sign, YubiKey 12345678, git commit · touchglass, with six characters typed"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/touch-dark.png"><img src="docs/images/touch.png" width="270" alt="The panel asks: Touch your YubiKey, signing with YubiKey 12345678, git push origin · touchglass, 12 seconds left"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/success-dark.png"><img src="docs/images/success.png" width="270" alt="The panel shows Signed with a full ring"></picture>
+</p>
+<p>
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/ssh-dark.png"><img src="docs/images/ssh.png" width="270" alt="The panel asks: Touch your YubiKey, SSH login with YubiKey 12345678, ssh github.com, 12 seconds left"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/wrong-pin-dark.png"><img src="docs/images/wrong-pin.png" width="270" alt="The panel shows Wrong PIN: the YubiKey rejected the PIN"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/timeout-dark.png"><img src="docs/images/timeout.png" width="270" alt="The panel shows Touch timed out: the YubiKey waited 15 seconds"></picture>
+</p>
+
+The images follow your light or dark appearance. To capture them again, run `scripts/screenshots.sh`; see [Capture screenshots](#capture-screenshots).
+
 ## Requirements
 
 - macOS 26 or later.
@@ -119,6 +134,20 @@ The `client` scenario shows a long label that arrives after the PIN prompt opens
 
 The demo never reads, logs or prints what you type in the PIN field.
 
+### Capture screenshots
+
+`scripts/screenshots.sh` builds the app and captures the panel states that the README shows into `docs/images/`, as transparent PNGs at the screen's pixel scale. For each state, it runs the app twice with `--hold`, which keeps one panel state on screen in front of a full-screen backdrop: once over white and once over black. It then recovers the panel, its glass and its shadow over any background from the two captures by difference matting.
+
+```sh
+scripts/screenshots.sh                      # every state, light and dark
+scripts/screenshots.sh --states touch,ssh   # some states
+scripts/screenshots.sh --dry-run            # print the steps without running them
+```
+
+Each capture covers the screen for about 2 seconds, so leave the Mac alone while the script runs. The screen must be unlocked and awake. The app captures its own windows, so the terminal needs no Screen Recording permission. `--smoked` adds the smoked appearance, `--plain` also writes the white and black captures, and `--grey` writes each matte over mid-grey to check its edges. `--help` lists every option.
+
+To show one state yourself, run `TouchGlass --hold <state>`; stop it with Control-C. `--help` lists the states.
+
 ## Settings
 
 The host reads `~/Library/Application Support/TouchGlass/host.conf` when it starts, one `key = value` per line, with `#` for comments:
@@ -196,7 +225,8 @@ A release needs a Developer ID Application certificate in the keychain and notar
 - `TouchGlassPanel`: the SwiftUI views and the AppKit panel window. `PanelController` performs the state machine's effects.
 - `TouchGlassHost`: `HostCoordinator`, which merges proxy events and pinentry prompts into panel events and replies, and `HostServer`, which accepts helper connections.
 - `TouchGlassIPC`: the messages and socket transport shared with the helpers.
-- `TouchGlass`: the app: the host, plus the demo mode.
+- `TouchGlass`: the app: the host, plus the demo mode and `--hold` for screenshots.
+- `ScreenshotMatte` and `touchglass-matte`: difference matting for `scripts/screenshots.sh`. Not part of the app.
 
 ## License
 
