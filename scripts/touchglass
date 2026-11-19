@@ -389,7 +389,13 @@ oldest_agent_start() {
 # it starts and runs those paths until it stops, so the launchers stay while another recorded
 # gpg-agent.conf names them ("conf:<path>"), or while a gpg-agent runs that started before
 # gpg-agent.conf last changed ("agent"). The caller handles the current gpg-agent.conf itself.
-launcher_keep_reason() { # agent_stopped (1 when this run stopped gpg-agent)
+#
+# agent_stopped is 1 when this run stopped the current home's gpg-agent. An older gpg-agent that still
+# runs then belongs to another GnuPG home, whose gpg-agent.conf may have named the launchers when it
+# started ("other-agent"). gpgconf --kill returns before the agent exits, so wait briefly for it.
+# A dry run that would stop gpg-agent passes "dry" and skips the agent check: it can't tell the
+# current home's agent apart from others.
+launcher_keep_reason() { # agent_stopped (0, 1 or dry)
     if [ -f "$confs_file" ]; then
         current="$(realpath "$conf" 2>/dev/null || printf '%s' "$conf")"
         found="$(while IFS= read -r other; do
@@ -399,16 +405,29 @@ launcher_keep_reason() { # agent_stopped (1 when this run stopped gpg-agent)
         done < "$confs_file")"
         if [ -n "$found" ]; then printf 'conf:%s\n' "$found"; return 0; fi
     fi
-    [ "$1" != 1 ] || return 0
-    started="$(oldest_agent_start)"
-    [ -n "$started" ] || return 0
+    [ "$1" != dry ] || return 0
+    keep=agent
+    if [ "$1" = 1 ]; then keep=other-agent; fi
+    tries=0
+    while :; do
+        started="$(oldest_agent_start)"
+        [ -n "$started" ] || return 0
+        if [ "$1" != 1 ] || [ "$tries" -ge 10 ] || ! older_than_conf "$started"; then break; fi
+        tries=$((tries + 1))
+        sleep 0.1
+    done
+    if older_than_conf "$started"; then echo "$keep"; fi
+}
+
+# True if a gpg-agent that started at the given time may have read an earlier gpg-agent.conf.
+older_than_conf() { # started
     # Without gpg-agent.conf, nothing tells when the agent read it; keep the launchers until it stops.
     # The same if either time doesn't parse. /usr/bin/stat, because GNU stat reads -f differently.
     changed=""
     if [ -f "$conf" ]; then changed="$(/usr/bin/stat -L -f %m "$conf" 2>/dev/null || true)"; fi
-    case "$started:$changed" in
-        *: | *[!0-9:]*) echo agent ;;
-        *) if [ "$started" -le "$changed" ]; then echo agent; fi ;;
+    case "$1:$changed" in
+        *: | *[!0-9:]*) return 0 ;;
+        *) [ "$1" -le "$changed" ] ;;
     esac
 }
 
@@ -423,6 +442,9 @@ remove_unused_launchers() { # agent_stopped
             ;;
         agent)
             warn "kept the launchers in $bin_dir, because a gpg-agent that started before $conf last changed still runs, and it runs the launchers until it stops. Stop it with 'gpgconf --kill gpg-agent', then run '$prog uninstall' again."
+            ;;
+        other-agent)
+            warn "kept the launchers in $bin_dir, because another gpg-agent that started before $conf last changed still runs, probably for another GnuPG home, and it may run the launchers. Stop it with 'gpgconf --kill gpg-agent', with GNUPGHOME set to its directory, then run '$prog uninstall' again."
             ;;
     esac
 }
@@ -975,7 +997,7 @@ cmd_uninstall() {
         if [ "$conf_changed" = 1 ] && [ -d "$bin_dir" ] && ! command -v gpgconf >/dev/null 2>&1; then
             say "Would keep the launchers in $bin_dir, because without gpgconf uninstall can't stop gpg-agent."
         else
-            would_launchers "$conf_changed"
+            if [ "$conf_changed" = 1 ]; then would_launchers dry; else would_launchers 0; fi
         fi
         if [ "$remove_app" = 1 ]; then say "Would remove $app."; fi
         return 0

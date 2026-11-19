@@ -755,6 +755,25 @@ tg uninstall --apply
 check "first home restored" cmp -s "$CONF" "$T/original"
 check "then removed" test ! -e "$SUPPORT/bin"
 
+begin "uninstall --apply keeps the launchers while another home's older gpg-agent runs"
+printf '%s\n' "pinentry-program $EX" > "$CONF"
+cp "$CONF" "$T/original"
+tg install --apply --from "$app"
+mkdir -m 700 "$T/gnupg2"
+printf '%s\n' "pinentry-program $EX" > "$T/gnupg2/gpg-agent.conf"
+GNUPGHOME="$T/gnupg2" "$tool" install --apply --from "$app" > "$T/out" 2>&1 || fail "second install failed"
+# The second home's file is restored by hand, but its gpg-agent, started 2 hours ago, still runs.
+cp "$T/original" "$T/gnupg2/gpg-agent.conf"
+echo "02:00:00" > "$T/agent-etime"
+tg uninstall --apply
+check "first home restored" cmp -s "$CONF" "$T/original"
+check "launchers kept" test -x "$LP" -a -x "$LS"
+check "says another gpg-agent runs" out_has "another gpg-agent that started before"
+# After that gpg-agent stopped, uninstall removes them.
+rm "$T/agent-etime"
+tg uninstall
+check "then removes them" test ! -e "$SUPPORT/bin"
+
 begin "GNU stat first on PATH"
 # GNU coreutils' stat reads -f as "file system status" and the format as a file name. This stub
 # behaves like that for -f and fails the tests if the script calls stat through PATH at all.
