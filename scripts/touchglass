@@ -10,9 +10,10 @@
 # change for you to make. With --apply they edit gpg-agent.conf themselves, and only its
 # pinentry-program and scdaemon-program lines: install comments out the effective line with a
 # "# touchglass: " prefix and adds the TouchGlass line right after it, or, if the option is not set,
-# adds a "# touchglass: added <option>" marker and the TouchGlass line at the top of the file.
-# gpg-agent uses the last occurrence of an option, so earlier duplicates stay as they are. Uninstall
-# reverses exactly these edits, so the rest of the file stays byte-identical.
+# adds a "# touchglass: added <option>" marker and the TouchGlass line at the top of the file. The
+# printed instructions describe the same markers. gpg-agent uses the last occurrence of an option, so
+# earlier duplicates stay as they are. Uninstall reverses exactly these edits, so the rest of the file
+# stays byte-identical.
 set -eu
 # Byte-wise text handling: awk in a UTF-8 locale stops at a byte that isn't valid UTF-8, such as a
 # Latin-1 character in a comment.
@@ -27,13 +28,17 @@ conf="$gnupg_home/gpg-agent.conf"
 support_dir="$HOME/Library/Application Support/TouchGlass"
 scd_path_file="$support_dir/scdaemon-program"
 pinentry_conf="$support_dir/pinentry.conf"
+# Every gpg-agent.conf that install was run for, one path per line. The launchers serve every GnuPG
+# home, so uninstall keeps them while any of these files names them.
+confs_file="$support_dir/gpg-agent-confs"
 # The launchers that gpg-agent.conf names, and a copy of this script that outlives the app.
 bin_dir="$support_dir/bin"
 launch_pinentry="$bin_dir/touchglass-pinentry"
 launch_scd="$bin_dir/touchglass-scdaemon"
 cli_copy="$bin_dir/touchglass"
-# Where install looks for pinentry-mac besides PATH, and where the pinentry launcher looks when
-# pinentry.conf names no fallback. The tests point it at their sandbox.
+# Where install looks for pinentry-mac besides PATH, and where the pinentry launcher looks for
+# pinentry-mac, then pinentry, when pinentry.conf names no executable fallback. The tests point it at
+# their sandbox.
 pinentry_mac_dirs="${TOUCHGLASS_PINENTRY_MAC_DIRS:-/opt/homebrew/bin /usr/local/bin}"
 
 # The app that a launcher runs, read back from the `app='...'` line that install wrote.
@@ -42,9 +47,10 @@ launcher_app() { # launcher
     sed -n "s/^app='\(.*\)'\$/\1/p" "$1" | sed "s/'\\\\''/'/g" | head -n 1
 }
 
-# Where this script lives, with symlinks resolved: Homebrew links the copy in TouchGlass.app into its
-# bin directory. Inside a bundle, the script works on that bundle; as the copy in the support
-# directory, on the app the launchers run; in a checkout, on the repository.
+# Where this script lives, with symlinks resolved: the formula's command in Homebrew's bin directory
+# runs the copy in TouchGlass.app, and a symlink to that copy works too. Inside a bundle, the script
+# works on that bundle; as the copy in the support directory, on the app the launchers run; in a
+# checkout, on the repository.
 self="$(realpath "$0")"
 self_dir="$(cd "$(dirname "$self")" && pwd -P)"
 bundle_app=""
@@ -111,15 +117,19 @@ install    Sets up ~/Library/Application Support/TouchGlass: the launchers that
            host and stops scdaemon so that the new helpers take over.
 uninstall  Prints how to restore the original pinentry-program and
            scdaemon-program lines. While gpg-agent.conf names the launchers, it
-           keeps them; after that, it removes them. --apply restores the lines
-           itself, stops gpg-agent and removes the launchers. --remove-app also
-           deletes the installed TouchGlass.app once gpg-agent.conf no longer
-           names it. Keeps the gpg-agent.conf backups and the settings in
+           keeps them; after that, it removes them, unless a gpg-agent that
+           started before the change still runs or another GnuPG home's
+           gpg-agent.conf names them. --apply restores the lines itself, stops
+           gpg-agent and removes the launchers. --remove-app also deletes the
+           installed TouchGlass.app after gpg-agent.conf no longer names it;
+           for an app that Homebrew installed, run `brew uninstall touchglass`
+           instead. Keeps the gpg-agent.conf backups and the settings in
            ~/Library/Application Support/TouchGlass.
            --check exits with status 1 while gpg-agent.conf or the launchers
-           still refer to TouchGlass, for `brew uninstall --zap`.
+           still refer to TouchGlass, to check before you delete TouchGlass's
+           files.
 status     Shows what gpg-agent.conf points at, where the launchers lead and
-           whether the host runs.
+           whether the host and the scdaemon proxy run.
 
 --dry-run prints what would change, including gpg-agent.conf as a diff, and writes nothing.
 GNUPGHOME selects the GnuPG home directory (default ~/.gnupg).
@@ -212,6 +222,26 @@ gpgconf_scdaemon() {
     printf '%s\n' "$path"
 }
 
+# The pinentries the pinentry launcher tries when pinentry.conf names no executable fallback, in order.
+default_fallbacks() {
+    for name in pinentry-mac pinentry; do
+        for dir in $pinentry_mac_dirs; do printf '%s\n' "$dir/$name"; done
+    done
+}
+
+default_fallbacks_quoted() {
+    default_fallbacks | while IFS= read -r path; do printf ' %s' "$(shq "$path")"; done
+}
+
+# The pinentry that the pinentry launcher runs while TouchGlass.app is missing, or nothing.
+effective_fallback() {
+    configured="$(pinentry_setting fallback-pinentry)"
+    if [ -n "$configured" ] && [ -x "$configured" ]; then printf '%s\n' "$configured"; return 0; fi
+    default_fallbacks | while IFS= read -r path; do
+        if [ -x "$path" ]; then printf '%s\n' "$path"; break; fi
+    done
+}
+
 find_pinentry_mac() {
     p="$(command -v pinentry-mac 2>/dev/null || true)"
     if [ -n "$p" ] && [ -x "$p" ]; then printf '%s\n' "$p"; return 0; fi
@@ -276,13 +306,13 @@ launcher_script() { # kind (pinentry|scdaemon) app
     say "helper=\"\$app/Contents/MacOS/touchglass-$1\""
     say 'if [ -x "$helper" ]; then exec "$helper" "$@"; fi'
     if [ "$1" = pinentry ]; then
+        # The fallback from pinentry.conf, else pinentry-mac, else Homebrew's pinentry, which GnuPG
+        # depends on: brew uninstall can remove pinentry-mac together with TouchGlass.
         say 'fallback="$(sed -n '"'"'s/^[[:space:]]*fallback-pinentry[[:space:]]*=[[:space:]]*//p'"'"' "$support/pinentry.conf" 2>/dev/null | tail -n 1 | sed '"'"'s/[[:space:]]*$//'"'"')"'
-        defaults=""
-        for dir in $pinentry_mac_dirs; do defaults="$defaults $(shq "$dir/pinentry-mac")"; done
-        say 'if [ -z "$fallback" ]; then'
-        say "    for fallback in$defaults; do if [ -x \"\$fallback\" ]; then break; fi; done"
-        say 'fi'
         say 'if [ -n "$fallback" ] && [ -x "$fallback" ]; then exec "$fallback" "$@"; fi'
+        say "for fallback in$(default_fallbacks_quoted); do"
+        say '    if [ -x "$fallback" ]; then exec "$fallback" "$@"; fi'
+        say 'done'
         say 'echo "touchglass-pinentry: $helper is missing, and no fallback pinentry is executable; set fallback-pinentry in $support/pinentry.conf" >&2'
     else
         say 'real=""'
@@ -320,14 +350,84 @@ remove_launchers() {
     if [ -d "$bin_dir" ]; then
         rm -f "$launch_pinentry" "$launch_scd" "$cli_copy"
         rmdir "$bin_dir" 2>/dev/null || true
+        rm -f "$confs_file"
         say "Removed the launchers from $bin_dir."
     fi
 }
 
+# Adds gpg-agent.conf to the list of files that can name the launchers.
+record_conf() {
+    if [ -f "$confs_file" ] && grep -qxF -- "$conf" "$confs_file"; then return 0; fi
+    printf '%s\n' "$conf" >> "$confs_file"
+}
+
+# True if a line of the file that isn't commented out names a launcher.
+names_launchers() { # file
+    [ -f "$1" ] || return 1
+    TG_P="$launch_pinentry" TG_S="$launch_scd" awk "$awk_lib"'
+    { k = keyof($0); if (k != "") { v = valof($0); if (v == ENVIRON["TG_P"] || v == ENVIRON["TG_S"]) t = 1 } }
+    END { exit t ? 0 : 1 }' "$1"
+}
+
+# When the oldest gpg-agent of this user that runs started, in seconds since the epoch, or nothing.
+oldest_agent_start() {
+    pids="$(pgrep -x -u "$(id -u)" gpg-agent 2>/dev/null || true)"
+    [ -n "$pids" ] || return 0
+    for pid in $pids; do ps -o etime= -p "$pid" 2>/dev/null || true; done | awk -v now="$(date +%s)" '
+        # etime is [[dd-]hh:]mm:ss.
+        NF {
+            n = split($1, a, /[-:]/)
+            s = a[n] + 60 * a[n - 1]
+            if (n >= 3) s += 3600 * a[n - 2]
+            if (n >= 4) s += 86400 * a[n - 3]
+            if (max == "" || s > max) max = s
+        }
+        END { if (max != "") print now - max }'
+}
+
+# Why the launchers must stay, or nothing. A gpg-agent reads pinentry-program and scdaemon-program when
+# it starts and runs those paths until it stops, so the launchers stay while another recorded
+# gpg-agent.conf names them ("conf:<path>"), or while a gpg-agent runs that started before
+# gpg-agent.conf last changed ("agent"). The caller handles the current gpg-agent.conf itself.
+launcher_keep_reason() { # agent_stopped (1 when this run stopped gpg-agent)
+    if [ -f "$confs_file" ]; then
+        current="$(realpath "$conf" 2>/dev/null || printf '%s' "$conf")"
+        found="$(while IFS= read -r other; do
+            [ -n "$other" ] && [ "$other" != "$conf" ] || continue
+            [ "$(realpath "$other" 2>/dev/null || printf '%s' "$other")" != "$current" ] || continue
+            if names_launchers "$other"; then printf '%s\n' "$other"; break; fi
+        done < "$confs_file")"
+        if [ -n "$found" ]; then printf 'conf:%s\n' "$found"; return 0; fi
+    fi
+    [ "$1" != 1 ] || return 0
+    started="$(oldest_agent_start)"
+    [ -n "$started" ] || return 0
+    # Without gpg-agent.conf, nothing tells when the agent read it; keep the launchers until it stops.
+    if [ ! -f "$conf" ] || [ "$started" -le "$(stat -L -f %m "$conf")" ]; then echo agent; fi
+}
+
+# Removes the launchers unless a gpg-agent can still run them; then says why they stay.
+remove_unused_launchers() { # agent_stopped
+    [ -d "$bin_dir" ] || return 0
+    reason="$(launcher_keep_reason "$1")"
+    case "$reason" in
+        "") remove_launchers ;;
+        conf:*)
+            warn "kept the launchers in $bin_dir, because ${reason#conf:} still names them. To restore that file, run '$prog uninstall' with GNUPGHOME set to its directory."
+            ;;
+        agent)
+            warn "kept the launchers in $bin_dir, because a gpg-agent that started before $conf last changed still runs, and it runs the launchers until it stops. Stop it with 'gpgconf --kill gpg-agent', then run '$prog uninstall' again."
+            ;;
+    esac
+}
+
+# Stops gpg-agent so that it reads gpg-agent.conf again. Sets agent_stopped to 1 when it did.
+agent_stopped=0
 reload_agent() {
     if ! command -v gpgconf >/dev/null 2>&1; then
         warn "gpgconf not found; restart gpg-agent yourself to apply the change"
     elif gpgconf --kill gpg-agent; then
+        agent_stopped=1
         say "Stopped gpg-agent with 'gpgconf --kill gpg-agent'; it restarts with the new settings on next use."
         say "gpg-agent forgot its cached PINs and passphrases, so the next card operation asks for the PIN again."
     else
@@ -391,6 +491,9 @@ cmd_install() {
     case "$app_dir" in /*) ;; *) app_dir="$(pwd)/$app_dir" ;; esac
     app_dir="${app_dir%/}"
     app="$app_dir/TouchGlass.app"
+    if [ "$apply" = 1 ] && [ -L "$conf" ] && ! realpath "$conf" >/dev/null 2>&1; then
+        die "$conf is a symlink to $(readlink "$conf"), which doesn't exist. Create that file or remove the symlink, then run install again; nothing was written."
+    fi
 
     # Which bundle to install, building it if it is missing or older than the sources.
     build=0
@@ -420,6 +523,10 @@ cmd_install() {
     # The fallback pinentry: the one gpg-agent.conf named before TouchGlass, else pinentry-mac, else the
     # pinentry that gpgconf reports. Never a path that doesn't exist.
     fallback="$(previous_value "$conf" pinentry-program)"
+    if [ -n "$fallback" ] && [ ! -x "$fallback" ]; then
+        warn "gpg-agent.conf names pinentry-program $fallback, which is not executable, so it is not the fallback pinentry"
+        fallback=""
+    fi
     [ -n "$fallback" ] || fallback="$(find_pinentry_mac)"
     [ -n "$fallback" ] || fallback="$(gpgconf_pinentry)"
     if [ -z "$fallback" ]; then
@@ -541,10 +648,13 @@ cmd_install() {
 
     mkdir -p "$support_dir"
     chmod 700 "$support_dir"
-    printf '%s\n' "$real_scd" > "$scd_path_file"
+    # Atomic, like every file that the launchers and helpers read: they run at any moment.
+    printf '%s\n' "$real_scd" > "$tmp_launcher"
+    write_atomic "$scd_path_file" 644 "$tmp_launcher"
     say "Wrote the real scdaemon path to $scd_path_file: $real_scd"
     write_pinentry_conf "$pinentry_plan"
     write_launchers "$app"
+    record_conf
 
     if [ "$conf_changed" = 0 ]; then
         say "$conf already uses the TouchGlass launchers; no change."
@@ -583,51 +693,54 @@ cmd_install() {
     reload_agent
 }
 
-# Prints how to change gpg-agent.conf by hand to what install --apply writes: which lines to comment
-# out, which to replace (helpers named directly, from installs before the launchers) and which to add.
+# Prints how to change gpg-agent.conf by hand to what install --apply writes, markers included, so that
+# either uninstall mode restores the file: which lines to keep as "# touchglass: " comments, which to
+# replace (helpers named directly, from installs before the launchers) and which to add.
 print_install_steps() {
     if [ -f "$conf" ]; then
         TG_PINENTRY="$launch_pinentry" TG_SCD="$launch_scd" TG_CONF="$conf" awk "$awk_lib"'
-        { L[NR] = $0; sub(/\r$/, "", L[NR]); k = keyof($0); if (k != "") { last[k] = NR; n[k]++; at[k, n[k]] = NR } }
+        { L[NR] = $0; sub(/\r$/, "", L[NR]); k = keyof($0); if (k != "") last[k] = NR }
         END {
             new["pinentry-program"] = ENVIRON["TG_PINENTRY"]; new["scdaemon-program"] = ENVIRON["TG_SCD"]
             keys[1] = "pinentry-program"; keys[2] = "scdaemon-program"
             for (j = 1; j <= 2; j++) {
                 k = keys[j]
-                if (!(k in last)) { add[++nadd] = k " " new[k]; continue }
+                if (!(k in last)) { add[++nadd] = "# touchglass: added " k; add[++nadd] = k " " new[k]; continue }
                 i = last[k]
-                if (ours(L[i], k)) {
-                    if (valof(L[i]) != new[k]) repl[++nrepl] = i
-                    continue
+                if (ours(L[i], k)) { if (valof(L[i]) != new[k]) { edit[++nedit] = i; mark[nedit] = 0 } }
+                else { edit[++nedit] = i; mark[nedit] = 1 }
+            }
+            if (nedit == 2 && edit[1] > edit[2]) { t = edit[1]; edit[1] = edit[2]; edit[2] = t; t = mark[1]; mark[1] = mark[2]; mark[2] = t }
+            if (nedit == 2) print "Edit " ENVIRON["TG_CONF"] ". The line numbers are those before your edits:"
+            else print "Edit " ENVIRON["TG_CONF"] ":"
+            for (m = 1; m <= nedit; m++) {
+                i = edit[m]; k = keyof(L[i])
+                print ""
+                if (mark[m]) {
+                    printf "  Replace line %d:\n", i
+                    print "    " L[i]
+                    print "  with these two lines. The first keeps your line as a comment that \"touchglass uninstall\" restores:"
+                    print "    # touchglass: " L[i]
+                    print "    " k " " new[k]
+                } else {
+                    printf "  Replace line %d, which runs the helper in TouchGlass.app directly:\n", i
+                    print "    " L[i]
+                    print "  with this line, which runs it through the launcher:"
+                    print "    " k " " new[k]
                 }
-                for (m = 1; m <= n[k]; m++) if (!ours(L[at[k, m]], k)) cmt[++ncmt] = at[k, m]
-                add[++nadd] = k " " new[k]
-            }
-            if (nrepl == 2 && repl[1] > repl[2]) { t = repl[1]; repl[1] = repl[2]; repl[2] = t }
-            if (ncmt == 2 && cmt[1] > cmt[2]) { t = cmt[1]; cmt[1] = cmt[2]; cmt[2] = t }
-            print "Edit " ENVIRON["TG_CONF"] ":"
-            if (ncmt) {
-                print ""
-                print "  Comment out these lines by putting \"#\" at the start of each:"
-                for (m = 1; m <= ncmt; m++) printf "    line %d: %s\n", cmt[m], L[cmt[m]]
-            }
-            for (m = 1; m <= nrepl; m++) {
-                i = repl[m]; k = keyof(L[i])
-                print ""
-                printf "  Replace line %d, which runs the helper in TouchGlass.app directly:\n", i
-                print "    " L[i]
-                print "  with this line, which runs it through the launcher:"
-                print "    " k " " new[k]
             }
             if (nadd) {
                 print ""
-                print "  Add these lines at the end of the file:"
+                print "  Add these lines at the end of the file. The comments tell \"touchglass uninstall\" what to remove:"
                 for (m = 1; m <= nadd; m++) print "    " add[m]
             }
         }' "$conf"
     else
-        say "Create $conf with these lines:"
+        say "Create $conf with these lines. The comments tell \"$prog uninstall\" what to remove:"
+        say "    # touchglass: created gpg-agent.conf"
+        say "    # touchglass: added pinentry-program"
         say "    pinentry-program $launch_pinentry"
+        say "    # touchglass: added scdaemon-program"
         say "    scdaemon-program $launch_scd"
     fi
     say ""
@@ -673,7 +786,8 @@ write_pinentry_conf() { # plan
                 echo '# touchglass-pinentry settings. One "key = value" per line.'
                 echo '# The pinentry that takes over when the TouchGlass host is not reachable.'
                 if [ -n "$fallback" ]; then echo "fallback-pinentry = $fallback"; else echo "# fallback-pinentry = /path/to/pinentry-mac"; fi
-            } > "$pinentry_conf"
+            } > "$tmp_launcher"
+            write_atomic "$pinentry_conf" 644 "$tmp_launcher"
             say "Wrote $pinentry_conf${fallback:+ with fallback-pinentry = $fallback}."
             ;;
         update)
@@ -711,6 +825,11 @@ cmd_uninstall() {
     app="$(app_from_conf)"
     [ -n "$app" ] || app="$(launcher_app "$launch_pinentry")"
     [ -n "$app" ] || app="$default_app"
+    if [ "$remove_app" = 1 ]; then
+        case "$(realpath "$app" 2>/dev/null || printf '%s' "$app")" in
+            */Cellar/*) die "Homebrew installed $app; remove it with 'brew uninstall touchglass' instead of --remove-app. Nothing was changed." ;;
+        esac
+    fi
 
     tmp="$(mktemp "${TMPDIR:-/tmp}/touchglass.XXXXXX")"
     notes="$(mktemp "${TMPDIR:-/tmp}/touchglass.XXXXXX")"
@@ -750,13 +869,24 @@ cmd_uninstall() {
                 k = keyof(line)
                 if (k != "" && ours(line, k)) {
                     if (fb[k] != "") { out(fb[k]); print "from-backup " k > notes }
-                    else if (ENVIRON["TG_HAVE_BACKUP"] == "1") print "removed-per-backup " k > notes
-                    else print "removed-no-backup " k > notes
+                    else {
+                        bare[k] = 1
+                        if (ENVIRON["TG_HAVE_BACKUP"] == "1") print "removed-per-backup " k > notes
+                        else print "removed-no-backup " k > notes
+                    }
                     i++; continue
                 }
                 out(line); i++
             }
             if (nout && ENVIRON["TG_NOEOL"] != "1") printf "\n"
+            # A commented-out line for an option whose TouchGlass line has no marker might be the earlier
+            # setting, commented out by hand. Only the user can tell.
+            for (i = 1; i <= NR; i++) {
+                if (index(L[i], "# touchglass: ") == 1 || L[i] !~ /^[ \t]*#/) continue
+                t = L[i]; sub(/^[ \t]*#[ \t]*/, "", t)
+                k = keyof(t)
+                if (k != "" && (k in bare) && !ours(t, k) && !(k in told)) { print "ambiguous " k > notes; told[k] = 1 }
+            }
         }' "$conf" > "$tmp"
         if ! cmp -s "$conf" "$tmp"; then conf_changed=1; fi
     fi
@@ -775,6 +905,16 @@ cmd_uninstall() {
         done < "$notes"
     }
 
+    # What dry runs say about the launchers.
+    would_launchers() { # agent_stopped
+        [ -d "$bin_dir" ] || return 0
+        case "$(launcher_keep_reason "$1")" in
+            "") say "Would remove the launchers from $bin_dir." ;;
+            conf:*) say "Would keep the launchers in $bin_dir, because $(launcher_keep_reason "$1" | sed 's/^conf://') still names them." ;;
+            agent) say "Would keep the launchers in $bin_dir, because a gpg-agent that started before $conf last changed still runs." ;;
+        esac
+    }
+
     if [ "$apply" = 0 ]; then
         if conf_refers; then
             if [ "$dry_run" = 1 ]; then say "Dry run: nothing is written."; fi
@@ -785,15 +925,29 @@ cmd_uninstall() {
         if [ "$dry_run" = 1 ]; then
             say "Dry run: nothing is written."
             say "$conf doesn't use TouchGlass."
-            if [ -d "$bin_dir" ]; then say "Would remove the launchers from $bin_dir."; fi
+            would_launchers 0
             if [ "$remove_app" = 1 ]; then say "Would remove $app."; fi
             return 0
         fi
         say "$conf doesn't use TouchGlass."
-        remove_launchers
+        remove_unused_launchers 0
         report_kept
         remove_installed_app
         return 0
+    fi
+
+    # A TouchGlass line without a marker, next to a commented-out line for the same option: the file was
+    # edited by hand, and the commented-out line may or may not be the earlier setting. Change nothing.
+    if grep -q '^ambiguous ' "$notes"; then
+        {
+            for key in $(sed -n 's/^ambiguous //p' "$notes"); do
+                say "$prog: $conf has a TouchGlass $key line without the \"# touchglass: \" comment that records your earlier line, and a commented-out $key line that may be it."
+            done
+            say "$prog: uninstall --apply can't tell what to restore, so it changed nothing. Edit the file yourself:"
+            say ""
+            print_uninstall_steps
+        } >&2
+        exit 1
     fi
 
     if [ "$dry_run" = 1 ]; then
@@ -811,7 +965,11 @@ cmd_uninstall() {
         else
             say "$conf has no TouchGlass lines; no change."
         fi
-        if [ -d "$bin_dir" ]; then say "Would remove the launchers from $bin_dir."; fi
+        if [ "$conf_changed" = 1 ] && [ -d "$bin_dir" ] && ! command -v gpgconf >/dev/null 2>&1; then
+            say "Would keep the launchers in $bin_dir, because without gpgconf uninstall can't stop gpg-agent."
+        else
+            would_launchers "$conf_changed"
+        fi
         if [ "$remove_app" = 1 ]; then say "Would remove $app."; fi
         return 0
     fi
@@ -831,10 +989,14 @@ cmd_uninstall() {
     fi
     # Remove the launchers only after gpg-agent stopped using them: a running gpg-agent keeps the
     # paths it read at start.
-    if [ "$exit_status" = 0 ]; then
-        remove_launchers
-    elif [ -d "$bin_dir" ]; then
+    if [ ! -d "$bin_dir" ]; then
+        :
+    elif [ "$exit_status" != 0 ]; then
         warn "kept the launchers in $bin_dir, because gpg-agent may still run them; run '$prog uninstall' again after you stopped gpg-agent"
+    elif [ "$conf_changed" = 1 ] && [ "$agent_stopped" = 0 ]; then
+        warn "kept the launchers in $bin_dir, because without gpgconf uninstall couldn't stop gpg-agent, which runs them until it stops. Stop gpg-agent, then run '$prog uninstall' again."
+    else
+        remove_unused_launchers "$agent_stopped"
     fi
     report_kept
     remove_installed_app
@@ -928,9 +1090,9 @@ print_uninstall_steps() {
     say "To have $prog make this change for you, run '$prog uninstall --apply'."
 }
 
-# For `brew uninstall --zap`, which deletes the launchers and the app: fails while gpg-agent.conf or
-# the launchers still refer to TouchGlass. The launchers count too, because Homebrew drops GNUPGHOME
-# from the environment, so a gpg-agent.conf in another GnuPG home can name them unseen.
+# Checks before TouchGlass's files are deleted: fails while gpg-agent.conf or the launchers still refer
+# to TouchGlass. The launchers count too, because a gpg-agent.conf in another GnuPG home can name them,
+# and a command run without that GNUPGHOME doesn't see it.
 check_unused() {
     if conf_refers; then
         {
@@ -999,10 +1161,26 @@ cmd_status() {
         say "App:               not found at $app"
     fi
     if host_running; then say "Host:              running"; else say "Host:              not running"; fi
+    # A scdaemon that gpg-agent started while the app was missing, such as during brew upgrade, is the
+    # real one, and it shows no panel until it stops.
+    if pgrep -x -u "$(id -u)" touchglass-scdaemon >/dev/null 2>&1; then
+        say "scdaemon proxy:    running"
+    elif pgrep -x -u "$(id -u)" scdaemon >/dev/null 2>&1; then
+        say "scdaemon proxy:    not running; scdaemon runs without it, so card operations show no panel. Run 'gpgconf --kill scdaemon'; the next card operation starts it through the launcher."
+    else
+        say "scdaemon proxy:    not running; gpg-agent starts it with the next card operation"
+    fi
     if [ -f "$scd_path_file" ]; then say "Real scdaemon:     $(head -n 1 "$scd_path_file")"; else say "Real scdaemon:     not configured"; fi
-    if [ -f "$pinentry_conf" ]; then
+    if [ -n "$launched" ] || [ -f "$pinentry_conf" ]; then
         fb="$(pinentry_setting fallback-pinentry)"
-        say "Fallback pinentry: ${fb:-(default)}"
+        effective="$(effective_fallback)"
+        if [ -z "$effective" ]; then
+            say "Fallback pinentry: none executable; while the host isn't reachable or TouchGlass.app is missing, PIN prompts fail. Install pinentry-mac, or set fallback-pinentry in $pinentry_conf."
+        elif [ -n "$fb" ] && [ "$fb" != "$effective" ]; then
+            say "Fallback pinentry: $effective, because $fb is missing"
+        else
+            say "Fallback pinentry: $effective"
+        fi
     fi
     backups="$(ls -1 "$conf".touchglass-backup-* 2>/dev/null | LC_ALL=C sort || true)"
     if [ -n "$backups" ]; then
