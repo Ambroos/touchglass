@@ -125,4 +125,6 @@ To test the script without a certificate, pass `--dry-run`: it signs ad hoc and 
 | `fake-scdaemon`, `fake-agent`, `fake-host`, `ScdTestSupport` | Test tools for the proxy. |
 | `touchglass-screenshots` | Shows and captures one panel state for `scripts/screenshots.sh`. Not part of the app. |
 
+When you change the text of the launchers that `launcher_script` in `scripts/touchglass` prints, increase `launcher_format` in that script and `LauncherRefresher.format` in `TouchGlassIPC` to the same number. A helper that a launcher with an older format starts runs `touchglass refresh-launchers`, which is how a Homebrew upgrade brings installed launchers up to date. Without the increase, installed launchers keep the earlier text until the user runs `touchglass install` again. A unit test fails if the two numbers differ.
+
 The scripts are in `scripts/`: `touchglass` (the install command, bundled in the app), `build-app.sh`, `test.sh`, `test-installer.sh`, `screenshots.sh` and `release.sh`.

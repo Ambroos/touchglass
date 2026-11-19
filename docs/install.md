@@ -64,7 +64,13 @@ If `gpg-agent.conf` names the helpers inside `TouchGlass.app` directly, as insta
 
 ## Upgrade
 
-`brew upgrade touchglass` needs no new `touchglass install`, because the launchers run the app at Homebrew's `opt` path, which follows upgrades.
+`brew upgrade touchglass` needs nothing else: don't run `touchglass install` again. The launchers run the app at Homebrew's `opt` path, which follows upgrades, and they bring themselves up to date. Homebrew can't write to `~/Library`, so the first helper that a launcher starts after the upgrade checks the launchers and the copy of the `touchglass` command next to them. If they are older than the new release, the helper runs `touchglass refresh-launchers` from its app in the background. That command rewrites the two launchers and the command copy for the app that the launchers already run, and changes nothing else: not `gpg-agent.conf`, the settings or the app. It never replaces launchers or a command copy from a later release, so a downgrade leaves them as they are. The helpers write a line to the unified log when they start the refresh; see [Read the log](configuration.md#read-the-log).
+
+To refresh the launchers yourself, for example to check the result right away, run:
+
+```sh
+touchglass refresh-launchers
+```
 
 After a helper of the new version connects, the running TouchGlass host quits when it has nothing left to show, and the next prompt or card operation starts the new host. A running scdaemon keeps the previous version until it stops, which can take days. To switch both now:
 
@@ -83,7 +89,7 @@ From a checkout, run `scripts/touchglass install` again after you pull changes. 
 touchglass status
 ```
 
-Status shows what `gpg-agent.conf` points at, which app the launchers run, whether the host and the scdaemon proxy are running, which pinentry the launchers fall back to, and the `gpg-agent.conf` backups.
+Status shows what `gpg-agent.conf` points at, which app the launchers run, whether the launchers and the command copy are out of date, whether the host and the scdaemon proxy are running, which pinentry the launchers fall back to, and the `gpg-agent.conf` backups.
 
 ## Uninstall
 
