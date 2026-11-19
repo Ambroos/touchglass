@@ -8,8 +8,8 @@
 # certificate. --no-notarize signs with the Developer ID identity and skips notarization, to test the
 # signature without notarization credentials. Neither zip is for publishing.
 #
-# Writes build/release/TouchGlass-<version>.zip and prints its SHA-256. Creates no tag or GitHub
-# release; it prints the command for that.
+# Builds a universal app for Apple silicon and Intel Macs. Writes build/release/TouchGlass-<version>.zip
+# and prints its SHA-256. Creates no tag or GitHub release; it prints the command for that.
 set -eu
 
 die() { printf 'release: %s\n' "$*" >&2; exit 1; }
@@ -45,6 +45,7 @@ if [ "$dry_run" = 1 ]; then
 else
     # A release is built from committed sources only, so the tag matches what was signed.
     [ -z "$(git status --porcelain)" ] || die "the working tree has uncommitted changes; commit or stash them first"
+    if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then die "the tag v$version exists already"; fi
     identity="${TOUCHGLASS_SIGN_IDENTITY:-}"
     identity_name="$identity"
     if [ -z "$identity" ]; then
@@ -54,7 +55,7 @@ else
         case "$(printf '%s' "$identities" | grep -c .)" in
             0) die "no Developer ID Application identity in the keychain; set TOUCHGLASS_SIGN_IDENTITY, or pass --dry-run to sign ad hoc" ;;
             1) identity="${identities%% *}"; identity_name="${identities#* }" ;;
-            *) die "several Developer ID Application identities; pick one with TOUCHGLASS_SIGN_IDENTITY:
+            *) die "more than one Developer ID Application identity; pick one with TOUCHGLASS_SIGN_IDENTITY:
 $identities" ;;
         esac
     fi
@@ -63,8 +64,20 @@ $identities" ;;
     fi
 fi
 
-step "Build TouchGlass $version"
-TOUCHGLASS_VERSION="$version" scripts/build-app.sh release
+step "Build TouchGlass $version for arm64 and x86_64"
+# A scratch path of its own, so the universal build leaves the development build in .build alone.
+build_args="-c release --arch arm64 --arch x86_64 --scratch-path build/universal"
+for product in TouchGlass $helpers; do
+    # shellcheck disable=SC2086
+    swift build $build_args --product "$product"
+done
+# shellcheck disable=SC2086
+TOUCHGLASS_VERSION="$version" scripts/build-app.sh --prebuilt "$(swift build $build_args --show-bin-path)"
+for exe in TouchGlass $helpers; do
+    archs=" $(lipo -archs "build/TouchGlass.app/Contents/MacOS/$exe") "
+    case "$archs" in *" arm64 "*) ;; *) die "$exe is built without arm64:$archs" ;; esac
+    case "$archs" in *" x86_64 "*) ;; *) die "$exe is built without x86_64:$archs" ;; esac
+done
 rm -rf "$out"
 mkdir -p "$out"
 ditto build/TouchGlass.app "$app"
