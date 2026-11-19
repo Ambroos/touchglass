@@ -5,7 +5,13 @@ import ScdProxyCore
 /// The client side of an Assuan connection, acting as gpg-agent towards scdaemon or the proxy.
 ///
 /// Records every byte it sends and receives, so tests can compare them with what the fake scdaemon saw.
+///
+/// The driver closes descriptors only through their `FileHandle`. Tests run in parallel in one process, so a
+/// descriptor closed behind its handle's back is closed again when the handle is released, and by then the
+/// number can belong to another test's pipe or socket.
 public final class AgentDriver: @unchecked Sendable {
+    private let inputHandle: FileHandle
+    private let outputHandle: FileHandle
     public let input: Int32
     public let output: Int32
     /// Bytes sent, in order.
@@ -17,9 +23,21 @@ public final class AgentDriver: @unchecked Sendable {
     private var buffer: [UInt8] = []
     private let lock = NSLock()
 
-    public init(input: Int32, output: Int32) {
-        self.input = input
-        self.output = output
+    private var inputClosed = false
+    private var outputClosed = false
+
+    /// Reads from `input` and writes to `output`, which may be the same handle for a socket.
+    public init(input: FileHandle, output: FileHandle) {
+        inputHandle = input
+        outputHandle = output
+        self.input = input.fileDescriptor
+        self.output = output.fileDescriptor
+    }
+
+    /// Takes ownership of a connected socket and uses it in both directions.
+    public convenience init(socket: Int32) {
+        let handle = FileHandle(fileDescriptor: socket, closeOnDealloc: true)
+        self.init(input: handle, output: handle)
     }
 
     /// The server's reply to one command.
@@ -130,8 +148,10 @@ public final class AgentDriver: @unchecked Sendable {
 
     public func send(_ bytes: [UInt8]) {
         lock.lock()
-        sent += bytes
+        let closed = outputClosed
+        if !closed { sent += bytes }
         lock.unlock()
+        guard !closed else { return }
         if splitWrites {
             var i = 0
             while i < bytes.count {
@@ -166,6 +186,7 @@ public final class AgentDriver: @unchecked Sendable {
     }
 
     private func readChunk() -> [UInt8]? {
+        if lock.withLock({ inputClosed }) { return nil }
         var chunk = [UInt8](repeating: 0, count: 4096)
         let n = chunk.withUnsafeMutableBytes { Posix.read(input, $0) }
         guard n > 0 else { return nil }
@@ -175,8 +196,23 @@ public final class AgentDriver: @unchecked Sendable {
         return Array(chunk[0..<n])
     }
 
-    /// Closes the write side, as gpg-agent does when it releases the connection.
+    /// Closes the write side, as gpg-agent does when it releases the connection. For a socket, this closes
+    /// the whole connection.
     public func closeOutput() {
-        Posix.close(output)
+        lock.withLock {
+            outputClosed = true
+            if inputHandle === outputHandle { inputClosed = true }
+        }
+        try? outputHandle.close()
+    }
+
+    /// Closes both directions.
+    public func close() {
+        lock.withLock {
+            inputClosed = true
+            outputClosed = true
+        }
+        try? inputHandle.close()
+        if outputHandle !== inputHandle { try? outputHandle.close() }
     }
 }

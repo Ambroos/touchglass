@@ -23,12 +23,13 @@ public final class FakeHost: @unchecked Sendable {
         server.close()
     }
 
-    /// Shuts down every accepted connection, as a host that quits does. Call after `close()`.
+    /// Shuts down every open accepted connection, as a host that quits does. Call after `close()`.
     public func dropConnections() {
+        // Holds the lock across the shutdowns: a connection thread removes its descriptor under the lock
+        // before closing it, so none of these numbers can belong to another test yet.
         condition.lock()
-        let fds = accepted
-        condition.unlock()
-        for fd in fds { shutdown(fd, SHUT_RDWR) }
+        defer { condition.unlock() }
+        for fd in accepted { shutdown(fd, SHUT_RDWR) }
     }
 
     /// Every message received so far, excluding `hello`.
@@ -65,7 +66,12 @@ public final class FakeHost: @unchecked Sendable {
             self.accepted.append(connection.fileDescriptor)
             condition.unlock()
             Thread.detachNewThread { [self] in
-                defer { connection.close() }
+                defer {
+                    condition.lock()
+                    self.accepted.removeAll { $0 == connection.fileDescriptor }
+                    connection.close()
+                    condition.unlock()
+                }
                 while let message = try? connection.receive() {
                     if case .hello = message { continue }
                     onMessage?(message)

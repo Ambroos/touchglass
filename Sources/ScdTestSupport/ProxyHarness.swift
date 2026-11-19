@@ -115,7 +115,7 @@ public final class ProxyHarness: @unchecked Sendable {
         process.environment = env
         process.standardInput = stdinPipe
         process.standardOutput = stdoutPipe
-        agent = AgentDriver(input: stdoutPipe.fileHandleForReading.fileDescriptor, output: stdinPipe.fileHandleForWriting.fileDescriptor)
+        agent = AgentDriver(input: stdoutPipe.fileHandleForReading, output: stdinPipe.fileHandleForWriting)
     }
 
     /// Launches the proxy and reads scdaemon's greeting.
@@ -150,7 +150,7 @@ public final class ProxyHarness: @unchecked Sendable {
         guard ok == 0 else { close(fd); return nil }
         var one: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
-        let driver = AgentDriver(input: fd, output: fd)
+        let driver = AgentDriver(socket: fd)
         return driver.readHello() == nil ? nil : driver
     }
 

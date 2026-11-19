@@ -94,7 +94,7 @@ struct ProxyIntegrationTests {
         #expect(String(decoding: again.dataPayload, as: UTF8.self) == path)
         _ = session.transact("BYE")
         _ = session.readToEnd()
-        close(session.input)
+        session.close()
 
         #expect(session.sent == harness.recorded("sock1", "in"))
         #expect(session.received == expectedClientBytes(harness.recorded("sock1", "out"), real: harness.realSocketPath, proxy: path))
@@ -250,7 +250,7 @@ struct ProxyIntegrationTests {
         #expect(operation(session, "PKAUTH", grip: Self.auth).isOK)
         pipeDone.wait()
         _ = session.transact("BYE")
-        close(session.input)
+        session.close()
 
         let messages = try #require(host).waitForMessages(count: 6)
         let byConn = Dictionary(grouping: messages.map(\.summary)) { $0.split(separator: " ")[1] }

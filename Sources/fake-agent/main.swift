@@ -48,7 +48,7 @@ func show(_ line: [UInt8]) -> String {
     return String(decoding: line.map { $0 < 0x20 || $0 > 0x7E ? UInt8(ascii: ".") : $0 }, as: UTF8.self)
 }
 
-var driver = AgentDriver(input: fromChild.fileHandleForReading.fileDescriptor, output: toChild.fileHandleForWriting.fileDescriptor)
+var driver = AgentDriver(input: fromChild.fileHandleForReading, output: toChild.fileHandleForWriting)
 driver.splitWrites = split
 print("< " + (driver.readHello() ?? "(no hello)"))
 let socketReply = driver.transact("GETINFO socket_name")
@@ -70,7 +70,7 @@ for command in commands {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
         }
         guard ok == 0 else { print("! cannot connect to \(socketPath)"); exit(1) }
-        driver = AgentDriver(input: fd, output: fd)
+        driver = AgentDriver(socket: fd)
         print("(socket session) < " + (driver.readHello() ?? "(no hello)"))
         continue
     }
