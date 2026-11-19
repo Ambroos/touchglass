@@ -1317,9 +1317,15 @@ cmd_status() {
         say "Launchers:         not installed"
     fi
     if [ -e "$launch_pinentry" ] || [ -e "$launch_scd" ]; then
-        stale="out of date (refreshes on next use, or run $prog refresh-launchers)"
         # The older launcher counts: refresh-launchers rewrites both.
         lf="$( { launcher_file_format "$launch_pinentry"; launcher_file_format "$launch_scd"; } | sort -n | head -n 1)"
+        # Launchers from before the format stamp don't tell the helpers their format, so no helper
+        # refreshes them.
+        if [ "$lf" = 0 ]; then
+            stale="out of date; run $prog install"
+        else
+            stale="out of date (refreshes on next use, or run $prog refresh-launchers)"
+        fi
         if [ "$lf" -lt "$launcher_format" ]; then
             say "Launcher format:   $lf, $stale"
         elif [ "$lf" -gt "$launcher_format" ]; then
