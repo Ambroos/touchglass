@@ -170,6 +170,33 @@ struct ProxyIntegrationTests {
         #expect(harness.finish()?.status == 0)
     }
 
+    /// Back-to-back operations that need no touch, like a burst of `gpg --clearsign` with a cached touch.
+    /// Each operation is shorter than the detection delay, but the next one starts before that delay has
+    /// passed since the previous one started, so a timer left over from it must not count for the new one.
+    @Test func backToBackFastOperationsSendNoTouchWait() throws {
+        var card = ProxyHarness.Card()
+        card.verified = [1]
+        card.touch_ms = 600
+        card.cached_ms = 600
+        card.touch_cache_ms = 15_000
+        let harness = try ProxyHarness(card: card, touchDelayMs: 1000)
+        let host = try FakeHost(path: harness.hostSocketPath)
+        defer { harness.cleanUp(); host.close() }
+        #expect(try harness.start()?.hasPrefix("OK GNU Privacy Guard's Smartcard server ready") == true)
+        _ = harness.handshake()
+        for _ in 0..<3 {
+            #expect(operation(harness.agent, "PKSIGN", grip: Self.sign).isOK)
+        }
+        // Past the last operation's own detection delay, so a late event would show up.
+        usleep(600_000)
+        #expect(summaries(host, waitingFor: 6) == [
+            "op_start p sign slot=1", "op_end p ok",
+            "op_start p sign slot=1", "op_end p ok",
+            "op_start p sign slot=1", "op_end p ok",
+        ])
+        #expect(harness.finish()?.status == 0)
+    }
+
     @Test func sshAuthentication() throws {
         var card = ProxyHarness.Card()
         card.touch_ms = 700

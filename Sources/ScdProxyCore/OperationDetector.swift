@@ -34,6 +34,9 @@ public final class OperationDetector: @unchecked Sendable {
     // Accessed only on `queue`.
     private var keys: [String: (slot: Int, serial: String)] = [:]
     private var connections: [String: ConnectionState] = [:]
+    /// The last touch timer generation handed out. Detector-wide and never reset, so a timer armed for an
+    /// earlier operation can never match a later one on the same connection.
+    private var lastTimerGeneration = 0
 
     private enum Inquiry {
         case needPin
@@ -166,7 +169,7 @@ public final class OperationDetector: @unchecked Sendable {
 
         case let .inquire(keyword, args):
             guard state.operation != nil else { return }
-            state.operation?.timerGeneration += 1
+            state.operation?.timerGeneration = nextTimerGeneration()
             switch keyword {
             case "NEEDPIN":
                 state.inquiry = .needPin
@@ -232,7 +235,7 @@ public final class OperationDetector: @unchecked Sendable {
 
     private func armTouchTimer(_ conn: String, _ state: inout ConnectionState, from time: Double) {
         guard var operation = state.operation, !operation.touchReported else { return }
-        operation.timerGeneration += 1
+        operation.timerGeneration = nextTimerGeneration()
         operation.touchArmedAt = time
         state.operation = operation
         let generation = operation.timerGeneration
@@ -247,6 +250,11 @@ public final class OperationDetector: @unchecked Sendable {
             self.sink.send(.touchWait(TouchWait(conn: conn, timeoutMs: Self.touchTimeoutMs, at: operation.touchArmedAt)))
             self.log(.touchWaitInferred(conn: conn, delay: Date().timeIntervalSince1970 - operation.touchArmedAt, pinpadPrompt: false))
         }
+    }
+
+    private func nextTimerGeneration() -> Int {
+        lastTimerGeneration += 1
+        return lastTimerGeneration
     }
 
     /// Maps a gpg-error value from an `ERR` line to the result the host shows.
