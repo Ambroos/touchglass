@@ -988,5 +988,162 @@ check "pinentry launcher whole" cmp -s "$LP" "$T/touchglass-pinentry"
 check "scdaemon launcher whole" cmp -s "$LS" "$T/touchglass-scdaemon"
 check "no staged files left" test -z "$(ls -A "$SUPPORT/bin" | grep '^\.')"
 
+# Stub gpg-connect-agent that answers like gpg-agent with the cards in $T/cards, one "<serial> <UIF-1>
+# <UIF-2> <UIF-3>" line each, values escaped as scdaemon escapes them. It logs its arguments, one call per
+# line. While $T/agent-down exists, it fails as without a running gpg-agent. With $T/wrong-card, SERIALNO
+# --demand names another card.
+stub_cards() {
+    cat > "$T/bin/gpg-connect-agent" <<EOF
+#!/bin/sh
+printf '%s|' "\$@" >> "$T/gca.log"; printf '\n' >> "$T/gca.log"
+if [ -e "$T/agent-down" ]; then echo "gpg-connect-agent: no gpg-agent running in this session" >&2; exit 1; fi
+current=""
+for arg in "\$@"; do
+    case "\$arg" in
+        "scd serialno")
+            first="\$(head -n 1 "$T/cards" 2>/dev/null | cut -d ' ' -f 1)"
+            if [ -n "\$first" ]; then echo "S SERIALNO \$first"; echo OK; else echo "ERR 100663404 Card not present <SCD>"; fi ;;
+        "scd getinfo card_list")
+            cut -d ' ' -f 1 "$T/cards" 2>/dev/null | sed 's/^/S SERIALNO /'; echo OK ;;
+        "scd serialno --demand="*)
+            current="\${arg#scd serialno --demand=}"
+            if [ -e "$T/wrong-card" ]; then echo "S SERIALNO D2760001240103040006999999990000"; echo OK
+            elif grep -q "^\$current" "$T/cards"; then echo "S SERIALNO \$current"; echo OK
+            else current=""; echo "ERR 100663404 Card not present <SCD>"; fi ;;
+        "scd getattr UIF")
+            line="\$(grep "^\$current" "$T/cards" | head -n 1)"
+            set -- \$line
+            if [ -z "\$current" ] || [ \$# -lt 4 ]; then echo "ERR 100663354 No data <SCD>"; continue; fi
+            echo "S UIF-1 \$2"; echo "S UIF-2 \$3"; echo "S UIF-3 \$4"; echo OK ;;
+    esac
+done
+exit 0
+EOF
+    chmod +x "$T/bin/gpg-connect-agent"
+}
+YK1=D2760001240103040006012345670000
+YK2=D2760001240103040006000000420000
+OTHER=D2760001240103040005876543210000
+gca_calls() { if [ -f "$T/gca.log" ]; then wc -l < "$T/gca.log" | tr -d ' '; else echo 0; fi; }
+
+begin "card: shows and stores each attached card's policies"
+stub_cards
+printf '%s\n' "$YK1 %03+ %01+ %00+" "$YK2 %04+ %02+ %20+" > "$T/cards"
+tg card
+check "names the first card" out_has "Card 1234567 (YubiKey):"
+check "names the second card" out_has "Card 42 (YubiKey):"
+check "cached in words" out_has "Signature key:      cached: a touch, then none for 15 seconds after each use"
+check "on in words" out_has "Decryption key:     on: a touch every time"
+check "off in words" out_has "Authentication key: off: no touch"
+check "fixed in words" out_has "fixed: a touch every time; can't change without replacing the key"
+check "odd value is unknown" out_has "Authentication key: unknown"
+check "first card stored" grep -qx "$YK1 = cached on off" "$SUPPORT/cards.conf"
+check "second card stored" grep -qx "$YK2 = cached-fixed fixed unknown" "$SUPPORT/cards.conf"
+check "says where it stored" out_has "Stored in $SUPPORT/cards.conf."
+check "demands each card" grep -qF "scd serialno --demand=$YK2|scd getattr UIF|/bye|" "$T/gca.log"
+check "may start gpg-agent" sh -c "! grep -q -- --no-autostart '$T/gca.log'"
+check "no staged files left" test -z "$(ls -A "$SUPPORT" | grep '^\.')"
+check "support dir is private" test "$(stat -f %Lp "$SUPPORT")" = 700
+
+begin "card: re-learning replaces stale values and keeps other cards"
+stub_cards
+mkdir -p "$SUPPORT"
+printf '%s\n' "# a comment" "$YK1 = cached cached cached" "$YK2 = on on on" > "$SUPPORT/cards.conf"
+printf '%s\n' "$YK1 %01+ %01+ %01+" > "$T/cards"
+tg card
+check "stale card replaced" grep -qx "$YK1 = on on on" "$SUPPORT/cards.conf"
+check "only one line for it" test "$(grep -c "^$YK1 " "$SUPPORT/cards.conf")" = 1
+check "other card kept" grep -qx "$YK2 = on on on" "$SUPPORT/cards.conf"
+
+begin "card: an answer about another card is not stored"
+stub_cards
+printf '%s\n' "$YK1 %03+ %03+ %03+" > "$T/cards"
+: > "$T/wrong-card"
+"$tool" card > "$T/out" 2>&1 && fail "card succeeded"
+check "says so" out_has "Card 1234567: couldn't read its touch policy"
+check "nothing stored" test ! -e "$SUPPORT/cards.conf"
+
+begin "card: no card, no agent, no gpg-connect-agent"
+"$tool" card > "$T/out" 2>&1 && fail "card succeeded without gpg-connect-agent"
+check "names the missing tool" out_has "gpg-connect-agent not found"
+stub_cards
+"$tool" card > "$T/out" 2>&1 && fail "card succeeded without a card"
+check "asks to attach the card" out_has "no card found"
+: > "$T/agent-down"
+printf '%s\n' "$YK1 %03+ %03+ %03+" > "$T/cards"
+"$tool" card > "$T/out" 2>&1 && fail "card succeeded without gpg-agent"
+check "nothing stored" test ! -e "$SUPPORT/cards.conf"
+
+begin "card: a card without a button, and a card from another maker"
+stub_cards
+printf '%s\n' "$OTHER %01+ %01+ %01+" "$YK2" > "$T/cards"
+tg card
+check "other maker named without YubiKey" out_has "Card 87654321:"
+check "other maker keeps the default" out_has "for this card it keeps its default"
+check "no button" out_has "Reports no touch policy."
+check "button-less card stored as unknown" grep -qx "$YK2 = unknown unknown unknown" "$SUPPORT/cards.conf"
+
+begin "card: notes a touch-cache setting"
+stub_cards
+printf '%s\n' "$YK1 %03+ %03+ %03+" > "$T/cards"
+mkdir -p "$SUPPORT"
+printf '%s\n' "appearance = smoked" "touch-cache = 0" > "$SUPPORT/host.conf"
+tg card
+check "names the override" out_has "host.conf sets touch-cache = 0"
+printf '%s\n' "touch-cache = auto" > "$SUPPORT/host.conf"
+tg card
+check "auto is no override" sh -c "! grep -q 'host.conf sets' '$T/out'"
+
+begin "status lists learned cards"
+mkdir -p "$SUPPORT"
+tg status
+check "none learned" out_has "Touch policies:    none learned"
+check "touch-cache auto" out_has "touch-cache:       auto, from each card's touch policy"
+printf '%s\n' "# comment" "$YK1 = cached on off" "$OTHER = on" "garbage" > "$SUPPORT/cards.conf"
+printf '%s\n' "touch-cache = 30" > "$SUPPORT/host.conf"
+tg status
+check "lists the YubiKey" out_has "  card 1234567: sign cached, decrypt on, auth off"
+check "lists the other card" out_has "  card 87654321: sign on, decrypt unknown, auth unknown (not a YubiKey: the host keeps its default)"
+check "touch-cache override" out_has "touch-cache:       30 seconds for every card"
+
+begin "install learns an attached card"
+stub_cards
+printf '%s\n' "$YK1 %03+ %03+ %01+" > "$T/cards"
+tg install --from "$app"
+check "card stored" grep -qx "$YK1 = cached cached on" "$SUPPORT/cards.conf"
+check "says so" out_has "Learned the touch policy of card 1234567: sign cached, decrypt cached, auth on."
+check "never starts gpg-agent" test "$(grep -c -- '^--no-autostart|' "$T/gca.log")" = "$(gca_calls)"
+check "still prints the steps" out_has "Then stop gpg-agent"
+
+begin "install --apply learns before it stops gpg-agent"
+stub_cards
+printf '%s\n' "$YK1 %03+ %03+ %03+" > "$T/cards"
+tg install --apply --from "$app"
+check "card stored" grep -qx "$YK1 = cached cached cached" "$SUPPORT/cards.conf"
+check "agent reloaded" test "$(kills)" = 1
+
+begin "install without a card or agent still installs"
+stub_cards
+: > "$T/agent-down"
+tg install --apply --from "$app"
+check "launchers written" test -x "$LP"
+check "says how to learn later" out_has "Run 'touchglass card' with your card attached."
+check "nothing stored" test ! -e "$SUPPORT/cards.conf"
+rm -f "$T/agent-down"
+: > "$T/cards"
+tg install --from "$app"
+check "no card: nothing stored" test ! -e "$SUPPORT/cards.conf"
+
+begin "install --dry-run asks no card, uninstall keeps the policies"
+stub_cards
+printf '%s\n' "$YK1 %03+ %03+ %03+" > "$T/cards"
+tg install --dry-run --from "$app"
+check "no query" test "$(gca_calls)" = 0
+check "says it would" out_has "Would learn the touch policies"
+tg install --apply --from "$app"
+tg uninstall --apply
+check "policies kept" test -f "$SUPPORT/cards.conf"
+check "uninstall names them" out_has "the learned touch policies"
+
 printf '\n%d sandboxes, %d failures\n' "$count" "$failures"
 [ "$failures" = 0 ]

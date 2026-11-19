@@ -47,6 +47,9 @@ bin_dir="$support_dir/bin"
 launch_pinentry="$bin_dir/touchglass-pinentry"
 launch_scd="$bin_dir/touchglass-scdaemon"
 cli_copy="$bin_dir/touchglass"
+# The touch policies that the host and the card command learned, one card per line.
+cards_file="$support_dir/cards.conf"
+host_conf="$support_dir/host.conf"
 # Where install looks for pinentry-mac besides PATH, and where the pinentry launcher looks for
 # pinentry-mac, then pinentry, when pinentry.conf names no executable fallback. The tests point it at
 # their sandbox.
@@ -112,6 +115,7 @@ Usage:
   touchglass uninstall [--apply] [--remove-app] [--dry-run]
   touchglass uninstall --check
   touchglass status
+  touchglass card
   touchglass refresh-launchers
   touchglass --version
 
@@ -127,6 +131,8 @@ install    Sets up ~/Library/Application Support/TouchGlass: the launchers that
            gpg-agent so that it reads the change; the next card operation asks for
            the PIN again. When --apply replaces the app, it also quits the running
            host and stops scdaemon so that the new helpers take over.
+           If a card is attached and gpg-agent runs, install also learns its
+           touch policies, as the card command does.
 uninstall  Prints how to restore the original pinentry-program and
            scdaemon-program lines. While gpg-agent.conf names the launchers, it
            keeps them; after that, it removes them, unless a gpg-agent that
@@ -141,7 +147,12 @@ uninstall  Prints how to restore the original pinentry-program and
            still refer to TouchGlass, to check before you delete TouchGlass's
            files.
 status     Shows what gpg-agent.conf points at, where the launchers lead, whether
-           they are current, and whether the host and the scdaemon proxy run.
+           they are current, whether the host and the scdaemon proxy run, and
+           the touch policies TouchGlass learned.
+card       Reads the touch policy of each key on every attached card through
+           gpg-agent, shows it, and stores it in cards.conf, where the host
+           reads it. Needs no PIN and no touch. Run it after you change a
+           policy with 'ykman openpgp keys set-touch'.
 refresh-launchers
            Rewrites the launchers and the copy of this command in the format
            of this release, for the app that the launchers already run, and
@@ -678,6 +689,7 @@ cmd_install() {
             update) say "Would update $pinentry_conf${fallback:+: fallback-pinentry = $fallback}." ;;
         esac
         say "Would write the launchers for $app to $bin_dir."
+        say "Would learn the touch policies of attached cards and store them in $cards_file."
         if [ "$conf_changed" = 0 ]; then
             say "$conf already uses the TouchGlass launchers; no change."
             if [ "$copy_app" = 1 ] && [ "$apply" = 1 ]; then
@@ -732,6 +744,8 @@ cmd_install() {
     write_pinentry_conf "$pinentry_plan"
     write_launchers "$app"
     record_conf
+    # Before --apply stops gpg-agent, while it may still run.
+    learn_cards quiet
 
     if [ "$conf_changed" = 0 ]; then
         say "$conf already uses the TouchGlass launchers; no change."
@@ -1167,13 +1181,200 @@ cmd_uninstall() {
     remove_installed_app
 }
 
+# gpg-connect-agent of the GnuPG that gpgconf reports, else the one on PATH, or nothing.
+gpg_connect_agent() {
+    if command -v gpgconf >/dev/null 2>&1; then
+        bindir="$(gpgconf --list-dirs bindir 2>/dev/null | sed 's/%3[aA]/:/g')"
+        if [ -n "$bindir" ] && [ -x "$bindir/gpg-connect-agent" ]; then printf '%s\n' "$bindir/gpg-connect-agent"; return 0; fi
+    fi
+    command -v gpg-connect-agent 2>/dev/null || true
+}
+
+# The serial printed on a card, from its OpenPGP application ID: the 8-digit serial number field, or the
+# ID itself for another card.
+display_serial() { # serial
+    printf '%s\n' "$1" | awk '{
+        s = toupper($1)
+        if (length(s) == 32 && substr(s, 1, 10) == "D276000124") {
+            n = substr(s, 21, 8)
+            if (n ~ /^[0-9]+$/) { sub(/^0+/, "", n); if (n == "") n = "0" }
+            print n
+        } else print s
+    }'
+}
+
+# True for an OpenPGP application ID with Yubico's manufacturer ID, 0006.
+is_yubico() { # serial
+    case "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')" in
+        D276000124??????0006????????????) return 0 ;;
+    esac
+    return 1
+}
+
+# Plain words for a policy as cards.conf names it.
+policy_words() { # policy
+    case "$1" in
+        off) printf 'off: no touch' ;;
+        on) printf 'on: a touch every time' ;;
+        fixed) printf "fixed: a touch every time; can't change without replacing the key" ;;
+        cached) printf 'cached: a touch, then none for 15 seconds after each use' ;;
+        cached-fixed) printf "cached-fixed: a touch, then none for 15 seconds after each use; can't change without replacing the key" ;;
+        *) printf 'unknown' ;;
+    esac
+}
+
+# Prints "<serial> <sign> <decrypt> <auth>" for each card in cards.conf.
+learned_cards() {
+    [ -f "$cards_file" ] || return 0
+    awk '
+        /^[ \t]*#/ { next }
+        {
+            line = $0; eq = index(line, "="); if (!eq) next
+            serial = substr(line, 1, eq - 1); gsub(/[ \t]/, "", serial); serial = toupper(serial)
+            if (serial == "" || length(serial) > 32 || serial !~ /^[0-9A-F]+$/) next
+            n = split(substr(line, eq + 1), w, /[ \t]+/); k = 0
+            for (i = 1; i <= n; i++) if (w[i] != "") { k++; p[k] = w[i] }
+            out = serial
+            for (j = 1; j <= 3; j++) {
+                v = (j <= k) ? p[j] : "unknown"
+                if (v !~ /^(off|on|fixed|cached|cached-fixed)$/) v = "unknown"
+                out = out " " v
+            }
+            if (!(serial in seen)) order[++m] = serial
+            seen[serial] = out
+        }
+        END { for (i = 1; i <= m; i++) print seen[order[i]] }' "$cards_file"
+}
+
+# Replaces the lines of the cards in the file named by $1, "<serial> <sign> <decrypt> <auth>" per line, in
+# cards.conf, keeping the other cards. Renames a complete file over it, as the host does.
+store_cards() { # file
+    mkdir -p "$support_dir"
+    chmod 700 "$support_dir"
+    staged="$(mktemp "$support_dir/.cards.conf.XXXXXX")"
+    {
+        echo '# Touch policies that TouchGlass learned from your cards, one card per line:'
+        echo '# <card serial> = <signature key> <decryption key> <authentication key>'
+        echo '# TouchGlass and `touchglass card` rewrite this file. To use one touch cache window for every'
+        echo '# card instead, set touch-cache in host.conf.'
+        { learned_cards | awk 'NR == FNR { new[$1] = 1; next } !($1 in new)' "$1" -; cat "$1"; } |
+            LC_ALL=C sort | awk '{ print $1 " = " $2 " " $3 " " $4 }'
+    } > "$staged"
+    chmod 644 "$staged"
+    mv -f "$staged" "$cards_file"
+    staged=""
+}
+
+# Reads the touch policies of one card: prints "<sign> <decrypt> <auth>", or fails when the answer is
+# about another card or none. SERIALNO --demand picks the card the way gpg-agent does before each
+# operation, so GETATTR reads that card even with several attached.
+query_card() { # gpg-connect-agent serial [option]
+    out="$("$1" ${3:+"$3"} "scd serialno --demand=$2" 'scd getattr UIF' /bye 2>/dev/null)" || return 1
+    printf '%s\n' "$out" | TG_SERIAL="$2" awk '
+        $1 == "S" && $2 == "SERIALNO" { if (toupper($3) != toupper(ENVIRON["TG_SERIAL"])) exit 1; named = 1; next }
+        named && $1 == "S" && $2 ~ /^UIF-[123]$/ {
+            v = toupper($3); p = "unknown"
+            if (v ~ /^%0[0-4]/) {
+                c = substr(v, 3, 1)
+                p = (c == "0") ? "off" : (c == "1") ? "on" : (c == "2") ? "fixed" : (c == "3") ? "cached" : "cached-fixed"
+            }
+            pol[substr($2, 5, 1)] = p
+        }
+        END {
+            if (!named) exit 1
+            for (j = 1; j <= 3; j++) printf "%s%s", (j > 1 ? " " : ""), ((j in pol) ? pol[j] : "unknown")
+            printf "\n"
+        }'
+}
+
+# Learns the touch policies of every attached card and stores them. With "quiet", as install runs it,
+# never starts gpg-agent, prints one line per card and returns 0 when there is nothing to learn. Without,
+# prints each card's policies in plain words and fails when it finds no card.
+learn_cards() { # [quiet]
+    quiet="${1:-}"
+    option=""
+    if [ -n "$quiet" ]; then option="--no-autostart"; fi
+    gca="$(gpg_connect_agent)"
+    if [ -z "$gca" ]; then
+        if [ -n "$quiet" ]; then say "Learned no card's touch policy: gpg-connect-agent not found."; return 0; fi
+        die "gpg-connect-agent not found; is GnuPG installed and gpgconf on PATH?"
+    fi
+    # SERIALNO refreshes scdaemon's list of cards; card_list then names each one.
+    serials="$("$gca" ${option:+"$option"} 'scd serialno' 'scd getinfo card_list' /bye 2>/dev/null |
+        awk '$1 == "S" && $2 == "SERIALNO" && $3 ~ /^[0-9A-Fa-f]+$/ && length($3) <= 32 { s = toupper($3); if (!(s in seen)) { seen[s] = 1; print s } }' || true)"
+    if [ -z "$serials" ]; then
+        if [ -n "$quiet" ]; then say "Learned no card's touch policy: no card attached, or gpg-agent isn't running. Run '$prog card' with your card attached."; return 0; fi
+        die "no card found. Attach your card and run '$prog card' again; if it still finds none, check that 'gpg --card-status' sees it."
+    fi
+    learned="$(mktemp "${TMPDIR:-/tmp}/touchglass.XXXXXX")"
+    failed=0
+    for serial in $serials; do
+        display="$(display_serial "$serial")"
+        if ! policies="$(query_card "$gca" "$serial" "$option")"; then
+            failed=1
+            if [ -n "$quiet" ]; then say "Couldn't read the touch policy of card $display."; else say "Card $display: couldn't read its touch policy; it may have been removed."; fi
+            continue
+        fi
+        printf '%s %s\n' "$serial" "$policies" >> "$learned"
+        set -- $policies
+        if [ -n "$quiet" ]; then
+            say "Learned the touch policy of card $display: sign $1, decrypt $2, auth $3."
+            continue
+        fi
+        if is_yubico "$serial"; then say "Card $display (YubiKey):"; else say "Card $display:"; fi
+        if [ "$1 $2 $3" = "unknown unknown unknown" ]; then
+            say "  Reports no touch policy."
+        else
+            say "  Signature key:      $(policy_words "$1")"
+            say "  Decryption key:     $(policy_words "$2")"
+            say "  Authentication key: $(policy_words "$3")"
+        fi
+        if ! is_yubico "$serial"; then
+            say "  TouchGlass times the touch step by the policies of YubiKeys only, so for this card it keeps its default."
+        fi
+    done
+    if [ -s "$learned" ]; then
+        store_cards "$learned"
+        if [ -z "$quiet" ]; then say "Stored in $cards_file."; fi
+    fi
+    rm -f "$learned"
+    if [ -z "$quiet" ] && [ "$failed" = 1 ]; then exit_status=1; fi
+    return 0
+}
+
+cmd_card() {
+    [ $# -eq 0 ] || die "card takes no options"
+    learn_cards
+    if [ "$(touch_cache_setting)" != auto ]; then
+        say "host.conf sets touch-cache = $(touch_cache_setting), so the host uses that for every card and ignores these policies."
+    fi
+}
+
+# The touch-cache value in host.conf: a number, or "auto" when the line is missing or invalid.
+touch_cache_setting() {
+    v=""
+    if [ -f "$host_conf" ]; then
+        v="$(awk '
+            { line = $0; sub(/^[ \t]+/, "", line) }
+            index(line, "touch-cache") == 1 {
+                rest = substr(line, 12)
+                if (rest ~ /^[ \t]*=/) { sub(/^[ \t]*=[ \t]*/, "", rest); sub(/[ \t\r]+$/, "", rest); v = rest }
+            }
+            END { print v }' "$host_conf")"
+    fi
+    case "$v" in
+        "" | *[!0-9.]* | *.*.* | .) echo auto ;;
+        *) if awk -v x="$v" 'BEGIN { exit !(x + 0 <= 600) }'; then echo "$v"; else echo auto; fi ;;
+    esac
+}
+
 # Tells what uninstall leaves behind on purpose.
 report_kept() {
     if ls "$conf".touchglass-backup-* >/dev/null 2>&1; then
         say "Kept the backups of gpg-agent.conf next to it."
     fi
     if [ -d "$support_dir" ]; then
-        say "Kept $support_dir, which holds the pinentry settings, the real scdaemon path and host.conf; remove it yourself if you don't reinstall."
+        say "Kept $support_dir, which holds the pinentry settings, the real scdaemon path, host.conf and the learned touch policies; remove it yourself if you don't reinstall."
     fi
 }
 
@@ -1373,6 +1574,23 @@ cmd_status() {
             say "Fallback pinentry: $effective"
         fi
     fi
+    cards="$(learned_cards)"
+    if [ -n "$cards" ]; then
+        say "Touch policies:"
+        printf '%s\n' "$cards" | while read -r serial sign decrypt auth; do
+            note=""
+            if ! is_yubico "$serial"; then note=" (not a YubiKey: the host keeps its default)"; fi
+            say "  card $(display_serial "$serial"): sign $sign, decrypt $decrypt, auth $auth$note"
+        done
+    else
+        say "Touch policies:    none learned; the host learns them as you use a card, or run '$prog card'"
+    fi
+    tc="$(touch_cache_setting)"
+    if [ "$tc" = auto ]; then
+        say "touch-cache:       auto, from each card's touch policy"
+    else
+        say "touch-cache:       $tc seconds for every card, from $host_conf"
+    fi
     backups="$(ls -1 "$conf".touchglass-backup-* 2>/dev/null | LC_ALL=C sort || true)"
     if [ -n "$backups" ]; then
         say "Backups:"
@@ -1388,6 +1606,7 @@ case "$command" in
     install) cmd_install "$@"; exit "$exit_status" ;;
     uninstall) cmd_uninstall "$@"; exit "$exit_status" ;;
     status) cmd_status "$@" ;;
+    card) cmd_card "$@"; exit "$exit_status" ;;
     refresh-launchers) cmd_refresh_launchers "$@" ;;
     version | --version) say "$prog $cli_version" ;;
     help | -h | --help) usage ;;
