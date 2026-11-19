@@ -38,19 +38,30 @@ public final class LauncherRefresher: Sendable {
     let helperRelease: String?
     let spawn: Spawner
     let log: @Sendable (LogEvent) -> Void
+    let attemptStamp: String?
+    let backoff: TimeInterval
     private let checked = Mutex(false)
+
+    /// How long a helper waits after a refresh it started before it starts another one for the same
+    /// release. A refresh that succeeds makes the next one unnecessary; one that can't succeed, such as
+    /// for a support directory it can't write, would otherwise start again with every prompt.
+    public static let defaultBackoff: TimeInterval = 3600
 
     /// - Parameters:
     ///   - bundledCommand: the `touchglass` command in the helper's bundle, or nil outside a bundle.
     ///   - commandCopy: the copy of the command next to the launchers.
     ///   - helperRelease: the helper's release, `BuildInfo.version`.
+    ///   - attemptStamp: a file that records the last refresh that a helper started, for the backoff. Nil:
+    ///     no backoff.
     public init(
         environment: [String: String],
         bundledCommand: String?,
         commandCopy: String,
         helperRelease: String?,
         spawn: @escaping Spawner,
-        log: @escaping @Sendable (LogEvent) -> Void
+        log: @escaping @Sendable (LogEvent) -> Void,
+        attemptStamp: String? = nil,
+        backoff: TimeInterval = LauncherRefresher.defaultBackoff
     ) {
         self.environment = environment
         self.bundledCommand = bundledCommand
@@ -58,6 +69,8 @@ public final class LauncherRefresher: Sendable {
         self.helperRelease = helperRelease
         self.spawn = spawn
         self.log = log
+        self.attemptStamp = attemptStamp
+        self.backoff = backoff
     }
 
     /// The refresher for this helper process, logging under `category`.
@@ -68,12 +81,13 @@ public final class LauncherRefresher: Sendable {
             commandCopy: IPCPaths.supportDirectory + "/bin/touchglass",
             helperRelease: BuildInfo.version,
             spawn: spawnDetached,
-            log: { TouchGlassLog(category)($0) }
+            log: { TouchGlassLog(category)($0) },
+            attemptStamp: IPCPaths.supportDirectory + "/refresh-attempt"
         )
     }
 
     /// Checks once per refresher whether the launchers or the command copy are out of date, and if so,
-    /// starts the refresh. Returns why it started one, or nil. Never blocks on the refresh and never fails
+    /// starts the refresh, unless a helper of the same release started one within `backoff`. Returns why it started one, or nil. Never blocks on the refresh and never fails
     /// the helper.
     @discardableResult
     public func refreshIfNeeded() -> LauncherRefreshReason? {
@@ -84,10 +98,38 @@ public final class LauncherRefresher: Sendable {
         guard first, let launcher = environment[Self.environmentKey] else { return nil }
         let copyRelease = needsCopyRelease(launcher) ? Self.release(ofCommandAt: commandCopy) : nil
         guard let reason = Self.reason(launcherFormat: launcher, commandCopyRelease: copyRelease, helperRelease: helperRelease),
-              let bundledCommand else { return nil }
+              let bundledCommand, !recentlyAttempted() else { return nil }
+        recordAttempt()
         let started = spawn(bundledCommand, [Self.command])
         log(.launcherRefresh(reason, started: started))
         return reason
+    }
+
+    /// What the attempt stamp holds: the release and launcher format that the refresh brings the files to.
+    private var attemptKey: String {
+        "\(helperRelease ?? "dev") \(Self.format)\n"
+    }
+
+    /// Whether a helper of this release started a refresh within the backoff.
+    private func recentlyAttempted() -> Bool {
+        guard let attemptStamp,
+              let attributes = try? FileManager.default.attributesOfItem(atPath: attemptStamp),
+              let modified = attributes[.modificationDate] as? Date,
+              let data = FileManager.default.contents(atPath: attemptStamp)
+        else { return false }
+        let age = Date().timeIntervalSince(modified)
+        return age >= 0 && age < backoff && String(decoding: data, as: UTF8.self) == attemptKey
+    }
+
+    /// Writes the attempt stamp. Without it, as in a support directory the helper can't write, every
+    /// helper start may refresh again.
+    private func recordAttempt() {
+        guard let attemptStamp else { return }
+        let fd = open(attemptStamp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { return }
+        defer { close(fd) }
+        let bytes = Array(attemptKey.utf8)
+        _ = bytes.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
     }
 
     /// Reads the command copy only when the launcher format alone doesn't decide.

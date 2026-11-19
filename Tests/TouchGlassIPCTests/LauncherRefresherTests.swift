@@ -20,7 +20,7 @@ import Testing
             try? FileManager.default.removeItem(at: directory)
         }
 
-        func refresher(launcher: String?, copyRelease: String?, helperRelease: String? = "1.2.0", bundledCommand: String? = command) throws -> LauncherRefresher {
+        func refresher(launcher: String?, copyRelease: String?, helperRelease: String? = "1.2.0", bundledCommand: String? = command, attemptStamp: String? = nil, backoff: TimeInterval = LauncherRefresher.defaultBackoff) throws -> LauncherRefresher {
             let copy = directory.appendingPathComponent("touchglass-\(UUID().uuidString)").path
             if let copyRelease {
                 try "#!/bin/sh\nprog=touchglass\ncli_version=\(copyRelease)\nlauncher_format=1\n".write(toFile: copy, atomically: true, encoding: .utf8)
@@ -34,7 +34,9 @@ import Testing
                     self.spawns.withLock { $0.append([path] + arguments) }
                     return self.spawnSucceeds
                 },
-                log: { event in self.events.withLock { $0.append(event) } }
+                log: { event in self.events.withLock { $0.append(event) } },
+                attemptStamp: attemptStamp,
+                backoff: backoff
             )
         }
 
@@ -107,6 +109,22 @@ import Testing
         #expect(try recorder.refresher(launcher: "0", copyRelease: "0.1.0", bundledCommand: nil).refreshIfNeeded() == nil)
         #expect(recorder.spawnCount == 0)
         #expect(recorder.loggedEvents.isEmpty)
+    }
+
+    /// A refresh that can't succeed must not start again with every helper.
+    @Test func refreshBacksOffForTheSameRelease() throws {
+        let recorder = Recorder()
+        let stamp = recorder.directory.appendingPathComponent("refresh-attempt").path
+        #expect(try recorder.refresher(launcher: "0", copyRelease: "1.2.0", attemptStamp: stamp).refreshIfNeeded() != nil)
+        #expect(try recorder.refresher(launcher: "0", copyRelease: "1.2.0", attemptStamp: stamp).refreshIfNeeded() == nil)
+        #expect(recorder.spawnCount == 1)
+        // A later release refreshes at once.
+        #expect(try recorder.refresher(launcher: "0", copyRelease: "1.2.0", helperRelease: "1.3.0", attemptStamp: stamp).refreshIfNeeded() != nil)
+        #expect(recorder.spawnCount == 2)
+        // After the backoff, the same release tries again.
+        #expect(try recorder.refresher(launcher: "0", copyRelease: "1.2.0", helperRelease: "1.3.0", attemptStamp: stamp, backoff: 0).refreshIfNeeded() != nil)
+        #expect(recorder.spawnCount == 3)
+        #expect(try String(contentsOfFile: stamp, encoding: .utf8) == "1.3.0 \(LauncherRefresher.format)\n")
     }
 
     @Test func failedStartIsLogged() throws {
