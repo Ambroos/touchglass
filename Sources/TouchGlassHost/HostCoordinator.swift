@@ -233,12 +233,12 @@ public struct HostCoordinator: Sendable {
                 return []
             }
             shown = nil
-            return [.reply(connection, .cancelled(RequestRef(id: id))), .panel(.dismiss)] + rearmIfQueued()
+            return [.reply(connection, .cancelled(RequestRef(id: id))), .panel(.userClosed)] + rearmIfQueued()
         case .confirm:
             switch shown {
             case .confirm(let id, let connection), .message(let id, let connection):
                 shown = nil
-                return [.reply(connection, .confirmed(RequestRef(id: id))), .panel(.dismiss)] + rearmIfQueued()
+                return [.reply(connection, .confirmed(RequestRef(id: id))), .panel(.userClosed)] + rearmIfQueued()
             default:
                 return []
             }
@@ -347,7 +347,7 @@ public struct HostCoordinator: Sendable {
         for output in outputs {
             switch output {
             case .panel(.show(let state)): panelState = state
-            case .panel(.dismiss): panelState = nil
+            case .panel(.dismiss), .panel(.userClosed): panelState = nil
             default: break
             }
         }

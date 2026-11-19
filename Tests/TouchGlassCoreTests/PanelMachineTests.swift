@@ -165,6 +165,29 @@ import Testing
         #expect(effects.contains(.setKey(true)))
     }
 
+    /// Cancel, Escape, OK or a click: the user asked for the panel to go, so it closes at once.
+    @Test func userCloseSkipsTheGrace() {
+        var machine = PanelMachine()
+        let request = PinRequest(operation: .sign, cardSerial: "12345678")
+        _ = machine.handle(.show(.pinEntry(request)))
+        let effects = machine.handle(.userClosed)
+        #expect(effects.contains(.close))
+        #expect(!effects.contains(.scheduleClose(after: TouchTiming.closeGrace)))
+        #expect(machine.state == nil && machine.lingering == nil)
+        #expect(machine.handle(.closeGraceFired).isEmpty)
+        // The next state opens a new panel.
+        #expect(machine.handle(.show(.touchWait(wait))).contains(.open(.touchWait(wait))))
+    }
+
+    /// A click on an error that is already lingering closes it at once too.
+    @Test func userCloseDuringTheGraceClosesAtOnce() {
+        var machine = PanelMachine()
+        _ = machine.handle(.show(.failure(.wrongPIN)))
+        _ = machine.handle(.autoCloseFired)
+        #expect(machine.handle(.userClosed) == [.cancelAutoClose, .stopEscalation, .cancelClose, .close])
+        #expect(machine.handle(.userClosed).isEmpty)
+    }
+
     /// A panel the user hid is off screen already; dismissing it schedules nothing.
     @Test func dismissingAHiddenPanelSchedulesNoClose() {
         var machine = PanelMachine()

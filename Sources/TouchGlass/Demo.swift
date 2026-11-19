@@ -231,7 +231,7 @@ final class DemoRunner {
         if options.focusReport { reportFocus(after: 0.6) }
         let event = await inbox.next([.submitted, .cancelled], timeout: options.autoSubmitAfter)
         if event == .cancelled {
-            controller.send(.dismiss)
+            controller.send(.userClosed)
             await sleep(0.6)
             return false
         }
@@ -291,7 +291,7 @@ final class DemoRunner {
         controller.send(.show(.passphrase(PassphraseRequest(description: description))))
         if options.focusReport { reportFocus(after: 0.6) }
         guard await inbox.next([.submitted, .cancelled], timeout: options.autoSubmitAfter) == .submitted else {
-            controller.send(.dismiss)
+            controller.send(.userClosed)
             await sleep(0.6)
             return
         }
@@ -306,8 +306,9 @@ final class DemoRunner {
     private func confirmStep(_ state: PanelState) async {
         controller.send(.show(state))
         if options.focusReport { reportFocus(after: 0.6) }
-        _ = await inbox.next([.confirmed, .cancelled], timeout: options.autoSubmitAfter.map { $0 + 1 })
-        controller.send(.dismiss)
+        let answered = await inbox.next([.confirmed, .cancelled], timeout: options.autoSubmitAfter.map { $0 + 1 })
+        // A button closes the panel at once; a timeout closes it like the host does.
+        controller.send(answered == nil ? .dismiss : .userClosed)
         await sleep(0.6)
     }
 

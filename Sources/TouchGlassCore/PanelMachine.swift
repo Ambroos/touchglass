@@ -11,6 +11,9 @@ public enum PanelEvent: Sendable, Equatable {
     case dismiss
     /// The auto-close timer for a success or error state fired. Closes like `dismiss`.
     case autoCloseFired
+    /// The user closed the panel: Cancel or Escape on a prompt, OK on a message, or a click on an error.
+    /// The panel closes at once, without the grace: lingering would read as lag.
+    case userClosed
     /// The close grace that `scheduleClose` started ran out.
     case closeGraceFired
 }
@@ -76,6 +79,14 @@ public struct PanelMachine: Sendable {
             guard wasVisible else { return [.cancelAutoClose, .stopEscalation] }
             lingering = ended
             return [.cancelAutoClose, .stopEscalation, .scheduleClose(after: TouchTiming.closeGrace)]
+        case .userClosed:
+            guard state != nil || lingering != nil else { return [] }
+            let onScreen = isVisible || lingering != nil
+            state = nil
+            lingering = nil
+            hiddenByUser = false
+            holdsKey = false
+            return [.cancelAutoClose, .stopEscalation, .cancelClose] + (onScreen ? [.close] : [])
         case .closeGraceFired:
             guard state == nil, lingering != nil else { return [] }
             lingering = nil

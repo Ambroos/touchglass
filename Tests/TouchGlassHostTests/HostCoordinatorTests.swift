@@ -127,7 +127,7 @@ import TouchGlassIPC
     @Test func cancelRepliesAndCloses() {
         var coordinator = HostCoordinator()
         _ = coordinator.handle(.getPin(GetPin(id: "r1", desc: cardDescription, fields: CardFields(number: "12 345 678"))), from: pinentry, now: now)
-        #expect(coordinator.handle(.cancel) == [.reply(pinentry, .cancelled(RequestRef(id: "r1"))), .panel(.dismiss)])
+        #expect(coordinator.handle(.cancel) == [.reply(pinentry, .cancelled(RequestRef(id: "r1"))), .panel(.userClosed)])
     }
 
     @Test func secondPromptWhileOneWaitsFallsBack() {
@@ -140,7 +140,7 @@ import TouchGlassIPC
         var coordinator = HostCoordinator()
         let shown = panelEvents(coordinator.handle(.confirm(Confirm(id: "c1", desc: "Please insert the card with serial number:\n\n12345678", ok: "_OK", cancel: "_Cancel")), from: pinentry, now: now))
         #expect(shown == [.show(.confirm(ConfirmRequest(purpose: .insertCard, title: "Insert your YubiKey", detail: "Please insert the card with serial number:\n\n12345678")))])
-        #expect(coordinator.handle(.confirm) == [.reply(pinentry, .confirmed(RequestRef(id: "c1"))), .panel(.dismiss)])
+        #expect(coordinator.handle(.confirm) == [.reply(pinentry, .confirmed(RequestRef(id: "c1"))), .panel(.userClosed)])
         #expect(coordinator.handle(.confirm(Confirm(id: "c2", desc: "Three ways", notok: "No")), from: pinentry, now: now) == [.reply(pinentry, .fallback(RequestRef(id: "c2")))])
     }
 
