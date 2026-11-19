@@ -22,7 +22,7 @@ public final class PanelController {
     /// state so the glass shows its key look, ignores the pointer so hover effects stay off, and
     /// makes no sound.
     public var holdsState = false {
-        didSet { panel.ignoresMouseEvents = holdsState }
+        didSet { updateMouseEvents() }
     }
     /// Tests: where the panel opens instead of its place on screen. The tests put it off every screen,
     /// with alpha 0, so a test run shows nothing.
@@ -72,6 +72,13 @@ public final class PanelController {
         for effect in machine.handle(event) {
             perform(effect)
         }
+        updateMouseEvents()
+    }
+
+    /// A panel that lingers in the close grace or runs its exit animation shows a state that the host no
+    /// longer waits on, so clicks pass through it instead of reaching buttons that do nothing.
+    private func updateMouseEvents() {
+        panel.ignoresMouseEvents = holdsState || machine.state == nil
     }
 
     /// Shakes the secure field, after a rejected passphrase.
@@ -152,11 +159,16 @@ public final class PanelController {
 
     /// Gives key status back to the frontmost app's window. A window that orders out resigns key, and the
     /// window server then makes the active app's key window key again; ordering the panel straight back
-    /// in, now unable to become key, keeps it on screen.
+    /// in, now unable to become key, keeps it on screen. Both happen in one animation group, which AppKit
+    /// commits as one visual change, so the panel doesn't blink while it lingers or shows an error.
     private func releaseKey() {
         keyGuardUntil = .distantPast
-        panel.orderOut(nil)
-        panel.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            context.allowsImplicitAnimation = false
+            panel.orderOut(nil)
+            panel.orderFrontRegardless()
+        }
     }
 
     // MARK: Entrance and exit

@@ -137,13 +137,30 @@ import Testing
         let request = PinRequest(operation: .sign, cardSerial: "12345678")
         _ = machine.handle(.show(.pinEntry(request)))
         #expect(machine.holdsKey)
-        _ = machine.handle(.dismiss)
+        // The answer is in: the keyboard goes back to the frontmost app when the grace starts.
+        let dismissed = machine.handle(.dismiss)
+        #expect(dismissed == [.cancelAutoClose, .stopEscalation, .setKey(false), .scheduleClose(after: TouchTiming.closeGrace)])
+        #expect(!machine.holdsKey)
         let effects = machine.handle(.show(.touchWait(wait)))
         #expect(effects.contains(.update(.touchWait(wait))))
         #expect(effects.contains(.cancelClose))
-        // The panel starts over for focus, as if it had opened: a touch wait never takes the keyboard.
+        // The touch wait finds the keyboard released already; its own setKey(false) changes nothing.
         #expect(effects.contains(.setKey(false)))
         #expect(!machine.holdsKey)
+    }
+
+    /// A PIN prompt that turns into the touch wait and the success without a dismiss keeps the keyboard
+    /// while the operation runs, and releases it when the success state auto-closes.
+    @Test func pinThenTouchThenSuccessKeepsKeyUntilTheAutoClose() {
+        var machine = PanelMachine()
+        let request = PinRequest(operation: .sign, cardSerial: "12345678")
+        _ = machine.handle(.show(.pinEntry(request)))
+        _ = machine.handle(.show(.verifying(request)))
+        #expect(!machine.handle(.show(.touchWait(wait))).contains(.setKey(false)))
+        #expect(!machine.handle(.show(.success(.sign))).contains(.setKey(false)))
+        #expect(machine.holdsKey)
+        let closed = machine.handle(.autoCloseFired)
+        #expect(closed == [.cancelAutoClose, .stopEscalation, .setKey(false), .scheduleClose(after: TouchTiming.closeGrace)])
     }
 
     @Test func failureThenNextPromptReplacesIt() {

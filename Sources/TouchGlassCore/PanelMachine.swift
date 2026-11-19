@@ -46,15 +46,19 @@ public struct PanelMachine: Sendable {
     /// The user hid the panel for the current operation.
     public private(set) var hiddenByUser = false
     /// The panel took keyboard focus for a prompt since it opened. It then keeps focus through
-    /// the touch and success states that follow: the user just typed in it, so keeping it takes
+    /// the touch and success states that follow without a dismiss in between, as in a card PIN
+    /// prompt that turns into the touch wait: the user just typed in it, so keeping it takes
     /// nothing from the frontmost app. An error state releases it, because the user's next keys,
-    /// such as Up Arrow and Return to retry, belong to the terminal. A touch-only panel never
-    /// takes focus.
+    /// such as Up Arrow and Return to retry, belong to the terminal. So does a dismiss or the
+    /// auto-close: the user's answer is in, and the panel only lingers. A touch wait that then
+    /// replaces the lingering state finds focus with the frontmost app already, and a prompt
+    /// takes it again. A touch-only panel never takes focus.
     public private(set) var holdsKey = false
     /// The state still on screen during the close grace, after `dismiss` or the auto-close ended it.
     /// A state that arrives meanwhile replaces it in place instead of closing and reopening the panel:
     /// the next operation's touch wait after a success, or the touch wait that the proxy reports
-    /// about `TouchTiming.detectionThreshold` after a PIN prompt ended.
+    /// about `TouchTiming.detectionThreshold` after a PIN prompt ended. A lingering state takes no
+    /// input: the host no longer waits for an answer to it.
     public private(set) var lingering: PanelState?
 
     public init() {}
@@ -72,13 +76,15 @@ public struct PanelMachine: Sendable {
         case .dismiss, .autoCloseFired:
             guard let ended = state else { return [] }
             let wasVisible = isVisible
+            let heldKey = holdsKey
             state = nil
             hiddenByUser = false
             // Focus starts over with the next state, as in a panel that opens.
             holdsKey = false
             guard wasVisible else { return [.cancelAutoClose, .stopEscalation] }
             lingering = ended
-            return [.cancelAutoClose, .stopEscalation, .scheduleClose(after: TouchTiming.closeGrace)]
+            // The frontmost app gets the keyboard back now, not after the grace and the exit animation.
+            return [.cancelAutoClose, .stopEscalation] + (heldKey ? [.setKey(false)] : []) + [.scheduleClose(after: TouchTiming.closeGrace)]
         case .userClosed:
             guard state != nil || lingering != nil else { return [] }
             let onScreen = isVisible || lingering != nil

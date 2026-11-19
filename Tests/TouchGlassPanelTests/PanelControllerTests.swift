@@ -157,6 +157,23 @@ import TouchGlassCore
 
     // MARK: Close grace
 
+    /// The answer is in when the prompt starts to linger: the window may no longer become key, and clicks
+    /// pass through it. The next prompt takes both back.
+    @Test func aLingeringPromptLetsGoOfTheKeyboardAndTakesNoClicks() async {
+        let controller = makeController()
+        controller.send(.show(pin))
+        #expect(controller.panel.allowsKey)
+        #expect(!controller.panel.ignoresMouseEvents)
+        controller.send(.dismiss)
+        #expect(controller.isPanelVisible)
+        #expect(!controller.panel.allowsKey)
+        #expect(controller.panel.ignoresMouseEvents)
+        controller.send(.show(pin))
+        #expect(controller.panel.allowsKey)
+        #expect(!controller.panel.ignoresMouseEvents)
+        controller.send(.userClosed)
+    }
+
     @Test func dismissKeepsThePanelForTheGraceThenCloses() async throws {
         let controller = makeController()
         controller.send(.show(touch()))
