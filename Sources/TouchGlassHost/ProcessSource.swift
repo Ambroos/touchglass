@@ -57,6 +57,8 @@ public protocol ProcessSource: Sendable {
     func processes(uid: UInt32) -> [Int32]
     func record(_ pid: Int32) -> ProcessRecord?
     func arguments(_ pid: Int32) -> ProcessArguments?
+    /// The path of the file the kernel runs for `pid`, symlinks resolved. Unlike `argv[0]`, the process can't set it.
+    func executablePath(_ pid: Int32) -> String?
     func currentDirectory(_ pid: Int32) -> String?
     func unixSockets(_ pid: Int32) -> [UnixSocketRecord]
 }
@@ -131,6 +133,14 @@ public struct LibprocProcessSource: ProcessSource {
             index += 1
         }
         return ProcessArguments(executable: executable, argv: argv)
+    }
+
+    public func executablePath(_ pid: Int32) -> String? {
+        // PROC_PIDPATHINFO_MAXSIZE, a macro Swift doesn't import.
+        var buffer = [UInt8](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        let length = buffer.withUnsafeMutableBytes { proc_pidpath(pid, $0.baseAddress, UInt32($0.count)) }
+        guard length > 0 else { return nil }
+        return String(decoding: buffer.prefix(Int(length)), as: UTF8.self)
     }
 
     /// The kernel's path for the process's working directory. A query of the process table: it opens and

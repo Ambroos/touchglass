@@ -17,8 +17,10 @@ import Testing
         #expect(arguments.argv.count == CommandLine.arguments.count)
         #expect(arguments.argv.first == CommandLine.arguments.first)
         #expect(source.currentDirectory(getpid()) == FileManager.default.currentDirectoryPath)
+        #expect(source.executablePath(getpid())?.hasPrefix("/") == true)
         #expect(source.processes(uid: getuid()).contains(getpid()))
         #expect(source.record(-5) == nil)
+        #expect(source.executablePath(-5) == nil)
     }
 
     @Test func socketpairEndsPointAtEachOther() throws {
@@ -88,6 +90,7 @@ import Testing
             return record
         }
         func arguments(_ pid: Int32) -> ProcessArguments? { base.arguments(pid) }
+        func executablePath(_ pid: Int32) -> String? { base.executablePath(pid) }
         func currentDirectory(_ pid: Int32) -> String? { base.currentDirectory(pid) }
         func unixSockets(_ pid: Int32) -> [UnixSocketRecord] { base.unixSockets(pid) }
     }

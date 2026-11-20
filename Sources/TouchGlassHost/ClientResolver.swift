@@ -147,7 +147,12 @@ public final class ClientResolver: ClientResolving, @unchecked Sendable {
             guard ContinuousClock.now < deadline else { return nil }
             guard let record = processes.record(current), record.uid == uid else { break }
             let argv = processes.arguments(current)?.argv ?? []
-            chain.append(ClientLabel.Link(name: record.name, argv: argv, cwd: processes.currentDirectory(current)))
+            chain.append(ClientLabel.Link(
+                name: record.name,
+                argv: argv,
+                cwd: processes.currentDirectory(current),
+                executable: processes.executablePath(current)
+            ))
             current = record.ppid
         }
         return ClientLabel.label(chain: chain)
