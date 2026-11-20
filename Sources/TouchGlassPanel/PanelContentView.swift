@@ -398,13 +398,15 @@ private struct SecureEntry: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            SecureField(text: textState.projectedValue, prompt: Text(verbatim: placeholder)) {
+            // The placeholder is our own text, not the field's prompt; see `PinFieldChrome`.
+            SecureField(text: textState.projectedValue, prompt: Text(verbatim: "")) {
                 Text(verbatim: placeholder)
             }
-            .textFieldStyle(.roundedBorder)
+            .textFieldStyle(.plain)
             .focused($focused)
-            .disabled(busy)
             .onSubmit(submit)
+            .modifier(PinFieldChrome(focused: focused, placeholder: text.isEmpty ? placeholder : nil))
+            .disabled(busy)
             .modifier(Shake(shakes: CGFloat(model.shakeCount)))
             .animation(reduceMotion ? nil : .linear(duration: 0.4 * model.animationScale), value: model.shakeCount)
             .accessibilityLabel(Text(verbatim: placeholder))
@@ -450,6 +452,63 @@ private struct SecureEntry: View {
     private func submit() {
         guard !busy, text.count >= minimumLength else { return }
         model.actions.submitSecret(text)
+    }
+}
+
+/// The PIN field's own bezel and focus ring, sized like a large rounded-border field.
+///
+/// About 0.8 s into the entrance, the field's AppKit drawing is redone, and for about 8 frames
+/// it draws without the glass behind it: the `.roundedBorder` bezel turns black and the field's
+/// own placeholder changes colour (`touchglass-screenshots --burst` shows it). So the bezel, focus
+/// ring and placeholder here are SwiftUI views, which draw steadily, over a plain field. The
+/// placeholder is hidden from accessibility; the field's label carries the same text.
+private struct PinFieldChrome: ViewModifier {
+    let focused: Bool
+    /// Shown while the field is empty.
+    let placeholder: String?
+    @Environment(\.appearsActive) private var appearsActive
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.colorScheme) private var colorScheme
+
+    private static let height: CGFloat = 24
+    private static let cornerRadius: CGFloat = 6
+    private static let ringWidth: CGFloat = 3.5
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
+        let ring = RoundedRectangle(cornerRadius: Self.cornerRadius + Self.ringWidth, style: .continuous)
+        content
+            .background(alignment: .leading) {
+                if let placeholder {
+                    Text(verbatim: placeholder)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 1)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
+            .padding(.horizontal, 7)
+            .frame(height: Self.height)
+            .background(shape.fill(fill))
+            .overlay(
+                shape.strokeBorder(.primary.opacity(contrast == .increased ? 0.5 : 0.1), lineWidth: contrast == .increased ? 1 : 0.5)
+            )
+            .overlay(
+                ring
+                    .strokeBorder(Color(nsColor: .keyboardFocusIndicatorColor), lineWidth: Self.ringWidth)
+                    .padding(-Self.ringWidth)
+                    .opacity(focused && appearsActive && isEnabled ? 1 : 0)
+                    .allowsHitTesting(false)
+            )
+            .contentShape(shape)
+    }
+
+    /// A plain colour, not `.primary`, which the glass renders vibrant and much fainter. Close to the
+    /// system field's fill: a little darker than the glass in light mode, a little lighter in dark.
+    private var fill: Color {
+        let base = colorScheme == .dark ? Color.white.opacity(0.07) : Color.black.opacity(0.05)
+        return isEnabled ? base : base.opacity(0.6)
     }
 }
 
