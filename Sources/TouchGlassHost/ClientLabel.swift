@@ -8,11 +8,14 @@ public enum ClientLabel {
         public var name: String
         public var argv: [String]
         public var cwd: String?
+        /// The kernel's path of the executable; `nil` when it can't be read.
+        public var executable: String?
 
-        public init(name: String, argv: [String], cwd: String? = nil) {
+        public init(name: String, argv: [String], cwd: String? = nil, executable: String? = nil) {
             self.name = name
             self.argv = argv
             self.cwd = cwd
+            self.executable = executable
         }
     }
 
@@ -37,11 +40,11 @@ public enum ClientLabel {
         return name.isEmpty ? nil : name
     }
 
+    /// Names the process by what the kernel runs, never by `argv[0]`, which the process sets itself: `exec -a git
+    /// gpg` must not read as git.
     static func executableName(_ link: Link) -> String {
-        let argv0 = link.argv.first.map { ($0 as NSString).lastPathComponent } ?? ""
-        // A login shell's argv[0] starts with "-".
-        let fromArgv = argv0.hasPrefix("-") ? String(argv0.dropFirst()) : argv0
-        return fromArgv.isEmpty ? link.name : fromArgv
+        let fromPath = link.executable.map { ($0 as NSString).lastPathComponent } ?? ""
+        return fromPath.isEmpty ? link.name : fromPath
     }
 
     // MARK: git

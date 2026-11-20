@@ -124,4 +124,6 @@ gpg-agent doesn't tell scdaemon or the pinentry which command needs the card, so
 - An ssh client outside git shows its destination host.
 - Any other process shows its executable name, such as `gpg`.
 
+Each process is named by the file the kernel runs, not by its `argv[0]`, which a process can set to anything: `exec -a git gpg` reads as `gpg`, not as git. A copy of a binary under another name still shows that name.
+
 The panel opens without waiting for the label, which fills in when the lookup finishes. The lookup gives up after 50 milliseconds. If several clients match and their labels differ, the panel shows no label.

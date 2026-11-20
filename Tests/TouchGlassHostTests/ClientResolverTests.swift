@@ -8,15 +8,16 @@ final class FakeProcesses: ProcessSource, @unchecked Sendable {
         var record: ProcessRecord
         var argv: [String]?
         var cwd: String?
+        var executable: String?
         var sockets: [UnixSocketRecord] = []
     }
 
     private let lock = NSLock()
     private var entries: [Int32: Entry] = [:]
 
-    func add(_ pid: Int32, ppid: Int32, name: String, argv: [String]?, cwd: String? = nil, uid: UInt32 = 501, start: Double = 1_000, sockets: [UnixSocketRecord] = []) {
+    func add(_ pid: Int32, ppid: Int32, name: String, argv: [String]?, cwd: String? = nil, executable: String? = nil, uid: UInt32 = 501, start: Double = 1_000, sockets: [UnixSocketRecord] = []) {
         lock.withLock {
-            entries[pid] = Entry(record: ProcessRecord(pid: pid, ppid: ppid, uid: uid, startTime: start, name: name), argv: argv, cwd: cwd, sockets: sockets)
+            entries[pid] = Entry(record: ProcessRecord(pid: pid, ppid: ppid, uid: uid, startTime: start, name: name), argv: argv, cwd: cwd, executable: executable, sockets: sockets)
         }
     }
 
@@ -33,6 +34,8 @@ final class FakeProcesses: ProcessSource, @unchecked Sendable {
     func arguments(_ pid: Int32) -> ProcessArguments? {
         lock.withLock { entries[pid]?.argv.map { ProcessArguments(executable: "/usr/bin/" + ($0.first ?? ""), argv: $0) } }
     }
+
+    func executablePath(_ pid: Int32) -> String? { lock.withLock { entries[pid]?.executable } }
 
     func currentDirectory(_ pid: Int32) -> String? { lock.withLock { entries[pid]?.cwd } }
 
@@ -187,6 +190,12 @@ final class FakeProcesses: ProcessSource, @unchecked Sendable {
         #expect(resolver(table).label(for: .owner(300)) == "gpg")
     }
 
+    @Test func aProcessCallingItselfGitIsNamedByItsExecutable() {
+        let table = FakeProcesses()
+        table.add(300, ppid: 250, name: "gpg", argv: ["git", "commit"], cwd: "/src/touchglass", executable: "/opt/example/bin/gpg")
+        #expect(resolver(table).label(for: .owner(300)) == "gpg")
+    }
+
     @Test func ownerValueParsing() {
         #expect(ClientQuery.ownerPID("4242/501 example-host") == 4242)
         #expect(ClientQuery.ownerPID("4242 example-host") == 4242)
@@ -203,8 +212,15 @@ final class FakeProcesses: ProcessSource, @unchecked Sendable {
 
     @Test func gpgRunByHand() {
         #expect(label([.init(name: "gpg", argv: ["gpg", "--sign", "notes.txt"]), .init(name: "zsh", argv: ["-zsh"])]) == "gpg")
-        #expect(label([.init(name: "gpg", argv: ["/opt/example/bin/gpg2", "-d"])]) == "gpg2")
+        #expect(label([.init(name: "gpg2", argv: ["gpg2", "-d"], executable: "/opt/example/bin/gpg2")]) == "gpg2")
         #expect(label([]) == nil)
+    }
+
+    @Test func argv0NeverNamesTheProcess() {
+        // The executable path wins; without one, the kernel's process name.
+        #expect(label([.init(name: "gpg", argv: ["git", "commit"], cwd: "/src/touchglass", executable: "/opt/example/bin/gpg")]) == "gpg")
+        #expect(label([.init(name: "gpg", argv: ["git", "commit"], cwd: "/src/touchglass")]) == "gpg")
+        #expect(label([.init(name: "gpg", argv: ["ssh", "attacker.example"], executable: "/opt/example/bin/gpg")]) == "gpg")
     }
 
     @Test func gitSubcommandAfterGlobalOptions() {
