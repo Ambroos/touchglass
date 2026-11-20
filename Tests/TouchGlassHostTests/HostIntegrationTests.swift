@@ -38,10 +38,13 @@ final class RecordingPanel: PanelDriving {
     }
 }
 
+/// Waits on the suspending clock, which stops while the Mac sleeps, like the host's dispatch timers: a
+/// deadline on the wall clock would pass during sleep while the timer it waits for doesn't.
 @MainActor
 func waitUntil(timeout: TimeInterval = 10, _ condition: () -> Bool) async -> Bool {
-    let deadline = Date().addingTimeInterval(timeout)
-    while Date() < deadline {
+    let clock = SuspendingClock()
+    let deadline = clock.now.advanced(by: .milliseconds(Int(timeout * 1000)))
+    while clock.now < deadline {
         if condition() { return true }
         try? await Task.sleep(for: .milliseconds(20))
     }

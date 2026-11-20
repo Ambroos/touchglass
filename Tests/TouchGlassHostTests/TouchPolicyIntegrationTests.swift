@@ -57,11 +57,11 @@ struct TouchPolicyIntegrationTests {
         #expect(await Task.detached { TouchCacheIntegrationTests.sign(agent) }.value)
         #expect(await waitUntil { panel.contains { $0 == .show(.success(.sign)) } })
         let before = panel.events.count
-        let commandAt = Date()
+        let commandAt = SuspendingClock.now
         let signed = Task.detached { TouchCacheIntegrationTests.sign(agent) }
         // Inside the 15 s window, but the policy says every signature needs a touch: no hold-back.
         #expect(await waitUntil(timeout: 5) { panel.events[before...].contains { if case .show(.touchWait) = $0 { true } else { false } } })
-        #expect(Date().timeIntervalSince(commandAt) < TouchTiming.cachedDetectionThreshold)
+        #expect(SuspendingClock.now - commandAt < .milliseconds(Int(TouchTiming.cachedDetectionThreshold * 1000)))
         #expect(await signed.value)
         // The policy is known, so the host never asked gpg-agent.
         #expect(query.requests.withLock { $0.isEmpty })
