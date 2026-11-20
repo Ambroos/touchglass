@@ -744,8 +744,8 @@ cmd_install() {
     write_pinentry_conf "$pinentry_plan"
     write_launchers "$app"
     record_conf
-    # Before --apply stops gpg-agent, while it may still run.
-    learn_cards quiet
+    # Before --apply stops gpg-agent, while it may still run. Best effort: nothing here may stop install.
+    learn_cards quiet || true
 
     if [ "$conf_changed" = 0 ]; then
         say "$conf already uses the TouchGlass launchers; no change."
@@ -1263,19 +1263,39 @@ store_cards() { # file
         echo '# <card serial> = <signature key> <decryption key> <authentication key>'
         echo '# TouchGlass and `touchglass card` rewrite this file. To use one touch cache window for every'
         echo '# card instead, set touch-cache in host.conf.'
-        { learned_cards | awk 'NR == FNR { new[$1] = 1; next } !($1 in new)' "$1" -; cat "$1"; } |
-            LC_ALL=C sort | awk '{ print $1 " = " $2 " " $3 " " $4 }'
+        # The cards just learned first, so the cap of 64 cards, as in the host, drops old ones.
+        { cat "$1"; learned_cards | awk 'NR == FNR { new[$1] = 1; next } !($1 in new)' "$1" -; } |
+            head -n 64 | LC_ALL=C sort | awk '{ print $1 " = " $2 " " $3 " " $4 }'
     } > "$staged"
     chmod 644 "$staged"
     mv -f "$staged" "$cards_file"
     staged=""
 }
 
+# How long one gpg-connect-agent run may take, in seconds. scdaemon makes it wait while another program
+# holds the card, such as during a PIN prompt. The tests shorten it.
+card_query_timeout="${TOUCHGLASS_CARD_QUERY_TIMEOUT:-10}"
+
+# Runs a command with a time limit: SIGTERM after the limit, SIGKILL 2 seconds later. Returns the
+# command's status, which is non-zero when it was stopped.
+run_limited() { # seconds command...
+    limit="$1"; shift
+    "$@" &
+    limited_pid=$!
+    # The watcher's output goes nowhere, so a command substitution around this doesn't wait for it.
+    ( sleep "$limit"; kill -TERM "$limited_pid" 2>/dev/null || exit 0; sleep 2; kill -KILL "$limited_pid" 2>/dev/null ) </dev/null >/dev/null 2>&1 &
+    watcher=$!
+    limited_status=0
+    wait "$limited_pid" || limited_status=$?
+    kill "$watcher" 2>/dev/null || true
+    return "$limited_status"
+}
+
 # Reads the touch policies of one card: prints "<sign> <decrypt> <auth>", or fails when the answer is
 # about another card or none. SERIALNO --demand picks the card the way gpg-agent does before each
 # operation, so GETATTR reads that card even with several attached.
 query_card() { # gpg-connect-agent serial [option]
-    out="$("$1" ${3:+"$3"} "scd serialno --demand=$2" 'scd getattr UIF' /bye 2>/dev/null)" || return 1
+    out="$(run_limited "$card_query_timeout" "$1" ${3:+"$3"} "scd serialno --demand=$2" 'scd getattr UIF' /bye 2>/dev/null)" || return 1
     printf '%s\n' "$out" | TG_SERIAL="$2" awk '
         $1 == "S" && $2 == "SERIALNO" { if (toupper($3) != toupper(ENVIRON["TG_SERIAL"])) exit 1; named = 1; next }
         named && $1 == "S" && $2 ~ /^UIF-[123]$/ {
@@ -1306,7 +1326,7 @@ learn_cards() { # [quiet]
         die "gpg-connect-agent not found; is GnuPG installed and gpgconf on PATH?"
     fi
     # SERIALNO refreshes scdaemon's list of cards; card_list then names each one.
-    serials="$("$gca" ${option:+"$option"} 'scd serialno' 'scd getinfo card_list' /bye 2>/dev/null |
+    serials="$(run_limited "$card_query_timeout" "$gca" ${option:+"$option"} 'scd serialno' 'scd getinfo card_list' /bye 2>/dev/null |
         awk '$1 == "S" && $2 == "SERIALNO" && $3 ~ /^[0-9A-Fa-f]+$/ && length($3) <= 32 { s = toupper($3); if (!(s in seen)) { seen[s] = 1; print s } }' || true)"
     if [ -z "$serials" ]; then
         if [ -n "$quiet" ]; then say "Learned no card's touch policy: no card attached, or gpg-agent isn't running. Run '$prog card' with your card attached."; return 0; fi
@@ -1356,22 +1376,23 @@ cmd_card() {
     fi
 }
 
-# The touch-cache value in host.conf: a number, or "auto" when the line is missing or invalid.
+# The touch-cache value that the host uses: the last valid line in host.conf, "auto" or digits with an
+# optional fraction up to 600, as HostSettings reads it. "auto" when no line is valid.
 touch_cache_setting() {
     v=""
     if [ -f "$host_conf" ]; then
         v="$(awk '
-            { line = $0; sub(/^[ \t]+/, "", line) }
+            { line = $0; sub(/^[ \t]+/, "", line); sub(/[ \t\r]+$/, "", line) }
             index(line, "touch-cache") == 1 {
                 rest = substr(line, 12)
-                if (rest ~ /^[ \t]*=/) { sub(/^[ \t]*=[ \t]*/, "", rest); sub(/[ \t\r]+$/, "", rest); v = rest }
+                if (rest !~ /^[ \t]*=/) next
+                sub(/^[ \t]*=[ \t]*/, "", rest)
+                if (tolower(rest) == "auto") v = "auto"
+                else if (rest ~ /^[0-9]+(\.[0-9]+)?$/ && rest + 0 <= 600) v = rest
             }
             END { print v }' "$host_conf")"
     fi
-    case "$v" in
-        "" | *[!0-9.]* | *.*.* | .) echo auto ;;
-        *) if awk -v x="$v" 'BEGIN { exit !(x + 0 <= 600) }'; then echo "$v"; else echo auto; fi ;;
-    esac
+    echo "${v:-auto}"
 }
 
 # Tells what uninstall leaves behind on purpose.

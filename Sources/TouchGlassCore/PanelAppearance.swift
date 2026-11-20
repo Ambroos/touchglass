@@ -51,7 +51,7 @@ public struct HostSettings: Sendable, Equatable {
             case "touch-cache":
                 if value.lowercased() == "auto" {
                     settings.touchCache = .auto
-                } else if let seconds = Double(value), seconds >= 0, seconds <= maximumTouchTimeout {
+                } else if Self.isDecimal(value), let seconds = Double(value), seconds >= 0, seconds <= maximumTouchTimeout {
                     settings.touchCache = .seconds(seconds)
                 }
             default:
@@ -59,6 +59,12 @@ public struct HostSettings: Sendable, Equatable {
             }
         }
         return settings
+    }
+
+    /// Digits with an optional fraction, as `touchglass status` reads the value too.
+    static func isDecimal(_ value: String) -> Bool {
+        let parts = value.split(separator: ".", omittingEmptySubsequences: false)
+        return (1...2).contains(parts.count) && parts.allSatisfy { !$0.isEmpty && $0.utf8.allSatisfy { (0x30...0x39).contains($0) } }
     }
 
     /// Reads `path`; a missing or unreadable file gives the defaults.

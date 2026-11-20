@@ -997,6 +997,8 @@ stub_cards() {
 #!/bin/sh
 printf '%s|' "\$@" >> "$T/gca.log"; printf '\n' >> "$T/gca.log"
 if [ -e "$T/agent-down" ]; then echo "gpg-connect-agent: no gpg-agent running in this session" >&2; exit 1; fi
+# Another program holds the card: scdaemon makes the command wait.
+if [ -e "$T/card-busy" ]; then exec sleep 30; fi
 current=""
 for arg in "\$@"; do
     case "\$arg" in
@@ -1140,6 +1142,42 @@ rm -f "$T/agent-down"
 : > "$T/cards"
 tg install --from "$app"
 check "no card: nothing stored" test ! -e "$SUPPORT/cards.conf"
+
+begin "install doesn't wait for a busy card"
+stub_cards
+printf '%s\n' "$YK1 %03+ %03+ %03+" > "$T/cards"
+: > "$T/card-busy"
+started="$(date +%s)"
+TOUCHGLASS_CARD_QUERY_TIMEOUT=1 tg install --apply --from "$app"
+check "gave up within the limit" test "$(( $(date +%s) - started ))" -lt 10
+check "still applied" test "$(kills)" = 1
+check "nothing stored" test ! -e "$SUPPORT/cards.conf"
+check "says how to learn later" out_has "Run 'touchglass card' with your card attached."
+
+begin "card: a busy card ends with an error, not a wait"
+stub_cards
+printf '%s\n' "$YK1 %03+ %03+ %03+" > "$T/cards"
+: > "$T/card-busy"
+TOUCHGLASS_CARD_QUERY_TIMEOUT=1 "$tool" card > "$T/out" 2>&1 && fail "card succeeded"
+check "asks to attach the card" out_has "no card found"
+
+begin "status reads touch-cache as the host does"
+mkdir -p "$SUPPORT"
+printf '%s\n' "touch-cache = 30" "touch-cache = 1e2" "touch-cache = soon" > "$SUPPORT/host.conf"
+tg status
+check "invalid lines don't count" out_has "touch-cache:       30 seconds for every card"
+printf '%s\n' "touch-cache = 30" "touch-cache = AUTO" > "$SUPPORT/host.conf"
+tg status
+check "auto counts" out_has "touch-cache:       auto"
+
+begin "card: the file keeps at most 64 cards"
+stub_cards
+mkdir -p "$SUPPORT"
+i=0; while [ $i -lt 70 ]; do printf 'D27600012401030400060000%04d0000 = on on on\n' "$i"; i=$((i + 1)); done > "$SUPPORT/cards.conf"
+printf '%s\n' "$YK1 %03+ %03+ %03+" > "$T/cards"
+tg card
+check "new card kept" grep -qx "$YK1 = cached cached cached" "$SUPPORT/cards.conf"
+check "64 cards" test "$(grep -c '^D276' "$SUPPORT/cards.conf")" = 64
 
 begin "install --dry-run asks no card, uninstall keeps the policies"
 stub_cards
