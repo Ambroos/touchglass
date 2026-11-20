@@ -189,6 +189,38 @@ struct ProxyIntegrationTests {
         #expect(harness.finish()?.status == 0)
     }
 
+    /// Two cards attached: each report names the card that answered, and a GETATTR that scdaemon answers
+    /// for a card the proxy can't tell reports nothing.
+    @Test func twoCardsAreNeverMixedUp() throws {
+        let second = "D2760001240103040006999999990000"
+        var card = ProxyHarness.Card()
+        card.uif = ["%03+", "%03+", "%03+"]
+        card.second_serial = second
+        card.second_uif = ["%01+", "%00+", "%02+"]
+        let (harness, host, _) = try setUp(card: card)
+        defer { harness.cleanUp(); host?.close() }
+        let agent = harness.agent
+        #expect(agent.transact("SERIALNO --demand=\(second)").isOK)
+        #expect(agent.transact("GETATTR UIF").isOK)
+        // gpg-agent hands the connection to its next client: scdaemon forgets the card, and a bare GETATTR
+        // answers for the card selected last, which the proxy can't know.
+        #expect(agent.transact("RESTART").isOK)
+        #expect(agent.transact("GETATTR UIF").isOK)
+        #expect(agent.transact("GETINFO card_list").isOK)
+        #expect(agent.transact("GETATTR UIF").isOK)
+        #expect(agent.transact("SERIALNO --demand=\(ProxyHarness.serial)").isOK)
+        #expect(agent.transact("LEARN --force").isOK)
+        #expect(summaries(host, waitingFor: 6) == [
+            "touch_policy \(second) slot=1 uif=1",
+            "touch_policy \(second) slot=2 uif=0",
+            "touch_policy \(second) slot=3 uif=2",
+            "touch_policy \(ProxyHarness.serial) slot=1 uif=3",
+            "touch_policy \(ProxyHarness.serial) slot=2 uif=3",
+            "touch_policy \(ProxyHarness.serial) slot=3 uif=3",
+        ])
+        #expect(harness.finish()?.status == 0)
+    }
+
     /// A card without a button answers GETATTR UIF with an error: nothing to report.
     @Test func cardWithoutButtonReportsNothing() throws {
         let (harness, host, _) = try setUp()

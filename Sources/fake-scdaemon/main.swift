@@ -51,10 +51,21 @@ struct Config: Decodable {
     /// The values of the `S UIF-1` to `S UIF-3` lines for GETATTR and LEARN, as scdaemon escapes them, such
     /// as "%03+". Absent: the card has no button, so GETATTR UIF fails and LEARN sends no UIF lines.
     var uif: [String]?
+    /// A second attached card and its UIF values. Each connection has a current card, which SERIALNO
+    /// --demand selects and RESTART forgets; without one, a command uses the card that any connection
+    /// selected last, as scdaemon does.
+    var second_serial: String?
+    var second_uif: [String]?
 
     enum CodingKeys: String, CodingKey {
         case socket, record_dir, serial, keys, pin, verified, pincache, pincache_hit, needpin_delay_ms, touch_ms, touch_cache_ms, cached_ms
-        case touch_timeout, exit_on_eof, eof_linger_ms, split_writes, uif
+        case touch_timeout, exit_on_eof, eof_linger_ms, split_writes, uif, second_serial, second_uif
+    }
+
+    var serials: [String] { [serial] + (second_serial.map { [$0] } ?? []) }
+
+    func uif(for card: String) -> [String]? {
+        card == second_serial ? second_uif : uif
     }
 
     init() {}
@@ -78,6 +89,8 @@ struct Config: Decodable {
         eof_linger_ms = try c.decodeIfPresent(Int.self, forKey: .eof_linger_ms) ?? eof_linger_ms
         split_writes = try c.decodeIfPresent(Bool.self, forKey: .split_writes) ?? split_writes
         uif = try c.decodeIfPresent([String].self, forKey: .uif)
+        second_serial = try c.decodeIfPresent(String.self, forKey: .second_serial)
+        second_uif = try c.decodeIfPresent([String].self, forKey: .second_uif)
     }
 }
 
@@ -112,6 +125,8 @@ final class Card: @unchecked Sendable {
     let lock = NSLock()
     var verified: Set<Int>
     var lastTouch: Double = -1e9
+    /// The card that a connection selected last.
+    var lastSelected = config.serial
 
     init() { verified = Set(config.verified) }
 }
@@ -257,6 +272,8 @@ func usage(_ slot: Int) -> String { slot == 1 ? "sc" : slot == 2 ? "e" : "sa" }
 
 /// Serves one connection until BYE or end of file. Returns true if it ended with end of file.
 func serve(_ conn: Connection, isPipe: Bool) -> Bool {
+    /// The card that this connection selected; nil until SERIALNO, and after RESTART.
+    var current: String?
     conn.send("OK GNU Privacy Guard's Smartcard server ready, process \(getpid())")
     while let raw = conn.readLine() {
         var lineBytes = raw[...]
@@ -275,20 +292,35 @@ func serve(_ conn: Connection, isPipe: Bool) -> Bool {
                 conn.send("OK")
             case "version": conn.send("D 2.5.24"); conn.send("OK")
             case "pid": conn.send("D \(getpid())"); conn.send("OK")
+            case "card_list":
+                for serial in config.serials { conn.send("S SERIALNO " + serial) }
+                conn.send("OK")
             default: conn.send("ERR 100663427 Invalid value <SCD>")
             }
         case "OPTION", "SETDATA", "NOP":
             conn.send("OK")
         case "RESTART":
+            current = nil
             conn.send("OK")
         case "SERIALNO":
-            conn.send("S SERIALNO " + config.serial)
+            if let demand = args.first(where: { $0.hasPrefix("--demand=") })?.dropFirst("--demand=".count) {
+                guard config.serials.contains(String(demand)) else {
+                    current = nil
+                    conn.send("ERR 100696144 No such device <SCD>")
+                    continue
+                }
+                current = String(demand)
+            } else {
+                current = card.lock.withLock { card.lastSelected }
+            }
+            card.lock.withLock { card.lastSelected = current! }
+            conn.send("S SERIALNO " + current!)
             conn.send("OK")
         case "GETATTR":
             // Only the touch policy: UIF for all three slots, or UIF-<n> for one.
             let name = args.first?.uppercased() ?? ""
             let slots = name == "UIF" ? [1, 2, 3] : name.hasPrefix("UIF-") ? Int(name.dropFirst(4)).map { [$0] } ?? [] : []
-            guard let uif = config.uif, !slots.isEmpty, slots.allSatisfy({ (1...uif.count).contains($0) }) else {
+            guard let uif = config.uif(for: current ?? card.lock.withLock({ card.lastSelected })), !slots.isEmpty, slots.allSatisfy({ (1...uif.count).contains($0) }) else {
                 conn.send("ERR 100663354 No data <SCD>")
                 continue
             }
@@ -297,9 +329,10 @@ func serve(_ conn: Connection, isPipe: Bool) -> Bool {
         case "LEARN":
             // A short version of what scdaemon sends for an OpenPGP card with a button.
             conn.send("S READER Fake Reader 00 00")
-            conn.send("S SERIALNO " + config.serial)
+            let learned = current ?? card.lock.withLock { card.lastSelected }
+            conn.send("S SERIALNO " + learned)
             conn.send("S APPTYPE openpgp")
-            for (index, value) in (config.uif ?? []).enumerated() { conn.send("S UIF-\(index + 1) \(value)") }
+            for (index, value) in (config.uif(for: learned) ?? []).enumerated() { conn.send("S UIF-\(index + 1) \(value)") }
             conn.send("OK")
         case "KEYINFO":
             let wanted: [(String, Int)]

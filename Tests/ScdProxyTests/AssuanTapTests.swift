@@ -221,7 +221,10 @@ import TouchGlassIPC
     @Test func oddUifValuesReportNoByte() {
         let sink = Collector()
         let detector = OperationDetector(sink: sink, touchDelay: 10)
-        feed(detector, .toClient, "S SERIALNO \(Self.serial)\nS UIF-1\nS UIF-2 %G1+\nS UIF-3 %7F+\nS UIF-4 %01+\nOK\n")
+        feed(detector, .toServer, "SERIALNO\n")
+        feed(detector, .toClient, "S SERIALNO \(Self.serial)\nOK\n")
+        feed(detector, .toServer, "GETATTR UIF\n")
+        feed(detector, .toClient, "S UIF-1\nS UIF-2 %G1+\nS UIF-3 %7F+\nS UIF-4 %01+\nOK\n")
         detector.drain()
         #expect(sink.summaries == [
             "touch_policy \(Self.serial) 1 -", "touch_policy \(Self.serial) 2 -", "touch_policy \(Self.serial) 3 127",
@@ -232,12 +235,37 @@ import TouchGlassIPC
     @Test func cardSerialIsPerConnection() {
         let sink = Collector()
         let detector = OperationDetector(sink: sink, touchDelay: 10)
+        var request = AssuanTap(direction: .toServer)
+        detector.observe(connection: "a", direction: .toServer, lines: request.feed(Array("SERIALNO\n".utf8)), time: 0)
         var tap = AssuanTap(direction: .toClient)
         detector.observe(connection: "a", direction: .toClient, lines: tap.feed(Array("S SERIALNO \(Self.serial)\nOK\n".utf8)), time: 0)
         var other = AssuanTap(direction: .toClient)
         detector.observe(connection: "b", direction: .toClient, lines: other.feed(Array("S UIF-1 %03+\nOK\n".utf8)), time: 0)
         detector.drain()
         #expect(sink.summaries.isEmpty)
+    }
+
+    /// After RESTART, a failed SERIALNO, or a reply that lists cards, the connection has no card that the
+    /// UIF lines can be about.
+    @Test func uifLinesAfterTheCardIsUnclearAreIgnored() {
+        let other = "D2760001240103040006999999990000"
+        let cases = [
+            "SERIALNO\n|S SERIALNO \(Self.serial)\nOK\n|RESTART\n|OK\n",
+            "SERIALNO\n|S SERIALNO \(Self.serial)\nOK\n|SERIALNO --demand=\(other)\n|ERR 100696144 No such device <SCD>\n",
+            "GETINFO card_list\n|S SERIALNO \(Self.serial)\nS SERIALNO \(other)\nOK\n",
+            "GETATTR SERIALNO\n|S SERIALNO \(other)\nOK\n",
+        ]
+        for script in cases {
+            let sink = Collector()
+            let detector = OperationDetector(sink: sink, touchDelay: 10)
+            for (index, part) in script.split(separator: "|").enumerated() {
+                feed(detector, index % 2 == 0 ? .toServer : .toClient, String(part))
+            }
+            feed(detector, .toServer, "GETATTR UIF\n")
+            feed(detector, .toClient, "S UIF-1 %03+\nOK\n")
+            detector.drain()
+            #expect(sink.summaries.isEmpty, "\(script)")
+        }
     }
 
     @Test func pinpadTouchWaitSaysSo() {

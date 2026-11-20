@@ -25,6 +25,7 @@ public enum ScdCommand: String, Sendable, Equatable, CaseIterable {
     case readkey = "READKEY"
     case checkpin = "CHECKPIN"
     case restart = "RESTART"
+    case switchcard = "SWITCHCARD"
     case option = "OPTION"
     case devinfo = "DEVINFO"
     case bye = "BYE"

@@ -162,6 +162,27 @@ public struct TouchPolicyReport: Codable, Sendable, Equatable {
     }
 }
 
+/// Card serial numbers that peers report.
+public enum CardSerial {
+    /// The longest serial scdaemon reports: an OpenPGP application ID has 32 hex digits.
+    public static let maxLength = 32
+
+    /// Whether `serial` is what scdaemon reports for a card: 1 to 32 ASCII hex digits. A serial reaches
+    /// the host, `cards.conf`, an Assuan command line and the log, so nothing else is accepted.
+    public static func isValid(_ serial: String) -> Bool {
+        (1...maxLength).contains(serial.utf8.count) && serial.utf8.allSatisfy(isHexDigit)
+    }
+
+    /// Whether `serial` is a valid OpenPGP application ID: 32 hex digits that start with D276000124.
+    public static func isOpenPGP(_ serial: String) -> Bool {
+        serial.utf8.count == 32 && isValid(serial) && serial.uppercased().hasPrefix("D276000124")
+    }
+
+    static func isHexDigit(_ byte: UInt8) -> Bool {
+        (0x30...0x39).contains(byte) || (0x41...0x46).contains(byte) || (0x61...0x66).contains(byte)
+    }
+}
+
 /// The value of an `S UIF-<n>` status line.
 public enum UIFValue {
     /// The first byte of a UIF status value as scdaemon escapes it: `%XX` for a control byte, `+`, `"` or
@@ -172,7 +193,8 @@ public enum UIFValue {
         guard let first = bytes.first else { return nil }
         switch first {
         case UInt8(ascii: "%"):
-            guard bytes.count >= 3, let value = UInt8(String(decoding: bytes[1...2], as: UTF8.self), radix: 16) else { return nil }
+            guard bytes.count >= 3, CardSerial.isHexDigit(bytes[1]), CardSerial.isHexDigit(bytes[2]),
+                  let value = UInt8(String(decoding: bytes[1...2], as: UTF8.self), radix: 16) else { return nil }
             return value
         case UInt8(ascii: "+"):
             return 0x20

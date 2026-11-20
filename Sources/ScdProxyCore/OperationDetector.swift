@@ -19,9 +19,12 @@ public protocol EventSink: Sendable {
 ///   open, and `touchDelay` passes after the operation command, the last inquiry answer or
 ///   `S PINCACHE_PUT`, the detector reports a touch wait.
 /// - `OK` or `ERR` ends the operation.
-/// - `S SERIALNO <serial>` names the connection's card; a later `S UIF-<n> <value>` on the connection
-///   reports the touch policy of that card's slot `n` to the host. `LEARN`, as `gpg --card-status` sends
-///   it, and `GETATTR UIF` produce these lines.
+/// - `S SERIALNO <serial>` in the reply to `SERIALNO`, `LEARN` or `SWITCHCARD` names the connection's card;
+///   a later `S UIF-<n> <value>` on the connection reports the touch policy of that card's slot `n` to the
+///   host. `LEARN`, as `gpg --card-status` sends it, and `GETATTR UIF` produce these lines. The agent's
+///   `SERIALNO` and `RESTART` forget the card first: after `RESTART`, scdaemon answers for whichever card
+///   it picks, and a failed `SERIALNO` names none. Other replies, such as `GETINFO card_list`, list several
+///   cards and name none.
 ///
 /// All state lives on one serial queue, so the forwarding threads only enqueue and never wait.
 public final class OperationDetector: @unchecked Sendable {
@@ -118,7 +121,9 @@ public final class OperationDetector: @unchecked Sendable {
 
         switch line {
         case let .command(keyword, args):
-            state.command = (ScdCommand(keyword: keyword), time)
+            let command = ScdCommand(keyword: keyword)
+            state.command = (command, time)
+            if command == .serialno || command == .restart { state.cardSerial = nil }
             guard ["PKSIGN", "PKAUTH", "PKDECRYPT"].contains(keyword) else {
                 state.inquiry = nil
                 return
@@ -168,7 +173,8 @@ public final class OperationDetector: @unchecked Sendable {
             if keyword == "KEYINFO" {
                 recordKeyInfo(args)
             } else if keyword == "SERIALNO" {
-                state.cardSerial = args.first.flatMap { Self.isCardSerial($0) ? $0 : nil }
+                guard let command = state.command?.keyword, [.serialno, .learn, .switchcard].contains(command) else { return }
+                state.cardSerial = args.first.flatMap { CardSerial.isValid($0) ? $0 : nil }
             } else if keyword.hasPrefix("UIF-"), let slot = Int(keyword.dropFirst(4)), (1...3).contains(slot) {
                 guard let serial = state.cardSerial else { return }
                 let uif = args.first.flatMap(UIFValue.firstByte).map(Int.init)
@@ -246,12 +252,8 @@ public final class OperationDetector: @unchecked Sendable {
         let ref = args[3].uppercased()
         guard ref.hasPrefix("OPENPGP."), let slot = Int(ref.dropFirst("OPENPGP.".count)) else { return }
         let serial = args[2]
-        keys[args[0].uppercased()] = (slot, Self.isCardSerial(serial) ? serial : nil)
-    }
-
-    /// The serial reaches the host and the log: keep it only if it is what a card reports, hex digits.
-    static func isCardSerial(_ serial: String) -> Bool {
-        (1...32).contains(serial.utf8.count) && serial.utf8.allSatisfy { (0x30...0x39).contains($0) || (0x41...0x46).contains($0) || (0x61...0x66).contains($0) }
+        // The serial reaches the host and the log: keep it only if it is what a card reports.
+        keys[args[0].uppercased()] = (slot, CardSerial.isValid(serial) ? serial : nil)
     }
 
     private func armTouchTimer(_ conn: String, _ state: inout ConnectionState, from time: Double) {

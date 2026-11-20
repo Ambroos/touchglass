@@ -2,6 +2,22 @@ import Foundation
 import Testing
 @testable import TouchGlassIPC
 
+@Suite struct CardSerialTests {
+    @Test func acceptsOnlyAsciiHex() {
+        #expect(CardSerial.isValid("D2760001240103040006123456780000"))
+        #expect(CardSerial.isValid("abc123"))
+        #expect(!CardSerial.isValid(""))
+        #expect(!CardSerial.isValid(String(repeating: "A", count: 33)))
+        #expect(!CardSerial.isValid("D276\nOK"))
+        #expect(!CardSerial.isValid("D276 0001"))
+        // Fullwidth digits count as hex digits for Character, not here.
+        #expect(!CardSerial.isValid("D27600012401030400061234567800\u{FF10}\u{FF10}"))
+        #expect(CardSerial.isOpenPGP("D2760001240103040006123456780000"))
+        #expect(!CardSerial.isOpenPGP("D2760001240103040006123456780000FF"))
+        #expect(!CardSerial.isOpenPGP("A2760001240103040006123456780000"))
+    }
+}
+
 @Suite struct UIFValueTests {
     @Test func decodesScdaemonEscapes() {
         #expect(UIFValue.firstByte("%03+") == 0x03)
@@ -20,6 +36,7 @@ import Testing
         #expect(UIFValue.firstByte("%0") == nil)
         #expect(UIFValue.firstByte("%G3+") == nil)
         #expect(UIFValue.firstByte("%-1") == nil)
+        #expect(UIFValue.firstByte("%+1") == nil)
         #expect(UIFValue.firstByte("\u{e9}") == nil)
         #expect(UIFValue.firstByte("\u{1}") == nil)
     }

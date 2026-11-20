@@ -36,6 +36,9 @@ public final class ProxyHarness: @unchecked Sendable {
         public var split_writes = false
         /// The `S UIF-<n>` values, escaped; see fake-scdaemon's `Config.uif`.
         public var uif: [String]?
+        /// A second attached card; see fake-scdaemon's `Config.second_serial`.
+        public var second_serial: String?
+        public var second_uif: [String]?
         public init() {}
     }
 
