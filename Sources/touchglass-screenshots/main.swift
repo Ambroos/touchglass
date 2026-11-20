@@ -22,6 +22,9 @@ let usage = """
       --no-client               Hide the client line, as show-client = no does.
       --backdrop <colour>       white, black or #rrggbb behind the panel.
       --capture <png>           Write the panel's region to this PNG when ready.
+      --burst <dir>             Instead, capture the panel's region about 60 times a second from
+                                the moment it shows, for 2 seconds, as frame-NNN.png in <dir>
+                                (times in times.txt), then exit. For checking the entrance.
     """
 
 func fail(_ message: String) -> Never {
@@ -46,6 +49,9 @@ func parseArguments() -> (HoldState, HoldOptions) {
         case "--capture":
             guard !arguments.isEmpty else { fail("--capture needs a path.") }
             options.capturePath = arguments.removeFirst()
+        case "--burst":
+            guard !arguments.isEmpty else { fail("--burst needs a directory.") }
+            options.burstDirectory = arguments.removeFirst()
         case "--color-scheme":
             switch arguments.isEmpty ? "" : arguments.removeFirst() {
             case "light": options.colorScheme = .aqua

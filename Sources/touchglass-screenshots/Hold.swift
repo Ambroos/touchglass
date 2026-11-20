@@ -48,6 +48,8 @@ struct HoldOptions {
     var colorScheme: NSAppearance.Name?
     /// Writes the panel's region to this PNG when it is ready.
     var capturePath: String?
+    /// Captures the entrance many times a second into this directory, then exits.
+    var burstDirectory: String?
 }
 
 /// A solid colour for the window behind the panel during screenshots.
@@ -102,11 +104,17 @@ final class HoldRunner {
     }
 
     func run(_ hold: HoldState) async {
-        if options.capturePath != nil { checkScreen() }
+        if options.capturePath != nil || options.burstDirectory != nil { checkScreen() }
         let client = options.client ?? hold.client
         let state = makeState(hold, client: client)
+        // The backdrop goes up first in a burst, so the frames show the entrance over it.
+        if options.burstDirectory != nil, let backdrop = options.backdrop { showBackdrop(backdrop) }
         controller.send(.show(state))
-        if let backdrop = options.backdrop { showBackdrop(backdrop) }
+        if options.burstDirectory == nil, let backdrop = options.backdrop { showBackdrop(backdrop) }
+        if let directory = options.burstDirectory {
+            await burst(into: directory)
+            exit(0)
+        }
 
         try? await Task.sleep(for: .seconds(Self.settle))
         controller.window.makeKey()
@@ -122,7 +130,8 @@ final class HoldRunner {
     private func makeState(_ hold: HoldState, client: String?) -> PanelState {
         switch hold {
         case .pinEntry, .pinRetry:
-            controller.model.sampleSecretLength = 6
+            // A burst shows the field as a real prompt opens: empty.
+            controller.model.sampleSecretLength = options.burstDirectory == nil ? 6 : 0
             let attempts = hold == .pinRetry ? 2 : nil
             return .pinEntry(PinRequest(operation: .sign, cardSerial: Self.serial, attemptsLeft: attempts, minimumLengthOverride: 1, client: client))
         case .touch, .ssh:
@@ -190,28 +199,74 @@ extension HoldRunner {
         exit(1)
     }
 
-    private func capture(to path: String) {
-        typealias CreateImage = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
+    private typealias CreateImage = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
+
+    private func windowImageFunction() -> CreateImage {
         guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGWindowListCreateImage") else {
             stop("CGWindowListCreateImage is missing on this system.")
         }
-        let create = unsafeBitCast(symbol, to: CreateImage.self)
-        let window = controller.window
+        return unsafeBitCast(symbol, to: CreateImage.self)
+    }
+
+    /// The panel window's region, in the coordinates `CGWindowListCreateImage` takes.
+    private func captureRect() -> CGRect {
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
-        let frame = window.frame
-        let rect = CGRect(x: frame.minX, y: primaryHeight - frame.maxY, width: frame.width, height: frame.height)
+        let frame = controller.window.frame
+        return CGRect(x: frame.minX, y: primaryHeight - frame.maxY, width: frame.width, height: frame.height)
+    }
+
+    private func capture(to path: String) {
+        let create = windowImageFunction()
         let options = CGWindowListOption([.optionOnScreenBelowWindow, .optionIncludingWindow]).rawValue
         let imageOptions = CGWindowImageOption.bestResolution.rawValue
-        guard let image = create(rect, options, CGWindowID(window.windowNumber), imageOptions)?.takeRetainedValue() else {
+        guard let image = create(captureRect(), options, CGWindowID(controller.window.windowNumber), imageOptions)?.takeRetainedValue() else {
             stop("Capturing the panel failed.")
         }
+        write(image, to: path)
+        print("captured \(path) \(image.width)x\(image.height)")
+    }
+
+    /// Captures the panel's region off the main thread, about every 16 ms for 2 seconds from now,
+    /// writes the frames and their times since the start, and prints `captured burst <count>`.
+    private func burst(into directory: String) async {
+        let create = windowImageFunction()
+        let rect = captureRect()
+        let windowID = CGWindowID(controller.window.windowNumber)
+        let options = CGWindowListOption([.optionOnScreenBelowWindow, .optionIncludingWindow]).rawValue
+        let imageOptions = CGWindowImageOption.bestResolution.rawValue
+        let frames: [(TimeInterval, CGImage)] = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInteractive).async {
+                var frames: [(TimeInterval, CGImage)] = []
+                let start = Date()
+                while Date().timeIntervalSince(start) < 2.0 {
+                    let shot = Date()
+                    if let image = create(rect, options, windowID, imageOptions)?.takeRetainedValue() {
+                        frames.append((shot.timeIntervalSince(start), image))
+                    }
+                    let wait = 0.016 - Date().timeIntervalSince(shot)
+                    if wait > 0 { Thread.sleep(forTimeInterval: wait) }
+                }
+                continuation.resume(returning: frames)
+            }
+        }
+        try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        var times = ""
+        for (index, (time, image)) in frames.enumerated() {
+            let name = String(format: "frame-%03d.png", index)
+            write(image, to: (directory as NSString).appendingPathComponent(name))
+            times += String(format: "%@ %.3f\n", name, time)
+        }
+        try? times.write(toFile: (directory as NSString).appendingPathComponent("times.txt"), atomically: true, encoding: .utf8)
+        print("captured burst \(frames.count)")
+    }
+
+    private func write(_ image: CGImage, to path: String) {
         let url = URL(fileURLWithPath: path)
         guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else {
             stop("Can't write \(path).")
         }
         CGImageDestinationAddImage(destination, image, nil)
         guard CGImageDestinationFinalize(destination) else { stop("Can't write \(path).") }
-        print("captured \(path) \(image.width)x\(image.height)")
     }
 }
 
