@@ -46,9 +46,9 @@ The `fixed` variants can't change without replacing the key; for the panel, they
 TouchGlass reads the policies from the card's User Interaction Flag data objects. Reading them needs no PIN and no touch. The host learns them in two ways:
 
 - When gpg-agent reads the card's data, for example for `gpg --card-status`, the policies pass through `touchglass-scdaemon`, which reports them to the host.
-- After an operation on an OpenPGP card whose policy the host doesn't know, the host asks gpg-agent once, 3 seconds after the operation ended and while no other operation runs. It runs `gpg-connect-agent --no-autostart --homedir <your GnuPG home> 'scd serialno --demand=<card serial>' 'scd getattr UIF' /bye`. The first command picks the card the way gpg-agent does before each operation, so with several cards attached, the host reads the right one. The host asks again if a key it learned as `off` waits for a touch until the card times out, at most once a minute.
+- After an operation on an OpenPGP card whose policy the host doesn't know, the host asks gpg-agent once, 3 seconds after the operation ended and while no other operation runs. It runs `gpg-connect-agent --no-autostart --homedir <your GnuPG home> 'scd serialno --demand=<card serial>' 'scd getattr UIF' /bye`. The first command picks the card the way gpg-agent does before each operation, so with several cards attached, the host reads the right one. The host runs the `gpg-connect-agent` in the `bin` directory next to the scdaemon that `touchglass install` recorded, else the first one in `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/local/MacGPG2/bin` and `/opt/local/bin`. It stops the query after 10 seconds. The host asks again, at most once a minute, if a key it learned as `off` stays silent until its touch step shows, or until the card times out.
 
-The host stores the policies in `~/Library/Application Support/TouchGlass/cards.conf`, one card per line, and reads the file again when it changes. A reading replaces what the file held for that card.
+The host stores the policies in `~/Library/Application Support/TouchGlass/cards.conf`, one card per line, and reads the file again when it changes. A reading replaces what the file held for that card. The file holds at most 64 cards.
 
 To read the policies of the attached cards yourself and store them, run:
 

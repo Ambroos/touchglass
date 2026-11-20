@@ -282,13 +282,10 @@ import TouchGlassIPC
     }
 
     @Test func gnupgContextFromArgumentsAndEnvironment() {
-        let homebrew = "/opt/homebrew/libexec/scdaemon"
-        #expect(ProxyConfig.gnupgContext(arguments: ["--multi-server"], environment: [:], scdaemonPath: homebrew) == GnuPGContext(home: nil, binDir: "/opt/homebrew/bin"))
-        #expect(ProxyConfig.gnupgContext(arguments: ["--multi-server", "--homedir", "/tmp/g h"], environment: ["GNUPGHOME": "/elsewhere"], scdaemonPath: homebrew).home == "/tmp/g h")
-        #expect(ProxyConfig.gnupgContext(arguments: ["--homedir=/tmp/x"], environment: [:], scdaemonPath: homebrew).home == "/tmp/x")
-        #expect(ProxyConfig.gnupgContext(arguments: ["--multi-server"], environment: ["GNUPGHOME": "/elsewhere"], scdaemonPath: homebrew).home == "/elsewhere")
-        #expect(ProxyConfig.gnupgContext(arguments: [], environment: [:], scdaemonPath: "/usr/local/MacGPG2/libexec/scdaemon").binDir == "/usr/local/MacGPG2/bin")
-        #expect(ProxyConfig.gnupgContext(arguments: [], environment: [:], scdaemonPath: "/somewhere/scdaemon").binDir == nil)
+        #expect(ProxyConfig.gnupgContext(arguments: ["--multi-server"], environment: [:]) == GnuPGContext(home: nil))
+        #expect(ProxyConfig.gnupgContext(arguments: ["--multi-server", "--homedir", "/tmp/g h"], environment: ["GNUPGHOME": "/elsewhere"]).home == "/tmp/g h")
+        #expect(ProxyConfig.gnupgContext(arguments: ["--homedir=/tmp/x"], environment: [:]).home == "/tmp/x")
+        #expect(ProxyConfig.gnupgContext(arguments: ["--multi-server"], environment: ["GNUPGHOME": "/elsewhere"]).home == "/elsewhere")
     }
 
     @Test func closedConnectionEndsOperation() {

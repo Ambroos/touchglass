@@ -55,19 +55,17 @@ public struct Hello: Codable, Sendable, Equatable {
 public struct GnuPGContext: Codable, Sendable, Equatable {
     /// The GnuPG home directory that gpg-agent passed to scdaemon with `--homedir`, or `GNUPGHOME`. Nil for
     /// the default, `~/.gnupg`.
+    /// The host never takes a program's location from a peer: it finds `gpg-connect-agent` itself.
     public var home: String?
-    /// The directory that holds `gpg-connect-agent`: the `bin` directory next to the real scdaemon's
-    /// `libexec`. Nil when unknown.
-    public var binDir: String?
 
-    public init(home: String? = nil, binDir: String? = nil) {
+    public init(home: String? = nil) {
         self.home = home
-        self.binDir = binDir
     }
 
-    enum CodingKeys: String, CodingKey {
-        case home
-        case binDir = "bin_dir"
+    /// A home is usable if it is absent or an absolute path.
+    public var isUsable: Bool {
+        guard let home else { return true }
+        return home.hasPrefix("/") && !home.utf8.contains(0)
     }
 }
 

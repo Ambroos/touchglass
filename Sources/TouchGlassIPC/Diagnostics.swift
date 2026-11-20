@@ -109,6 +109,8 @@ public enum LogEvent: Sendable, Equatable {
     /// The host asks gpg-agent for a card's touch policies.
     case touchPolicyQuery(serial: String)
     case touchPolicyQueryFailed(serial: String)
+    /// The host keeps `CardPolicyFile.maxCards` cards and refused another one.
+    case touchPolicyRefused(serial: String)
     /// The host stored new touch policies for a card; `policies` names them per slot, such as "sign cached".
     case touchPolicyLearned(serial: String, policies: String)
     case panelShow(PanelStateName)
@@ -203,6 +205,8 @@ public enum LogEvent: Sendable, Equatable {
             return "\(Self.conn(conn)) touch wait on card \(Self.card(serial)) slot \(slot), whose touch policy is off: panel deferred \(Self.ms(showIn))"
         case let .touchPolicyQuery(serial):
             return "touch policy: asking gpg-agent about card \(Self.card(serial))"
+        case let .touchPolicyRefused(serial):
+            return "touch policy: card \(Self.card(serial)) not stored, too many cards"
         case let .touchPolicyQueryFailed(serial):
             return "touch policy: query for card \(Self.card(serial)) failed"
         case let .touchPolicyLearned(serial, policies):

@@ -21,15 +21,8 @@ public struct CardTouchPolicy: Sendable, Equatable {
     /// Whether the serial is an OpenPGP application ID with Yubico's manufacturer ID, 0006.
     public var isYubico: Bool { Self.isYubico(serial) }
 
-    /// Whether the serial is an OpenPGP application ID, which `GETATTR UIF` can answer for.
-    public static func isOpenPGP(_ serial: String) -> Bool {
-        let compact = serial.uppercased().filter { !$0.isWhitespace }
-        return compact.count == 32 && compact.hasPrefix("D276000124") && compact.allSatisfy(\.isHexDigit)
-    }
-
     public static func isYubico(_ serial: String) -> Bool {
-        let compact = serial.uppercased().filter { !$0.isWhitespace }
-        return compact.count == 32 && compact.hasPrefix("D276000124") && compact.dropFirst(16).prefix(4) == "0006"
+        CardSerial.isOpenPGP(serial) && serial.uppercased().dropFirst(16).prefix(4) == "0006"
     }
 
     /// The slots as the log and `cards.conf` name them: "sign cached, decrypt on, auth off".
@@ -45,6 +38,9 @@ public struct CardTouchPolicy: Sendable, Equatable {
 /// line. The host and `touchglass card` both write it, each by renaming a complete file over it.
 public enum CardPolicyFile {
     public static let fileName = "cards.conf"
+    /// The most cards the host keeps and reads, so a peer that reports serial after serial can't grow the
+    /// file without limit.
+    public static let maxCards = 64
     static let slotNames = ["sign", "decrypt", "auth"]
 
     public static func parse(_ text: String) -> [CardTouchPolicy] {
@@ -54,8 +50,9 @@ public enum CardPolicyFile {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty, !trimmed.hasPrefix("#"), let equals = trimmed.firstIndex(of: "=") else { continue }
             let serial = trimmed[..<equals].trimmingCharacters(in: .whitespaces).uppercased()
-            guard !serial.isEmpty, serial.count <= 32, serial.allSatisfy(\.isHexDigit) else { continue }
-            let words = trimmed[trimmed.index(after: equals)...].split(separator: " ")
+            guard CardSerial.isValid(serial) else { continue }
+            guard cards[serial] != nil || cards.count < maxCards else { continue }
+            let words = trimmed[trimmed.index(after: equals)...].split(whereSeparator: { $0 == " " || $0 == "\t" })
             var slots: [Int: TouchPolicy] = [:]
             for (index, word) in words.prefix(3).enumerated() {
                 if let policy = TouchPolicy(rawValue: String(word)) { slots[index + 1] = policy }
@@ -163,29 +160,51 @@ public protocol CardPolicyQuerying: Sendable {
 /// gpg-agent sends the same `SERIALNO --demand` before each card operation to pick the card, so with several
 /// cards attached the query reads the one it names, and scdaemon serializes it with the agent's own
 /// commands. Neither command needs a PIN or a touch. `--no-autostart` keeps it from starting a gpg-agent.
+///
+/// The host finds `gpg-connect-agent` itself, never from a peer: in the `bin` directory next to the
+/// `libexec` directory of the real scdaemon that `touchglass install` recorded in `scdaemon-program`, then
+/// in `fallbackBinDirectories`. A process that can write the support directory can already replace the
+/// launchers, so this trusts nothing new.
 public struct GnuPGCardPolicyQuery: CardPolicyQuerying {
-    /// Where to look for gpg-connect-agent after the proxy's `bin` directory.
+    /// Where to look for gpg-connect-agent after the recorded scdaemon's `bin` directory.
     public static let fallbackBinDirectories = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/local/MacGPG2/bin", "/opt/local/bin"]
     public static let timeout: TimeInterval = 10
+    /// How long a query may take to exit after `SIGTERM` before it gets `SIGKILL`.
+    public static let killGrace: TimeInterval = 2
+    /// The most output the host reads; the real answer is a few hundred bytes.
+    public static let outputLimit = 64 * 1024
 
     private let homeDirectory: String
+    private let supportDirectory: String
+    private let fallbackDirectories: [String]
+    private let timeout: TimeInterval
 
-    public init(homeDirectory: String = IPCPaths.homeDirectory) {
+    public init(homeDirectory: String = IPCPaths.homeDirectory, supportDirectory: String = IPCPaths.supportDirectory, fallbackDirectories: [String] = Self.fallbackBinDirectories, timeout: TimeInterval = Self.timeout) {
         self.homeDirectory = homeDirectory
+        self.supportDirectory = supportDirectory
+        self.fallbackDirectories = fallbackDirectories
+        self.timeout = timeout
     }
 
     public func arguments(serial: String, gnupg: GnuPGContext) -> [String] {
         ["--no-autostart", "--homedir", gnupg.home ?? homeDirectory + "/.gnupg", "scd serialno --demand=\(serial)", "scd getattr UIF", "/bye"]
     }
 
-    public func executable(gnupg: GnuPGContext) -> String? {
-        let directories = [gnupg.binDir].compactMap { $0 } + Self.fallbackBinDirectories
+    public func executable() -> String? {
+        var directories = fallbackDirectories
+        if let text = try? String(contentsOfFile: supportDirectory + "/scdaemon-program", encoding: .utf8),
+           let line = text.split(whereSeparator: \.isNewline).first {
+            let libexec = (line.trimmingCharacters(in: .whitespaces) as NSString).deletingLastPathComponent
+            if libexec.hasPrefix("/"), libexec.hasSuffix("/libexec") {
+                directories.insert((libexec as NSString).deletingLastPathComponent + "/bin", at: 0)
+            }
+        }
         return directories.map { $0 + "/gpg-connect-agent" }.first { access($0, X_OK) == 0 }
     }
 
     public func query(serial: String, gnupg: GnuPGContext) -> [Int: TouchPolicy]? {
-        // The serial goes into an Assuan command line: only hex digits.
-        guard !serial.isEmpty, serial.count <= 32, serial.allSatisfy(\.isHexDigit), let executable = executable(gnupg: gnupg) else { return nil }
+        // The serial goes into an Assuan command line, the home into an argument.
+        guard CardSerial.isValid(serial), gnupg.isUsable, let executable = executable() else { return nil }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments(serial: serial, gnupg: gnupg)
@@ -193,13 +212,72 @@ public struct GnuPGCardPolicyQuery: CardPolicyQuerying {
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
         do { try process.run() } catch { return nil }
-        let timer = DispatchWorkItem { [process] in process.terminate() }
-        DispatchQueue.global().asyncAfter(deadline: .now() + Self.timeout, execute: timer)
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        timer.cancel()
-        guard process.terminationReason == .exit, process.terminationStatus == 0 else { return nil }
-        return CardPolicyFile.parseQueryOutput(String(decoding: data, as: UTF8.self), serial: serial)
+
+        let reader = LimitedReader(fd: output.fileHandleForReading.fileDescriptor, limit: Self.outputLimit)
+        let readDone = DispatchSemaphore(value: 0)
+        Thread.detachNewThread { [process] in
+            reader.run()
+            // Too much output: no answer to wait for.
+            if reader.overLimit { process.terminate() }
+            readDone.signal()
+        }
+        var finished = exited.wait(timeout: .now() + timeout) == .success
+        if !finished {
+            process.terminate()
+            if exited.wait(timeout: .now() + Self.killGrace) == .timedOut {
+                kill(process.processIdentifier, SIGKILL)
+                _ = exited.wait(timeout: .now() + Self.killGrace)
+            }
+        }
+        // A child of the query that still holds the pipe can't keep the reader, and the queue, forever.
+        if readDone.wait(timeout: .now() + 1) == .timedOut {
+            reader.stop()
+            _ = readDone.wait(timeout: .now() + 1)
+            finished = false
+        }
+        withExtendedLifetime(output) {}
+        guard finished, !reader.overLimit, process.terminationReason == .exit, process.terminationStatus == 0 else { return nil }
+        return CardPolicyFile.parseQueryOutput(String(decoding: reader.data, as: UTF8.self), serial: serial)
+    }
+}
+
+/// Reads a pipe until end of file, `limit` bytes, or `stop()`.
+final class LimitedReader: @unchecked Sendable {
+    private let fd: Int32
+    private let limit: Int
+    private let lock = NSLock()
+    private var buffer = Data()
+    private var stopped = false
+    private(set) var overLimit = false
+
+    init(fd: Int32, limit: Int) {
+        self.fd = fd
+        self.limit = limit
+    }
+
+    var data: Data { lock.withLock { buffer } }
+
+    func stop() { lock.withLock { stopped = true } }
+
+    func run() {
+        var chunk = [UInt8](repeating: 0, count: 4096)
+        while !lock.withLock({ stopped }) {
+            var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            let ready = poll(&pfd, 1, 100)
+            if ready == 0 || (ready < 0 && errno == EINTR) { continue }
+            guard ready > 0 else { return }
+            let count = read(fd, &chunk, chunk.count)
+            if count < 0 && errno == EINTR { continue }
+            guard count > 0 else { return }
+            let full = lock.withLock { () -> Bool in
+                buffer.append(contentsOf: chunk[0..<min(count, limit + 1 - buffer.count)])
+                if buffer.count > limit { overLimit = true }
+                return overLimit
+            }
+            if full { return }
+        }
     }
 }

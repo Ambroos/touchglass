@@ -111,6 +111,9 @@ public struct HostCoordinator: Sendable {
         var gnupg: GnuPGContext?
         /// The proxy inferred a touch wait for this operation.
         var touchInferred = false
+        /// The card stayed silent past `offDetectionThreshold` on a key learned as `off`, so its held-back
+        /// touch wait went to the panel: the policy most likely changed.
+        var offTouchPlaced = false
         var pinNeeded = false
         var touchDeadline: Date?
         /// The countdown length for this operation, in seconds: the `touch-timeout` setting, or else the card's.
@@ -218,8 +221,10 @@ public struct HostCoordinator: Sendable {
         case .opStart(let start):
             let number = nextOperationNumber()
             let kind = Self.kind(start.op)
-            var operation = CardOperation(number: number, kind: kind, serial: Self.displaySerial(start.serial), reporter: connection)
-            operation.cardSerial = start.serial?.uppercased() ?? ""
+            // The serial reaches the log, `cards.conf` and the query: only what a card reports.
+            let serial = start.serial.flatMap { CardSerial.isValid($0) ? $0.uppercased() : nil }
+            var operation = CardOperation(number: number, kind: kind, serial: Self.displaySerial(serial), reporter: connection)
+            operation.cardSerial = serial ?? ""
             operation.slot = start.slot ?? kind.cardSlot
             operation.gnupg = gnupgContexts[connection]
             operations[start.conn] = operation
@@ -255,7 +260,7 @@ public struct HostCoordinator: Sendable {
             return requestEnded(ref.id)
         case .hello(let hello):
             if hello.role == .pinentry { pinentryConnections.insert(connection) }
-            if hello.role == .proxy, let gnupg = hello.gnupg { gnupgContexts[connection] = gnupg }
+            if hello.role == .proxy, let gnupg = hello.gnupg, gnupg.isUsable { gnupgContexts[connection] = gnupg }
             log.append(.hello(id: connection, role: hello.role, build: hello.build))
             if let version, let build = hello.build, BuildInfo.isNewer(build, than: version) {
                 if !retiring { log.append(.retireDecision(hostVersion: version, helperBuild: build)) }
@@ -367,6 +372,7 @@ public struct HostCoordinator: Sendable {
         case .showTouch(let conn, let at):
             guard var operation = operations[conn], operation.touchShowAt == at, let deadline = operation.touchDeadline else { return [] }
             operation.touchShowAt = nil
+            if handling(for: operation) == .noTouch { operation.offTouchPlaced = true }
             operations[conn] = operation
             return placeTouch(conn, operation: operation, deadline: deadline, now: now, deferred: true)
         case .queryPolicy(let serial):
@@ -612,7 +618,7 @@ public struct HostCoordinator: Sendable {
         var policyOutputs: [HostOutput] = []
         if let operation {
             let handling = handling(for: operation)
-            if end.result == .ok, operation.kind != .unknown, handling != .noTouch, handling != .cacheWindow(0) {
+            if end.result == .ok, operation.kind != .unknown, handling != .noTouch {
                 lastCardUse[operation.serial] = now
                 if case .cacheWindow(let seconds) = handling {
                     log.append(.touchCacheRestarted(serial: operation.serial, seconds: seconds))
@@ -668,6 +674,7 @@ public struct HostCoordinator: Sendable {
     }
 
     private mutating func learnPolicies(serial: String, slots: [Int: TouchPolicy]?, now: Date) -> [HostOutput] {
+        guard CardSerial.isValid(serial) else { return [] }
         let display = Self.displaySerial(serial)
         if var query = policyQueries[display] {
             query.state = .asked(now)
@@ -683,8 +690,8 @@ public struct HostCoordinator: Sendable {
 
     /// An `S UIF-<n>` line passed through a proxy: replace that slot.
     private mutating func policyReported(_ report: TouchPolicyReport) -> [HostOutput] {
+        guard (1...3).contains(report.slot), CardSerial.isValid(report.serial) else { return [] }
         let display = Self.displaySerial(report.serial)
-        guard (1...3).contains(report.slot), !display.isEmpty else { return [] }
         var card = policies[display] ?? CardTouchPolicy(serial: report.serial, slots: [:])
         card.serial = report.serial.uppercased()
         card.slots[report.slot] = report.uif.flatMap { $0 >= 0 && $0 <= 255 ? TouchPolicy(uif: UInt8($0)) : nil }
@@ -693,19 +700,25 @@ public struct HostCoordinator: Sendable {
 
     private mutating func storePolicy(_ card: CardTouchPolicy) -> [HostOutput] {
         guard policies[card.displaySerial] != card else { return [] }
+        guard policies[card.displaySerial] != nil || policies.count < CardPolicyFile.maxCards else {
+            log.append(.touchPolicyRefused(serial: card.displaySerial))
+            return []
+        }
         policies[card.displaySerial] = card
         log.append(.touchPolicyLearned(serial: card.displaySerial, policies: card.summary))
         return [.saveCardPolicies(policies.values.sorted { $0.serial < $1.serial })]
     }
 
     /// After an operation ends, schedules a query for its card's policies when the host doesn't know them,
-    /// or when the card contradicted them: a slot learned as `off` waited for a touch until it timed out.
+    /// or when the card contradicted them: a slot learned as `off` stayed silent until its touch step showed,
+    /// or until it timed out.
     /// Only for an OpenPGP card, under `touch-cache = auto`, and only through a proxy that said where its
     /// GnuPG is.
     private mutating func schedulePolicyQuery(after operation: CardOperation, end: OpEnd, now: Date) -> [HostOutput] {
-        guard touchCache == .auto, let gnupg = operation.gnupg, CardTouchPolicy.isOpenPGP(operation.cardSerial) else { return [] }
+        guard touchCache == .auto, let gnupg = operation.gnupg, CardSerial.isOpenPGP(operation.cardSerial) else { return [] }
         let display = operation.serial
-        let contradicted = end.result == .timeout && operation.touchInferred && handling(for: operation) == .noTouch
+        let contradicted = handling(for: operation) == .noTouch && operation.touchInferred
+            && (end.result == .timeout || operation.offTouchPlaced)
         switch policyQueries[display]?.state {
         case .scheduled:
             return []
@@ -897,7 +910,10 @@ public struct HostCoordinator: Sendable {
             let start = compact.index(compact.startIndex, offsetBy: 20)
             let end = compact.index(start, offsetBy: 8)
             let hex = String(compact[start..<end])
-            return hex.allSatisfy(\.isNumber) ? String(hex.drop { $0 == "0" }) : hex
+            // An all-zero serial keeps one 0: an empty key would match every operation without a serial.
+            guard hex.allSatisfy(\.isNumber) else { return hex }
+            let digits = String(hex.drop { $0 == "0" })
+            return digits.isEmpty ? "0" : digits
         }
         return compact
     }

@@ -12,7 +12,7 @@ import TouchGlassIPC
     static let display = "12345678"
     /// Manufacturer 0005, not Yubico.
     static let otherSerial = "D2760001240103040005876543210000"
-    static let gnupg = GnuPGContext(home: "/tmp/gnupg", binDir: "/opt/example/bin")
+    static let gnupg = GnuPGContext(home: "/tmp/gnupg")
 
     func at(_ seconds: TimeInterval) -> Date { t0.addingTimeInterval(seconds) }
 
@@ -195,6 +195,38 @@ import TouchGlassIPC
         #expect(c.handle(.touchPolicy(TouchPolicyReport(serial: Self.serial, slot: 3, uif: 1)), from: proxy, now: at(1)).isEmpty)
     }
 
+    /// Serials from peers reach the file, the query and the log: only ASCII hex, and at most 64 cards.
+    @Test func peerSerialsAreChecked() {
+        var c = HostCoordinator()
+        for bad in ["D276\nX = on", String(repeating: "A", count: 5000), "D27600012401030400061234567800\u{FF10}\u{FF10}", ""] {
+            #expect(c.handle(.touchPolicy(TouchPolicyReport(serial: bad, slot: 1, uif: 1)), from: proxy, now: at(0)).isEmpty)
+        }
+        #expect(c.policies.isEmpty)
+        helloWithGnuPG(&c)
+        _ = c.handle(.opStart(OpStart(conn: "100:p", op: .sign, slot: 1, serial: "D276\n0001", at: at(0).timeIntervalSince1970)), from: proxy, now: at(0))
+        #expect(c.operations["100:p"]?.serial == "" && c.operations["100:p"]?.cardSerial == "")
+        #expect(queryTimers(end(&c, at: 0.2)).isEmpty)
+
+        var full = HostCoordinator()
+        full.loadPolicies((0..<CardPolicyFile.maxCards).map { CardTouchPolicy(serial: String(format: "D27600012401030400060000%04d0000", $0), slots: [1: .on]) })
+        #expect(full.handle(.touchPolicy(TouchPolicyReport(serial: Self.serial, slot: 1, uif: 1)), from: proxy, now: at(0)).isEmpty)
+        #expect(full.takeLog().contains(.touchPolicyRefused(serial: Self.display)))
+        // A known card still updates.
+        #expect(!full.handle(.touchPolicy(TouchPolicyReport(serial: "D2760001240103040006000000010000", slot: 1, uif: 0)), from: proxy, now: at(0)).isEmpty)
+    }
+
+    @Test func helloWithARelativeHomeGivesNoQuery() {
+        var c = HostCoordinator()
+        _ = c.handle(.hello(Hello(role: .proxy, pid: 9, build: nil, gnupg: GnuPGContext(home: "relative/home"))), from: proxy, now: at(0))
+        start(&c, at: 0)
+        #expect(queryTimers(end(&c, at: 0.2)).isEmpty)
+    }
+
+    @Test func allZeroSerialKeepsOneDigit() {
+        #expect(HostCoordinator.displaySerial("D2760001240103040006000000000000") == "0")
+        #expect(HostCoordinator.displaySerial("D2760001240103040006000000420000") == "42")
+    }
+
     @Test func unknownUifValueForgetsTheSlot() {
         var c = HostCoordinator()
         learn(&c, [1: .on])
@@ -204,7 +236,6 @@ import TouchGlassIPC
             learn(&c, [1: .on])
         }
         #expect(c.handle(.touchPolicy(TouchPolicyReport(serial: Self.serial, slot: 4, uif: 1)), from: proxy, now: at(0)).isEmpty)
-        #expect(c.handle(.touchPolicy(TouchPolicyReport(serial: "", slot: 1, uif: 1)), from: proxy, now: at(0)).isEmpty)
     }
 
     // MARK: Active learning
@@ -284,6 +315,28 @@ import TouchGlassIPC
         #expect(queryTimers(end(&closed, at: 1.2)).isEmpty)
     }
 
+    /// The touch step of a slot learned as off reached the panel and the user touched: the policy changed.
+    @Test func lateTouchOnAnOffSlotIsAContradiction() {
+        var c = HostCoordinator()
+        helloWithGnuPG(&c)
+        learn(&c, [1: .off])
+        start(&c, at: 0)
+        _ = touchWait(&c, commandAt: 0)
+        _ = c.fire(.showTouch(operation: "100:p", at: at(TouchTiming.offDetectionThreshold)), now: at(TouchTiming.offDetectionThreshold))
+        #expect(queryTimers(end(&c, at: 5)) == [Self.display])
+        _ = c.fire(.queryPolicy(serial: Self.display), now: at(8))
+        _ = c.policyQueried(serial: Self.serial, slots: [1: .off], now: at(8.1))
+        // Still off, as for a slow card: no new query within a minute.
+        start(&c, at: 20)
+        _ = touchWait(&c, commandAt: 20)
+        _ = c.fire(.showTouch(operation: "100:p", at: at(23)), now: at(23))
+        #expect(queryTimers(end(&c, at: 24)).isEmpty)
+        // A slow off card that answers before 3 s is no contradiction.
+        start(&c, at: 100)
+        _ = touchWait(&c, commandAt: 100)
+        #expect(queryTimers(end(&c, at: 101)).isEmpty)
+    }
+
     /// The card waited for a touch on a slot learned as off, until it timed out: the policy changed.
     @Test func contradictedPolicyIsQueriedAgain() {
         var c = HostCoordinator()
@@ -320,6 +373,13 @@ import TouchGlassIPC
         #expect(text.contains("D2760001240103040006000000010000 = fixed unknown cached-fixed\n"))
         #expect(Set(CardPolicyFile.parse(text).map(\.serial)) == Set(cards.map(\.serial)))
         #expect(CardPolicyFile.parse(text).first { $0.serial == Self.serial } == cards[0])
+    }
+
+    @Test func readsAtMost64Cards() {
+        let text = (0..<70).map { String(format: "D27600012401030400060000%04d0000 = on\ton on", $0) }.joined(separator: "\n")
+        let cards = CardPolicyFile.parse(text)
+        #expect(cards.count == CardPolicyFile.maxCards)
+        #expect(cards.first?.slots == [1: .on, 2: .on, 3: .on])
     }
 
     @Test func toleratesOddLines() {
@@ -375,25 +435,70 @@ import TouchGlassIPC
         #expect(try FileManager.default.contentsOfDirectory(atPath: dir).isEmpty)
     }
 
-    /// The query runs gpg-connect-agent from the proxy's GnuPG; here a stub that records its arguments.
-    @Test func queryRunsGpgConnectAgent() throws {
+    /// A GnuPG installation in a temporary directory: `libexec/scdaemon` recorded in `scdaemon-program` in a
+    /// support directory, and `bin/gpg-connect-agent` running `script`.
+    func fakeGnuPG(_ script: String) throws -> (dir: String, query: (TimeInterval) -> GnuPGCardPolicyQuery) {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("touchglass-query-\(UUID().uuidString)").path
-        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(atPath: dir) }
-        let stub = dir + "/gpg-connect-agent"
-        try """
-            #!/bin/sh
-            for a in "$@"; do printf '%s\\n' "$a"; done > '\(dir)/args'
-            printf 'S SERIALNO \(Self.serial)\\nOK\\nS UIF-1 %%03+\\nS UIF-2 %%03+\\nS UIF-3 %%01+\\nOK\\n'
-            """.write(toFile: stub, atomically: true, encoding: .utf8)
+        for sub in ["/gnupg/bin", "/gnupg/libexec", "/support"] {
+            try FileManager.default.createDirectory(atPath: dir + sub, withIntermediateDirectories: true)
+        }
+        try "\(dir)/gnupg/libexec/scdaemon\n".write(toFile: dir + "/support/scdaemon-program", atomically: true, encoding: .utf8)
+        let stub = dir + "/gnupg/bin/gpg-connect-agent"
+        try ("#!/bin/sh\n" + script).write(toFile: stub, atomically: true, encoding: .utf8)
         chmod(stub, 0o755)
-        let query = GnuPGCardPolicyQuery(homeDirectory: "/Users/nobody")
-        #expect(query.query(serial: Self.serial, gnupg: GnuPGContext(home: dir + "/g h", binDir: dir)) == [1: .cached, 2: .cached, 3: .on])
-        let args = try String(contentsOfFile: dir + "/args", encoding: .utf8).split(separator: "\n").map(String.init)
+        return (dir, { timeout in
+            GnuPGCardPolicyQuery(homeDirectory: "/Users/nobody", supportDirectory: dir + "/support", fallbackDirectories: [], timeout: timeout)
+        })
+    }
+
+    /// The query runs the gpg-connect-agent next to the recorded scdaemon; here a stub that records its arguments.
+    @Test func queryRunsGpgConnectAgent() throws {
+        let (dir, make) = try fakeGnuPG("""
+            for a in "$@"; do printf '%s\\n' "$a"; done > "$(dirname "$0")/args"
+            printf 'S SERIALNO \(Self.serial)\\nOK\\nS UIF-1 %%03+\\nS UIF-2 %%03+\\nS UIF-3 %%01+\\nOK\\n'
+            """)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let query = make(10)
+        #expect(query.executable() == dir + "/gnupg/bin/gpg-connect-agent")
+        #expect(query.query(serial: Self.serial, gnupg: GnuPGContext(home: dir + "/g h")) == [1: .cached, 2: .cached, 3: .on])
+        let args = try String(contentsOfFile: dir + "/gnupg/bin/args", encoding: .utf8).split(separator: "\n").map(String.init)
         #expect(args == ["--no-autostart", "--homedir", dir + "/g h", "scd serialno --demand=\(Self.serial)", "scd getattr UIF", "/bye"])
         // The default home.
         #expect(query.arguments(serial: Self.serial, gnupg: GnuPGContext())[2] == "/Users/nobody/.gnupg")
-        // Only a hex serial goes into the command.
-        #expect(query.query(serial: "D276 OK", gnupg: GnuPGContext(binDir: dir)) == nil)
+        // Only a hex serial goes into the command, and only an absolute home.
+        #expect(query.query(serial: "D276 OK", gnupg: GnuPGContext()) == nil)
+        #expect(query.query(serial: Self.serial, gnupg: GnuPGContext(home: "relative")) == nil)
+    }
+
+    /// Without a recorded scdaemon and fallbacks, there is nothing to run.
+    @Test func queryFindsNoProgramElsewhere() throws {
+        let (dir, make) = try fakeGnuPG("exit 0\n")
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        try FileManager.default.removeItem(atPath: dir + "/support/scdaemon-program")
+        #expect(make(10).executable() == nil)
+        try "scdaemon\n".write(toFile: dir + "/support/scdaemon-program", atomically: true, encoding: .utf8)
+        #expect(make(10).executable() == nil)
+    }
+
+    @Test func queryOutputIsBounded() throws {
+        let (dir, make) = try fakeGnuPG("""
+            printf 'S SERIALNO \(Self.serial)\\nOK\\nS UIF-1 %%03+\\n'
+            head -c 200000 /dev/zero | tr '\\0' 'x'
+            """)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        #expect(make(10).query(serial: Self.serial, gnupg: GnuPGContext()) == nil)
+    }
+
+    /// A query that ignores SIGTERM ends with SIGKILL, and the queue moves on.
+    @Test func stuckQueryIsKilled() throws {
+        let (dir, make) = try fakeGnuPG("""
+            trap '' TERM
+            printf 'S SERIALNO \(Self.serial)\\n'
+            while :; do sleep 1; done
+            """)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let started = ContinuousClock.now
+        #expect(make(0.5).query(serial: Self.serial, gnupg: GnuPGContext()) == nil)
+        #expect(ContinuousClock.now - started < .seconds(8))
     }
 }

@@ -13,5 +13,5 @@ guard let config = ProxyConfig.resolve() else {
     exit(2)
 }
 let arguments = Array(CommandLine.arguments.dropFirst())
-let gnupg = ProxyConfig.gnupgContext(arguments: arguments, scdaemonPath: config.scdaemonPath)
+let gnupg = ProxyConfig.gnupgContext(arguments: arguments)
 ScdaemonProxy(config: config, gnupg: gnupg).run(arguments: arguments)

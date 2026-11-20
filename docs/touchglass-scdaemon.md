@@ -8,7 +8,7 @@ gpg-agent starts `touchglass-scdaemon --multi-server` with a pipe on stdin and s
 
 The proxy exits when scdaemon exits, with the same exit status, or by the same signal. When gpg-agent closes the pipe, the proxy closes scdaemon's stdin and keeps forwarding scdaemon's output until scdaemon exits. `SIGTERM`, `SIGINT` and `SIGHUP` are forwarded to scdaemon. `SIGUSR1` and `SIGUSR2` are ignored: scdaemon sends its card event signal to the peer of a socket session, which is the proxy for a relayed session, and the default action would end the proxy. scdaemon itself starts with all five signals at their default actions and `SIGPIPE` as gpg-agent left it, the same as without the proxy.
 
-The proxy's parent is the gpg-agent that started it. Each `op_start` carries that agent's PID as `agent_pid`, so the host looks for the client that asked for the operation among that agent's connections only. The proxy's `hello` carries that agent's GnuPG home, from the `--homedir` argument that gpg-agent passes for a home other than its default, else `GNUPGHOME`, and the `bin` directory next to the real scdaemon's `libexec` directory. The host uses them to ask gpg-agent for a card's touch policy.
+The proxy's parent is the gpg-agent that started it. Each `op_start` carries that agent's PID as `agent_pid`, so the host looks for the client that asked for the operation among that agent's connections only. The proxy's `hello` carries that agent's GnuPG home, from the `--homedir` argument that gpg-agent passes for a home other than its default, else `GNUPGHOME`. The host uses it to ask gpg-agent for a card's touch policy, and accepts only an absolute path. The host finds the program for that itself; see [Touch policies](configuration.md#touch-policies).
 
 ### Socket relay
 

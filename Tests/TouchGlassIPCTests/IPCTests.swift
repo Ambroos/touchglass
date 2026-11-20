@@ -46,9 +46,14 @@ import Testing
         let json = try #require(try JSONSerialization.jsonObject(with: line.dropLast()) as? [String: Any])
         #expect(json["type"] as? String == "touch_policy")
         #expect(json["serial"] as? String == "D276" && json["slot"] as? Int == 1 && json["uif"] as? Int == 3)
-        let hello = try IPCLine.encode(.hello(Hello(role: .proxy, pid: 1, build: nil, gnupg: GnuPGContext(home: "/h", binDir: "/b"))))
+        let hello = try IPCLine.encode(.hello(Hello(role: .proxy, pid: 1, build: nil, gnupg: GnuPGContext(home: "/h"))))
         let gnupg = try #require((try JSONSerialization.jsonObject(with: hello.dropLast()) as? [String: Any])?["gnupg"] as? [String: String])
-        #expect(gnupg == ["home": "/h", "bin_dir": "/b"])
+        #expect(gnupg == ["home": "/h"])
+        // A peer's program location is not part of the message.
+        let decoded = try IPCLine.decode(Data(#"{"type":"hello","role":"proxy","pid":1,"version":"1","gnupg":{"home":"/h","bin_dir":"/evil"}}"#.utf8))
+        #expect(decoded == .hello(Hello(role: .proxy, pid: 1, version: "1", build: nil, gnupg: GnuPGContext(home: "/h"))))
+        #expect(GnuPGContext(home: "relative").isUsable == false)
+        #expect(GnuPGContext(home: nil).isUsable && GnuPGContext(home: "/abs").isUsable)
     }
 
     @Test func logShowsTheLastFourDigits() {
@@ -71,7 +76,7 @@ import Testing
         let messages: [IPCMessage] = [
             .hello(Hello(role: .proxy, pid: 42, version: "1", build: nil)),
             .hello(Hello(role: .pinentry, pid: 43, version: "1", build: "0.2.0")),
-            .hello(Hello(role: .proxy, pid: 44, version: "1", build: nil, gnupg: GnuPGContext(home: "/tmp/g h", binDir: "/opt/homebrew/bin"))),
+            .hello(Hello(role: .proxy, pid: 44, version: "1", build: nil, gnupg: GnuPGContext(home: "/tmp/g h"))),
             .hello(Hello(role: .proxy, pid: 45, version: "1", build: nil, gnupg: GnuPGContext())),
             .opStart(OpStart(conn: "123:s3", op: .sign, slot: 1, serial: "D2760001240100000000000000000000", at: 1_800_000_000.5)),
             .opStart(OpStart(conn: "123:p", op: .auth, at: 1, agentPid: 4321)),
