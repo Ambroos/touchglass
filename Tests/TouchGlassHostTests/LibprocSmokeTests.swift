@@ -23,6 +23,13 @@ import Testing
         #expect(source.executablePath(-5) == nil)
     }
 
+    /// This test process plays the pinentry; its parent isn't gpg-agent.
+    @Test func aPinentryOutsideGpgAgentIsNamedByItsParent() throws {
+        let parent = try #require(source.executablePath(getppid()))
+        let expected = "Asked by \((parent as NSString).lastPathComponent), not through gpg-agent"
+        #expect(ClientResolver(budget: .seconds(5)).label(for: .pinentry(getpid(), owner: nil)) == expected)
+    }
+
     @Test func socketpairEndsPointAtEachOther() throws {
         var fds: [Int32] = [0, 0]
         #expect(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0)
@@ -70,7 +77,8 @@ import Testing
         #expect(clients.map(\.pid) == [child])
         #expect(clients.first?.ssh == false)
         #expect(resolver.label(for: .agentClient(ssh: false)) == "sleep")
-        #expect(resolver.label(for: .owner(child)) == "sleep")
+        // As the owner of a PIN prompt, sleep is not a usual client of gpg-agent.
+        #expect(resolver.label(for: .owner(child)) == "Asked by sleep")
     }
 
     /// The live process table, with one PID reported under the agent's name and any real agent renamed,

@@ -196,6 +196,81 @@ final class FakeProcesses: ProcessSource, @unchecked Sendable {
         #expect(resolver(table).label(for: .owner(300)) == "gpg")
     }
 
+    // MARK: Who asks for a PIN
+
+    /// A pinentry that gpg-agent started for the commit's gpg.
+    func agentPinentry(_ table: FakeProcesses, pid: Int32 = 400, parent: Int32 = agentPID) {
+        table.add(pid, ppid: parent, name: "touchglass-pinentry", argv: ["touchglass-pinentry"], executable: "/opt/example/TouchGlass.app/Contents/MacOS/touchglass-pinentry")
+    }
+
+    @Test func aPinentryFromGpgAgentNamesTheAgentsClient() {
+        let table = FakeProcesses()
+        agent(table, connections: [(301, 300, false)])
+        commitTree(table)
+        agentPinentry(table)
+        #expect(resolver(table).label(for: .pinentry(400, owner: 300)) == "git commit · touchglass")
+        // Through a wrapper script that doesn't exec the pinentry.
+        table.add(390, ppid: Self.agentPID, name: "sh", argv: ["sh", "/opt/example/pinentry-wrapper"], executable: "/bin/sh")
+        agentPinentry(table, pid: 401, parent: 390)
+        #expect(resolver(table).label(for: .pinentry(401, owner: 300)) == "git commit · touchglass")
+    }
+
+    /// The owner value is whatever the pinentry was told. One that isn't connected to the agent, such as
+    /// a git process named to borrow its label, gives no label.
+    @Test func anOwnerThatIsNotTheAgentsClientGivesNoLabel() {
+        let table = FakeProcesses()
+        agent(table, connections: [])
+        commitTree(table)
+        agentPinentry(table)
+        #expect(resolver(table).label(for: .pinentry(400, owner: 200)) == nil)
+        #expect(resolver(table).label(for: .pinentry(400, owner: nil)) == nil)
+    }
+
+    @Test func aPinentryThatGpgAgentDidNotStartNamesItsParent() {
+        let table = FakeProcesses()
+        agent(table, connections: [(301, 300, false)])
+        commitTree(table)
+        table.add(600, ppid: 50, name: "Python", argv: ["gpg-agent", "ask.py"], executable: "/opt/example/bin/python3")
+        agentPinentry(table, parent: 600)
+        // The owner it claims, the commit's gpg, doesn't count.
+        #expect(resolver(table).label(for: .pinentry(400, owner: 300)) == "Asked by python3, not through gpg-agent")
+        // A process that calls itself gpg-agent is named by its executable.
+        table.add(601, ppid: 50, name: "gpg-agent", argv: ["gpg-agent"], executable: "/opt/example/bin/helper")
+        agentPinentry(table, pid: 401, parent: 601)
+        #expect(resolver(table).label(for: .pinentry(401, owner: 300)) == "Asked by helper, not through gpg-agent")
+        // The parent exited, so launchd adopted the pinentry.
+        agentPinentry(table, pid: 402, parent: 1)
+        #expect(resolver(table).label(for: .pinentry(402, owner: nil)) == "Not asked through gpg-agent")
+    }
+
+    @Test func aScriptAskingGpgAgentIsNamedAsTheAsker() {
+        let table = FakeProcesses()
+        agent(table, connections: [(701, 700, false), (711, 710, false)])
+        agentPinentry(table)
+        table.add(50, ppid: 1, name: "zsh", argv: ["-zsh"], cwd: "/home/example")
+        table.add(700, ppid: 50, name: "gpg-connect-agent", argv: ["gpg-connect-agent", "GET_PASSPHRASE x"], executable: "/opt/example/bin/gpg-connect-agent", sockets: client(pcb: 700, agentPCB: 701))
+        #expect(resolver(table).label(for: .pinentry(400, owner: 700)) == "Asked by gpg-connect-agent")
+        // A git hook that runs a script: git doesn't seem to ask.
+        table.add(200, ppid: 50, name: "git", argv: ["git", "commit"], cwd: "/src/touchglass", executable: "/usr/bin/git")
+        table.add(705, ppid: 200, name: "sh", argv: ["sh", ".git/hooks/pre-commit"], executable: "/bin/sh")
+        table.add(710, ppid: 705, name: "Python", argv: ["gpg", "hook.py"], executable: "/opt/example/bin/python3", sockets: client(pcb: 710, agentPCB: 711))
+        #expect(resolver(table).label(for: .pinentry(400, owner: 710)) == "Asked by python3 from git commit · touchglass")
+        // Without the pinentry's PID, the owner alone.
+        #expect(resolver(table).label(for: .owner(710)) == "Asked by python3 from git commit · touchglass")
+    }
+
+    @Test func usualClientsKeepTheirLabel() {
+        let chains: [([ClientLabel.Link], String)] = [
+            ([.init(name: "gpg", argv: ["gpg", "-d"], executable: "/opt/example/bin/gpg")], "gpg"),
+            ([.init(name: "ssh", argv: ["ssh", "build-box"], executable: "/usr/bin/ssh")], "ssh build-box"),
+            ([.init(name: "ssh-keygen", argv: ["ssh-keygen", "-Y", "sign"], executable: "/usr/bin/ssh-keygen"), .init(name: "git", argv: ["git", "tag"], cwd: "/src/touchglass")], "git tag · touchglass"),
+        ]
+        for (chain, expected) in chains {
+            #expect(ClientLabel.promptLabel(chain: chain) == expected)
+        }
+        #expect(ClientLabel.promptLabel(chain: []) == nil)
+    }
+
     @Test func ownerValueParsing() {
         #expect(ClientQuery.ownerPID("4242/501 example-host") == 4242)
         #expect(ClientQuery.ownerPID("4242 example-host") == 4242)

@@ -4,6 +4,10 @@ import Foundation
 public enum ClientQuery: Sendable, Equatable {
     /// The client PID from the agent's `OPTION owner`, which a pinentry request carries.
     case owner(Int32)
+    /// A prompt from the pinentry with PID `pinentry`, with the client PID from its `OPTION owner`, if
+    /// any. The label names the owner only when gpg-agent started the pinentry and the owner is one of
+    /// that agent's clients; a pinentry that something else started is named by its parent.
+    case pinentry(Int32, owner: Int32?)
     /// One of the agent's connected clients: an ssh client for an SSH login, any other client for a
     /// signature or decryption. `agent` is the gpg-agent the proxy reported; a proxy that doesn't report
     /// one leaves it `nil`, and the lookup then searches every gpg-agent of the user.
@@ -54,7 +58,9 @@ public final class ClientResolver: ClientResolving, @unchecked Sendable {
         switch query {
         case .owner(let pid):
             guard processes.record(pid)?.uid == uid else { return nil }
-            return label(startingAt: pid, deadline: deadline)
+            return chain(startingAt: pid, deadline: deadline).flatMap(ClientLabel.promptLabel)
+        case .pinentry(let pid, let owner):
+            return labelForPinentry(pid, owner: owner, deadline: deadline)
         case .agentClient(let ssh, let agent):
             return labelForAgentClient(ssh: ssh, agent: agent, deadline: deadline)
         }
@@ -136,10 +142,55 @@ public final class ClientResolver: ClientResolving, @unchecked Sendable {
         return record.uid == uid && record.name == "gpg-agent"
     }
 
+    // MARK: Pinentry prompts
+
+    /// The label for a pinentry's prompt. A pinentry that gpg-agent started, directly or through a
+    /// wrapper script, prompts for the agent's client: the owner, if it is connected to that agent.
+    /// The owner value comes from whatever started the pinentry, so an owner that isn't the agent's
+    /// client gives no label. A pinentry that no gpg-agent started returns what it reads to its parent,
+    /// so the label names the parent and says that the prompt didn't come through gpg-agent.
+    private func labelForPinentry(_ pid: Int32, owner: Int32?, deadline: ContinuousClock.Instant) -> String? {
+        guard let record = processes.record(pid), record.uid == uid else { return nil }
+        var current = record.ppid
+        var agent: Int32?
+        for _ in 0..<Self.maxChainLength where current > 1 {
+            guard let parent = processes.record(current), parent.uid == uid else { break }
+            if isAgentExecutable(current) {
+                agent = current
+                break
+            }
+            current = parent.ppid
+        }
+        guard let agent else {
+            return chain(startingAt: record.ppid, deadline: deadline).map(ClientLabel.directPromptLabel)
+        }
+        guard let owner, owner != pid, processes.record(owner)?.uid == uid, isClient(owner, of: agent) else { return nil }
+        return chain(startingAt: owner, deadline: deadline).flatMap(ClientLabel.promptLabel)
+    }
+
+    /// Whether `pid` runs gpg-agent, by its executable's path rather than its arguments.
+    private func isAgentExecutable(_ pid: Int32) -> Bool {
+        guard let record = processes.record(pid) else { return false }
+        let link = ClientLabel.Link(name: record.name, argv: [], executable: processes.executablePath(pid))
+        return ClientLabel.executableName(link) == "gpg-agent"
+    }
+
+    /// Whether `client` holds a connection to one of `agent`'s sockets.
+    private func isClient(_ client: Int32, of agent: Int32) -> Bool {
+        let peers = Set(processes.unixSockets(agent).lazy.filter { $0.peerPCB != 0 && Self.isAgentSocket($0.path) }.map(\.peerPCB))
+        return processes.unixSockets(client).contains { peers.contains($0.pcb) }
+    }
+
     // MARK: Labelling
 
     /// Walks from `pid` up through its parents and labels the chain. `nil` if `pid` is gone.
     func label(startingAt pid: Int32, deadline: ContinuousClock.Instant) -> String? {
+        chain(startingAt: pid, deadline: deadline).flatMap(ClientLabel.label)
+    }
+
+    /// `pid` and its parents, nearest first, up to `maxChainLength`. Empty if `pid` is gone; `nil` if the
+    /// budget ran out.
+    func chain(startingAt pid: Int32, deadline: ContinuousClock.Instant) -> [ClientLabel.Link]? {
         var chain: [ClientLabel.Link] = []
         var current = pid
         while chain.count < Self.maxChainLength, current > 1 {
@@ -155,6 +206,6 @@ public final class ClientResolver: ClientResolving, @unchecked Sendable {
             ))
             current = record.ppid
         }
-        return ClientLabel.label(chain: chain)
+        return chain
     }
 }

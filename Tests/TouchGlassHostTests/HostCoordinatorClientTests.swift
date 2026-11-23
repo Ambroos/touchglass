@@ -125,6 +125,17 @@ import TouchGlassIPC
         #expect(panelEvents(coordinator.clientResolved(.request(id: "p1", operation: nil), label: "gpg")) == [.show(.passphrase(PassphraseRequest(description: "Please enter the passphrase", client: "gpg", promptID: "p1")))])
     }
 
+    @Test func aPromptFromAPinentryThatSaidHelloIsCheckedByItsPID() {
+        var coordinator = HostCoordinator()
+        _ = coordinator.handle(.hello(Hello(role: .pinentry, pid: 4100)), from: pinentry, now: now)
+        let prompt = coordinator.handle(.getPin(GetPin(id: "p1", desc: "Please enter the passphrase", owner: "77/501 example-host")), from: pinentry, now: now)
+        #expect(queries(prompt) == [.resolveClient(.request(id: "p1", operation: nil), .pinentry(4100, owner: 77))])
+        _ = coordinator.handle(.dismiss(RequestRef(id: "p1")), from: pinentry, now: now)
+        // Without an owner, the pinentry's PID alone.
+        let bare = coordinator.handle(.getPin(GetPin(id: "p2", desc: "Please enter the passphrase")), from: pinentry, now: now)
+        #expect(queries(bare) == [.resolveClient(.request(id: "p2", operation: nil), .pinentry(4100, owner: nil))])
+    }
+
     @Test func touchTimeoutSettingOverridesTheProxy() throws {
         var coordinator = HostCoordinator(touchTimeout: 25)
         _ = start(&coordinator)

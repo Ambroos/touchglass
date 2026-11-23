@@ -161,6 +161,9 @@ public struct HostCoordinator: Sendable {
     /// Connections from pinentries that are still open. A pinentry can send a request at any moment, so
     /// the host never exits while one is connected.
     private(set) var pinentryConnections: Set<ConnectionID> = []
+    /// The PID that each pinentry connection reported in its hello. The host admits only its own
+    /// helpers, so the PID is the pinentry's own.
+    private var pinentryPIDs: [ConnectionID: Int32] = [:]
     /// A helper of a later release said hello: exit when idle.
     public private(set) var retiring = false
     private var retireScheduled = false
@@ -261,7 +264,10 @@ public struct HostCoordinator: Sendable {
             guard let shown, Self.connection(of: shown) == connection else { return [] }
             return requestEnded(ref.id)
         case .hello(let hello):
-            if hello.role == .pinentry { pinentryConnections.insert(connection) }
+            if hello.role == .pinentry {
+                pinentryConnections.insert(connection)
+                if hello.pid > 0 { pinentryPIDs[connection] = hello.pid }
+            }
             if hello.role == .proxy, let gnupg = hello.gnupg, gnupg.isUsable { gnupgContexts[connection] = gnupg }
             log.append(.hello(id: connection, role: hello.role, build: hello.build))
             if let version, let build = hello.build, BuildInfo.isNewer(build, than: version) {
@@ -282,6 +288,7 @@ public struct HostCoordinator: Sendable {
 
     private mutating func closeConnection(_ connection: ConnectionID, now: Date) -> [HostOutput] {
         pinentryConnections.remove(connection)
+        pinentryPIDs[connection] = nil
         gnupgContexts[connection] = nil
         var outputs: [HostOutput] = []
         for conn in operationOrder where operations[conn]?.reporter == connection {
@@ -804,9 +811,10 @@ public struct HostCoordinator: Sendable {
         // The agent names its client in the owner option: an exact answer, where the proxy's operation
         // only allows a guess among the agent's clients.
         let operationRef = operationID.flatMap { conn in operations[conn].map { OperationRef(conn: conn, number: $0.number) } }
-        let resolve: [HostOutput] = ClientQuery.ownerPID(request.owner).map {
-            [.resolveClient(.request(id: request.id, operation: operationRef), .owner($0))]
-        } ?? []
+        // With the pinentry's PID, the resolver also checks that gpg-agent started it.
+        let owner = ClientQuery.ownerPID(request.owner)
+        let query: ClientQuery? = if let pinentry = pinentryPIDs[connection] { .pinentry(pinentry, owner: owner) } else { owner.map { .owner($0) } }
+        let resolve: [HostOutput] = query.map { [.resolveClient(.request(id: request.id, operation: operationRef), $0)] } ?? []
 
         guard isCard else {
             let passphrase = PassphraseRequest(description: request.desc ?? "", error: request.error, promptID: request.id)

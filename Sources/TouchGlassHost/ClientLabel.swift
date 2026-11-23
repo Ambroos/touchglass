@@ -40,6 +40,32 @@ public enum ClientLabel {
         return name.isEmpty ? nil : name
     }
 
+    /// The programs that ask gpg-agent for a PIN or passphrase in everyday use. Git signs through gpg
+    /// or ssh-keygen, so it is not on the list itself.
+    static let usualAgentClients: Set<String> = ["gpg", "gpg2", "gpgsm", "gpg-card", "ssh", "ssh-add", "ssh-keygen"]
+
+    /// The label for a PIN or passphrase prompt that gpg-agent shows for the client at the start of
+    /// `chain`. A usual client reads as `label(chain:)` does. Any other program, such as a script that
+    /// sends `GET_PASSPHRASE`, is named as the asker: "Asked by python3", or "Asked by python3 from git
+    /// commit · touchglass" when it runs under git, so that git doesn't seem to ask.
+    public static func promptLabel(chain: [Link]) -> String? {
+        guard let client = chain.first, let usual = label(chain: chain) else { return nil }
+        let name = executableName(client)
+        if usualAgentClients.contains(name) { return usual }
+        if usual == name || usual.hasPrefix(name + " ") { return "Asked by \(usual)" }
+        return "Asked by \(name) from \(usual)"
+    }
+
+    /// The label for a prompt from a pinentry that gpg-agent didn't start. `chain` starts at the
+    /// pinentry's parent, which receives what the user types; empty when the parent is gone or isn't
+    /// the user's.
+    public static func directPromptLabel(chain: [Link]) -> String {
+        guard let parent = chain.first, case let name = executableName(parent), !name.isEmpty else {
+            return "Not asked through gpg-agent"
+        }
+        return "Asked by \(name), not through gpg-agent"
+    }
+
     /// Names the process by what the kernel runs, never by `argv[0]`, which the process sets itself: `exec -a git
     /// gpg` must not read as git.
     static func executableName(_ link: Link) -> String {
