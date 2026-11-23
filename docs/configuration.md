@@ -118,7 +118,7 @@ defaults delete io.ambroos.touchglass soundsEnabled
 
 ## How TouchGlass labels what asked
 
-gpg-agent doesn't tell scdaemon or the pinentry which command needs the card, so the host infers it. For a PIN prompt, it uses the client process ID that gpg-agent passes to the pinentry. For a touch without a PIN prompt, it lists gpg-agent's connected clients by matching the agent's Unix sockets with the sockets of your other processes: an ssh client on the agent's SSH socket for an SSH login, and any other client for a signature or decryption. From that process, it walks up a few parent processes and reads their arguments and working directory:
+gpg-agent doesn't tell scdaemon or the pinentry which command needs the card, so the host infers it. For a PIN prompt, it uses the client process ID that gpg-agent passes to the pinentry, if gpg-agent started the pinentry and that process is connected to gpg-agent's socket. For a touch without a PIN prompt, it lists gpg-agent's connected clients by matching the agent's Unix sockets with the sockets of your other processes: an ssh client on the agent's SSH socket for an SSH login, and any other client for a signature or decryption. From that process, it walks up a few parent processes and reads their arguments and working directory:
 
 - Under git, the label is the git subcommand and the repository's directory name, such as `git commit · touchglass`. `git push`, `git pull` and `git fetch` add the remote name, or only the host when the command names a URL. The repository name comes from the directory that git runs in; TouchGlass reads no files in the repository.
 - An ssh client outside git shows its destination host.
@@ -126,4 +126,17 @@ gpg-agent doesn't tell scdaemon or the pinentry which command needs the card, so
 
 Each process is named by the file the kernel runs, not by its `argv[0]`, which a process can set to anything: `exec -a git gpg` reads as `gpg`, not as git. A copy of a binary under another name still shows that name.
 
+A PIN or passphrase prompt that doesn't come from the usual clients names the program that receives what you type:
+
+- A pinentry that gpg-agent didn't start returns the PIN to the process that started it, so the label names that process: `Asked by python3, not through gpg-agent`. When that process is gone, the label reads `Not asked through gpg-agent`.
+- A client of gpg-agent other than `gpg`, `gpg2`, `gpgsm`, `gpg-card`, `ssh`, `ssh-add` and `ssh-keygen` shows as the asker, such as `Asked by gpg-connect-agent`. Under git, the label adds the git command, such as `Asked by python3 from git commit · touchglass`, so that a git hook doesn't read as git itself.
+
 The panel opens without waiting for the label, which fills in when the lookup finishes. The lookup gives up after 50 milliseconds. If several clients match and their labels differ, the panel shows no label.
+
+## What TouchGlass trusts
+
+The host accepts connections only from `touchglass-pinentry` and `touchglass-scdaemon`. Each process that connects to its socket must run as you and run one of those two helpers, matched by the code directory hash of the helper file in the host's own `Contents/MacOS`. For a Homebrew install, the host also looks in the same directory through the formula's `opt` link, such as `/opt/homebrew/opt/touchglass/TouchGlass.app/Contents/MacOS`, because `brew upgrade` deletes the versioned directory that the host runs from, and the next release's helpers must still reach the host to make it quit. The host reads the hashes again when a helper file changes. It closes any other connection and logs `connection refused` in the `host` category.
+
+This check stops a program that only connects to the socket to show a PIN prompt in the panel. It doesn't stop a program that can rewrite the installed files: `/opt/homebrew` and `~/Library/Application Support/TouchGlass` are writable by your user account, so such a program can replace a helper or a launcher, and the host then trusts what it finds there.
+
+The check doesn't keep a PIN from your own programs either, and TouchGlass can't. Any program that runs as you can get a PIN or passphrase that you type without the panel: it can run `pinentry-mac` or `touchglass-pinentry` itself and send `SETDESC` and `GETPIN`, or send `GET_PASSPHRASE` to gpg-agent, which returns the passphrase to it. For the prompts that do reach the panel, the client line names the program that receives what you type; see [How TouchGlass labels what asked](#how-touchglass-labels-what-asked). Before you type a PIN, check that the line names the command you ran. With `show-client = no`, the panel hides the line.
