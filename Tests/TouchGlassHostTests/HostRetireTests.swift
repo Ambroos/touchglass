@@ -54,6 +54,14 @@ import TouchGlassIPC
         #expect(!c.retiring)
     }
 
+    /// Any process of the user may connect as a proxy, so only a verified helper's release counts.
+    @Test func anUnverifiedPeerNeverRetiresTheHost() {
+        var c = HostCoordinator(version: "0.1.0")
+        c.connectionOpened(proxy, peer: PeerIdentity(pid: 99, verified: false))
+        #expect(retireTimers(c.handle(hello(.proxy, build: "0.2.0"), from: proxy, now: now)).isEmpty)
+        #expect(!c.retiring)
+    }
+
     /// A newer proxy retires the host at once when nothing else holds it; its own connection doesn't count.
     @Test func newerProxyRetiresAnIdleHost() throws {
         var c = HostCoordinator(version: "0.1.0")

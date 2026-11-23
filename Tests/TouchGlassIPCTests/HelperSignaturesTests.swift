@@ -145,16 +145,22 @@ import Testing
         #expect(!signatures.allows(socket: a))
     }
 
-    @Test func serverClosesARefusedConnection() throws {
+    /// The server no longer refuses at accept: it records what the verifier found, with the PID from the
+    /// same audit token, and the host decides by role.
+    @Test func serverRecordsAnUnverifiedPeer() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(atPath: directory) }
+        try install(try ownExecutable(), as: "touchglass-scdaemon", in: directory)
         let path = "/tmp/tg-\(getpid())-\(UInt32.random(in: 0...UInt32.max))/host.sock"
-        let server = try IPCServer(path: path, peerVerifier: HelperSignatures(directory: directory))
-        let accepting = Thread { _ = try? server.accept() }
-        accepting.start()
-        defer { server.close() }
-
-        let client = try IPCClient.connect(path: path)
-        #expect(throws: IPCError.closed) { try client.receive(timeout: 2) }
+        defer { try? FileManager.default.removeItem(atPath: (path as NSString).deletingLastPathComponent) }
+        for (trusted, verified) in [(directory, true), ("/nonexistent", false)] {
+            let server = try IPCServer(path: path, peerVerifier: HelperSignatures(directory: trusted))
+            defer { server.close() }
+            let client = try IPCClient.connect(path: path)
+            defer { client.close() }
+            let accepted = try server.accept()
+            defer { accepted.close() }
+            #expect(accepted.peer == PeerIdentity(pid: getpid(), verified: verified))
+        }
     }
 }

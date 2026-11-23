@@ -167,33 +167,33 @@ final class FakeProcesses: ProcessSource, @unchecked Sendable {
         #expect(resolver.label(for: .agentClient(ssh: false)) == "git commit · touchglass")
     }
 
-    // MARK: Owner PID
+    // MARK: Parent chain
 
-    @Test func ownerPIDIsLabelledWithoutAScan() {
+    @Test func aProcessIsLabelledWithoutAScan() {
         let table = FakeProcesses()
         commitTree(table)
-        #expect(resolver(table).label(for: .owner(300)) == "git commit · touchglass")
+        #expect(resolver(table).label(startingAt: 300, deadline: .now + .seconds(5)) == "git commit · touchglass")
     }
 
     @Test func missingOrForeignProcessGivesNoLabel() {
         let table = FakeProcesses()
         commitTree(table)
         table.add(800, ppid: 1, name: "gpg", argv: ["gpg"], uid: 0)
-        #expect(resolver(table).label(for: .owner(999)) == nil)
-        #expect(resolver(table).label(for: .owner(800)) == nil)
+        #expect(resolver(table).label(startingAt: 999, deadline: .now + .seconds(5)) == nil)
+        #expect(resolver(table).label(startingAt: 800, deadline: .now + .seconds(5)) == nil)
     }
 
     @Test func unreadableArgumentsFallBackToTheProcessName() {
         let table = FakeProcesses()
         table.add(300, ppid: 250, name: "gpg", argv: nil)
         // The parent exited: the walk stops at the client.
-        #expect(resolver(table).label(for: .owner(300)) == "gpg")
+        #expect(resolver(table).label(startingAt: 300, deadline: .now + .seconds(5)) == "gpg")
     }
 
     @Test func aProcessCallingItselfGitIsNamedByItsExecutable() {
         let table = FakeProcesses()
         table.add(300, ppid: 250, name: "gpg", argv: ["git", "commit"], cwd: "/src/touchglass", executable: "/opt/example/bin/gpg")
-        #expect(resolver(table).label(for: .owner(300)) == "gpg")
+        #expect(resolver(table).label(startingAt: 300, deadline: .now + .seconds(5)) == "gpg")
     }
 
     // MARK: Who asks for a PIN
@@ -255,8 +255,6 @@ final class FakeProcesses: ProcessSource, @unchecked Sendable {
         table.add(705, ppid: 200, name: "sh", argv: ["sh", ".git/hooks/pre-commit"], executable: "/bin/sh")
         table.add(710, ppid: 705, name: "Python", argv: ["gpg", "hook.py"], executable: "/opt/example/bin/python3", sockets: client(pcb: 710, agentPCB: 711))
         #expect(resolver(table).label(for: .pinentry(400, owner: 710)) == "Asked by python3 from git commit · touchglass")
-        // Without the pinentry's PID, the owner alone.
-        #expect(resolver(table).label(for: .owner(710)) == "Asked by python3 from git commit · touchglass")
     }
 
     @Test func usualClientsKeepTheirLabel() {

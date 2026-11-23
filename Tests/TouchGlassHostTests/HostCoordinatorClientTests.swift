@@ -102,10 +102,11 @@ import TouchGlassIPC
 
     @Test func ownerLabelFillsThePINPromptAndCarriesToTheTouch() throws {
         var coordinator = HostCoordinator()
+        coordinator.connectionOpened(pinentry, peer: PeerIdentity(pid: 4100, verified: true))
         _ = start(&coordinator)
         _ = coordinator.handle(.pinNeeded(ConnRef(conn: "100:p")), from: proxy, now: now)
         let prompt = coordinator.handle(.getPin(GetPin(id: "r1", desc: cardDescription, fields: CardFields(number: "12 345 678"), owner: "4242/501 example-host")), from: pinentry, now: now)
-        #expect(queries(prompt) == [.resolveClient(.request(id: "r1", operation: first()), .owner(4242))])
+        #expect(queries(prompt) == [.resolveClient(.request(id: "r1", operation: first()), .pinentry(4100, owner: 4242))])
 
         let filled = panelEvents(coordinator.clientResolved(.request(id: "r1", operation: first()), label: "git tag · example"))
         #expect(filled == [.show(.pinEntry(PinRequest(operation: .sign, cardSerial: "12345678", client: "git tag · example", promptID: "r1")))])
@@ -120,20 +121,31 @@ import TouchGlassIPC
 
     @Test func passphrasePromptGetsTheOwnerLabel() {
         var coordinator = HostCoordinator()
+        coordinator.connectionOpened(pinentry, peer: PeerIdentity(pid: 4100, verified: true))
         let prompt = coordinator.handle(.getPin(GetPin(id: "p1", desc: "Please enter the passphrase", owner: "77/501 example-host")), from: pinentry, now: now)
-        #expect(queries(prompt) == [.resolveClient(.request(id: "p1", operation: nil), .owner(77))])
+        #expect(queries(prompt) == [.resolveClient(.request(id: "p1", operation: nil), .pinentry(4100, owner: 77))])
         #expect(panelEvents(coordinator.clientResolved(.request(id: "p1", operation: nil), label: "gpg")) == [.show(.passphrase(PassphraseRequest(description: "Please enter the passphrase", client: "gpg", promptID: "p1")))])
     }
 
-    @Test func aPromptFromAPinentryThatSaidHelloIsCheckedByItsPID() {
+    /// The resolver starts from the PID that the kernel gave for the connection, never from the hello.
+    @Test func aPromptIsCheckedByTheKernelsPIDOfThePinentry() {
         var coordinator = HostCoordinator()
-        _ = coordinator.handle(.hello(Hello(role: .pinentry, pid: 4100)), from: pinentry, now: now)
+        coordinator.connectionOpened(pinentry, peer: PeerIdentity(pid: 4100, verified: true))
+        _ = coordinator.handle(.hello(Hello(role: .pinentry, pid: 9999)), from: pinentry, now: now)
         let prompt = coordinator.handle(.getPin(GetPin(id: "p1", desc: "Please enter the passphrase", owner: "77/501 example-host")), from: pinentry, now: now)
         #expect(queries(prompt) == [.resolveClient(.request(id: "p1", operation: nil), .pinentry(4100, owner: 77))])
         _ = coordinator.handle(.dismiss(RequestRef(id: "p1")), from: pinentry, now: now)
         // Without an owner, the pinentry's PID alone.
         let bare = coordinator.handle(.getPin(GetPin(id: "p2", desc: "Please enter the passphrase")), from: pinentry, now: now)
         #expect(queries(bare) == [.resolveClient(.request(id: "p2", operation: nil), .pinentry(4100, owner: nil))])
+    }
+
+    /// No label is better than one from an owner value nobody checked.
+    @Test func withoutTheKernelsPIDThePromptGetsNoLabel() {
+        var coordinator = HostCoordinator()
+        _ = coordinator.handle(.hello(Hello(role: .pinentry, pid: 9999)), from: pinentry, now: now)
+        let prompt = coordinator.handle(.getPin(GetPin(id: "p1", desc: "Please enter the passphrase", owner: "77/501 example-host")), from: pinentry, now: now)
+        #expect(queries(prompt).isEmpty)
     }
 
     @Test func touchTimeoutSettingOverridesTheProxy() throws {

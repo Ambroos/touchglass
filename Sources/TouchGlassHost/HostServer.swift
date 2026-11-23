@@ -14,6 +14,7 @@ public final class HostServer: @unchecked Sendable {
 
     public typealias MessageHandler = @MainActor @Sendable (IPCMessage, ConnectionID) -> Void
     public typealias CloseHandler = @MainActor @Sendable (ConnectionID) -> Void
+    public typealias OpenHandler = @MainActor @Sendable (ConnectionID, PeerIdentity) -> Void
 
     private let server: IPCServer
     private let lock = NSLock()
@@ -22,8 +23,9 @@ public final class HostServer: @unchecked Sendable {
     private var stopped = false
     private var onMessage: MessageHandler = { _, _ in }
     private var onClose: CloseHandler = { _ in }
+    private var onOpen: OpenHandler = { _, _ in }
 
-    /// Listens on `path`, admitting only peers that `peerVerifier` allows when one is given. Throws
+    /// Listens on `path`, identifying each peer with `peerVerifier` when one is given. Throws
     /// `IPCError.addressInUse` if another host answers there.
     public init(path: String = IPCPaths.hostSocket, peerVerifier: (any PeerVerifying)? = nil) throws {
         server = try IPCServer(path: path, peerVerifier: peerVerifier)
@@ -31,8 +33,10 @@ public final class HostServer: @unchecked Sendable {
 
     public var path: String { server.path }
 
-    public func start(onMessage: @escaping MessageHandler, onClose: @escaping CloseHandler) {
+    /// Starts accepting. `onOpen` gets each connection's peer before any of its messages.
+    public func start(onOpen: @escaping OpenHandler = { _, _ in }, onMessage: @escaping MessageHandler, onClose: @escaping CloseHandler) {
         lock.withLock {
+            self.onOpen = onOpen
             self.onMessage = onMessage
             self.onClose = onClose
         }
@@ -56,6 +60,12 @@ public final class HostServer: @unchecked Sendable {
         entry.sendQueue.async { try? entry.connection.send(message) }
     }
 
+    /// Closes a connection: its read thread ends and reports the close as for any other.
+    public func close(_ id: ConnectionID) {
+        guard let entry = lock.withLock({ connections[id] }) else { return }
+        entry.sendQueue.async { _ = shutdown(entry.connection.fileDescriptor, SHUT_RDWR) }
+    }
+
     private var isStopped: Bool { lock.withLock { stopped } }
 
     private func acceptLoop() {
@@ -69,6 +79,10 @@ public final class HostServer: @unchecked Sendable {
                 return id
             }
             TouchGlassLog(.host)(.connectionOpened(id: id))
+            // Queued on the main queue before the read thread starts, so it arrives before any message.
+            let openHandler = lock.withLock { onOpen }
+            let peer = connection.peer ?? PeerIdentity(pid: connection.peerPID, verified: true)
+            DispatchQueue.main.async { openHandler(id, peer) }
             let thread = Thread { [self] in readLoop(id, connection) }
             thread.name = "TouchGlass connection \(id)"
             thread.start()

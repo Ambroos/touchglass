@@ -96,8 +96,9 @@ public enum LogEvent: Sendable, Equatable {
     case hostStarted(version: String?, touchTimeout: TimeInterval?, touchCache: TimeInterval?)
     case connectionOpened(id: Int)
     case connectionClosed(id: Int)
-    /// A process that isn't one of the host's helpers connected to the socket.
-    case connectionRefused(pid: Int?)
+    /// A process that isn't one of the host's helpers asked for a prompt, and the host closed its
+    /// connection. `notLogged` counts the refusals since the last such line that the log left out.
+    case connectionRefused(id: Int, pid: Int?, notLogged: Int)
     case hello(id: Int, role: PeerRole, build: String?)
     case retireDecision(hostVersion: String, helperBuild: String)
     case retireExit
@@ -187,8 +188,9 @@ public enum LogEvent: Sendable, Equatable {
             return "connection \(id) opened"
         case let .connectionClosed(id):
             return "connection \(id) closed"
-        case let .connectionRefused(pid):
-            return "connection refused: pid \(pid.map(String.init) ?? "?") is not a TouchGlass helper"
+        case let .connectionRefused(id, pid, notLogged):
+            return "connection \(id) refused: pid \(pid.map(String.init) ?? "?") is not a TouchGlass helper and asked for a prompt"
+                + (notLogged > 0 ? " (\(notLogged) more refused since the last such line)" : "")
         case let .hello(id, role, build):
             return "connection \(id) hello: \(role.rawValue)" + (build.map { ", release \(Self.release($0))" } ?? "")
         case let .retireDecision(host, helper):

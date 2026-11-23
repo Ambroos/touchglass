@@ -69,6 +69,7 @@ public final class HostSession {
     public func start() {
         log(.hostStarted(version: coordinator.version, touchTimeout: coordinator.touchTimeout, touchCache: coordinator.touchCache.fixedSeconds))
         server.start(
+            onOpen: { [weak self] connection, peer in self?.coordinator.connectionOpened(connection, peer: peer) },
             onMessage: { [weak self] message, connection in self?.receive(message, from: connection) },
             onClose: { [weak self] connection in self?.closed(connection) }
         )
@@ -118,6 +119,8 @@ public final class HostSession {
                 panel.shakeField()
             case .reply(let connection, let message):
                 server.send(message, to: connection)
+            case .close(let connection):
+                server.close(connection)
             case .schedule(let delay, let timer):
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                     guard let self else { return }

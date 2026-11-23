@@ -61,6 +61,8 @@ public enum HostOutput: Sendable, Equatable {
     case panel(PanelEvent)
     case shakeField
     case reply(ConnectionID, IPCMessage)
+    /// Close the connection: a peer that isn't one of the host's helpers asked for a prompt.
+    case close(ConnectionID)
     case schedule(after: TimeInterval, HostTimer)
     /// Find out what asked for an operation or request, off the main thread, and report it with
     /// `clientResolved(_:label:)`. The panel never waits for it.
@@ -161,9 +163,17 @@ public struct HostCoordinator: Sendable {
     /// Connections from pinentries that are still open. A pinentry can send a request at any moment, so
     /// the host never exits while one is connected.
     private(set) var pinentryConnections: Set<ConnectionID> = []
-    /// The PID that each pinentry connection reported in its hello. The host admits only its own
-    /// helpers, so the PID is the pinentry's own.
-    private var pinentryPIDs: [ConnectionID: Int32] = [:]
+    /// What the server learned about each connection's peer when it accepted it. A connection that
+    /// `connectionOpened` didn't report, as in tests that drive the coordinator alone, counts as
+    /// verified with an unknown PID; the server reports every connection before its first message.
+    private var peers: [ConnectionID: PeerIdentity] = [:]
+    /// Connections closed for asking for a prompt without being verified. Their later messages are ignored.
+    private var refusedConnections: Set<ConnectionID> = []
+    /// When the last refusal reached the log, and how many refusals it left out since.
+    private var lastRefusalLogged: Date?
+    private var refusalsNotLogged = 0
+    /// The shortest time between two refusal lines in the log.
+    static let refusalLogInterval: TimeInterval = 1
     /// A helper of a later release said hello: exit when idle.
     public private(set) var retiring = false
     private var retireScheduled = false
@@ -215,8 +225,48 @@ public struct HostCoordinator: Sendable {
 
     // MARK: Messages
 
+    /// The server accepted `connection`, from the peer that `peer` describes.
+    public mutating func connectionOpened(_ connection: ConnectionID, peer: PeerIdentity) {
+        peers[connection] = peer
+    }
+
     public mutating func handle(_ message: IPCMessage, from connection: ConnectionID, now: Date) -> [HostOutput] {
-        tracking(handleMessage(message, from: connection, now: now))
+        guard !refusedConnections.contains(connection) else { return [] }
+        if Self.asksForPrompt(message), peers[connection]?.verified == false {
+            return refuse(connection, now: now)
+        }
+        return tracking(handleMessage(message, from: connection, now: now))
+    }
+
+    /// Whether only a pinentry sends `message`: a pinentry hello, or a prompt or its withdrawal.
+    ///
+    /// Only these need a verified peer. Any other process of the user may act as a proxy, as the proxy
+    /// of an earlier release does after `brew upgrade` until scdaemon restarts: its code no longer
+    /// matches a helper on disk. An unverified proxy can show touch panels, report touch policies and
+    /// name a GnuPG home for policy queries, as any process of the user could before the check. That
+    /// is acceptable because nothing secret flows back to a proxy: the host never sends it a reply, and
+    /// a PIN goes only to the pinentry that asked for it. An unverified hello also never makes the host
+    /// retire, so a stray process can't make it exit.
+    static func asksForPrompt(_ message: IPCMessage) -> Bool {
+        switch message {
+        case .hello(let hello): hello.role == .pinentry
+        case .getPin, .confirm, .message, .dismiss: true
+        default: false
+        }
+    }
+
+    /// Closes a connection that asked for a prompt without being verified. Logs at most one line per
+    /// `refusalLogInterval`, with the number of refusals left out since the last line.
+    private mutating func refuse(_ connection: ConnectionID, now: Date) -> [HostOutput] {
+        refusedConnections.insert(connection)
+        if let last = lastRefusalLogged, now.timeIntervalSince(last) < Self.refusalLogInterval, now >= last {
+            refusalsNotLogged += 1
+        } else {
+            log.append(.connectionRefused(id: connection, pid: peers[connection]?.pid.map(Int.init), notLogged: refusalsNotLogged))
+            lastRefusalLogged = now
+            refusalsNotLogged = 0
+        }
+        return [.close(connection)]
     }
 
     private mutating func handleMessage(_ message: IPCMessage, from connection: ConnectionID, now: Date) -> [HostOutput] {
@@ -264,13 +314,10 @@ public struct HostCoordinator: Sendable {
             guard let shown, Self.connection(of: shown) == connection else { return [] }
             return requestEnded(ref.id)
         case .hello(let hello):
-            if hello.role == .pinentry {
-                pinentryConnections.insert(connection)
-                if hello.pid > 0 { pinentryPIDs[connection] = hello.pid }
-            }
+            if hello.role == .pinentry { pinentryConnections.insert(connection) }
             if hello.role == .proxy, let gnupg = hello.gnupg, gnupg.isUsable { gnupgContexts[connection] = gnupg }
             log.append(.hello(id: connection, role: hello.role, build: hello.build))
-            if let version, let build = hello.build, BuildInfo.isNewer(build, than: version) {
+            if let version, let build = hello.build, peers[connection]?.verified != false, BuildInfo.isNewer(build, than: version) {
                 if !retiring { log.append(.retireDecision(hostVersion: version, helperBuild: build)) }
                 retiring = true
             }
@@ -288,7 +335,8 @@ public struct HostCoordinator: Sendable {
 
     private mutating func closeConnection(_ connection: ConnectionID, now: Date) -> [HostOutput] {
         pinentryConnections.remove(connection)
-        pinentryPIDs[connection] = nil
+        peers[connection] = nil
+        refusedConnections.remove(connection)
         gnupgContexts[connection] = nil
         var outputs: [HostOutput] = []
         for conn in operationOrder where operations[conn]?.reporter == connection {
@@ -811,10 +859,12 @@ public struct HostCoordinator: Sendable {
         // The agent names its client in the owner option: an exact answer, where the proxy's operation
         // only allows a guess among the agent's clients.
         let operationRef = operationID.flatMap { conn in operations[conn].map { OperationRef(conn: conn, number: $0.number) } }
-        // With the pinentry's PID, the resolver also checks that gpg-agent started it.
-        let owner = ClientQuery.ownerPID(request.owner)
-        let query: ClientQuery? = if let pinentry = pinentryPIDs[connection] { .pinentry(pinentry, owner: owner) } else { owner.map { .owner($0) } }
-        let resolve: [HostOutput] = query.map { [.resolveClient(.request(id: request.id, operation: operationRef), $0)] } ?? []
+        // The resolver starts from the pinentry's PID as the kernel gave it, and checks that gpg-agent
+        // started the pinentry before it trusts the owner value. Without that PID, no label: an unchecked
+        // one is worse.
+        let resolve: [HostOutput] = peers[connection]?.pid.map {
+            [.resolveClient(.request(id: request.id, operation: operationRef), .pinentry($0, owner: ClientQuery.ownerPID(request.owner)))]
+        } ?? []
 
         guard isCard else {
             let passphrase = PassphraseRequest(description: request.desc ?? "", error: request.error, promptID: request.id)

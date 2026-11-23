@@ -77,8 +77,7 @@ import Testing
         #expect(clients.map(\.pid) == [child])
         #expect(clients.first?.ssh == false)
         #expect(resolver.label(for: .agentClient(ssh: false)) == "sleep")
-        // As the owner of a PIN prompt, sleep is not a usual client of gpg-agent.
-        #expect(resolver.label(for: .owner(child)) == "Asked by sleep")
+        #expect(resolver.label(startingAt: child, deadline: .now + .seconds(2)) == "sleep")
     }
 
     /// The live process table, with one PID reported under the agent's name and any real agent renamed,

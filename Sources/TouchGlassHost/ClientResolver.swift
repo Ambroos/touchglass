@@ -2,8 +2,6 @@ import Foundation
 
 /// What the host knows about the process behind a card operation when it asks for a label.
 public enum ClientQuery: Sendable, Equatable {
-    /// The client PID from the agent's `OPTION owner`, which a pinentry request carries.
-    case owner(Int32)
     /// A prompt from the pinentry with PID `pinentry`, with the client PID from its `OPTION owner`, if
     /// any. The label names the owner only when gpg-agent started the pinentry and the owner is one of
     /// that agent's clients; a pinentry that something else started is named by its parent.
@@ -56,9 +54,6 @@ public final class ClientResolver: ClientResolving, @unchecked Sendable {
     public func label(for query: ClientQuery) -> String? {
         let deadline = ContinuousClock.now + budget
         switch query {
-        case .owner(let pid):
-            guard processes.record(pid)?.uid == uid else { return nil }
-            return chain(startingAt: pid, deadline: deadline).flatMap(ClientLabel.promptLabel)
         case .pinentry(let pid, let owner):
             return labelForPinentry(pid, owner: owner, deadline: deadline)
         case .agentClient(let ssh, let agent):

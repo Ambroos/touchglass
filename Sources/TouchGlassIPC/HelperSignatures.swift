@@ -2,17 +2,31 @@ import Darwin
 import Foundation
 import Security
 
-/// Decides whether the process on the other end of an accepted socket may talk to the host.
-public protocol PeerVerifying: Sendable {
-    func allows(socket: Int32) -> Bool
+/// What the host learned about the process on the other end of an accepted socket, from the kernel.
+public struct PeerIdentity: Sendable, Equatable {
+    /// The peer's process ID, from the same audit token that was checked. Nil if the kernel didn't say.
+    public var pid: Int32?
+    /// Whether the peer runs one of TouchGlass's own helpers. Only a verified peer may ask for a PIN.
+    public var verified: Bool
+
+    public init(pid: Int32?, verified: Bool) {
+        self.pid = pid
+        self.verified = verified
+    }
 }
 
-/// Admits only processes that run one of TouchGlass's helper executables from a trusted directory,
+/// Identifies the process on the other end of an accepted socket.
+public protocol PeerVerifying: Sendable {
+    func identify(socket: Int32) -> PeerIdentity
+}
+
+/// Verifies processes that run one of TouchGlass's helper executables from a trusted directory,
 /// matched by code directory hash through the peer's audit token.
 ///
-/// The same user ID is not enough: any process of the user could otherwise ask for a PIN in the panel,
-/// with the context of a real card operation. The hashes are read again when a helper file changes, so
-/// the helpers of an upgrade that replaced the files can still connect and make the old host retire.
+/// The same user ID is not enough to ask for a PIN: any process of the user could otherwise show a
+/// PIN prompt in the panel, with the context of a real card operation, and receive what is typed. The
+/// hashes are read again when a helper file changes, so the helpers of an upgrade that replaced the
+/// files are verified too and can make the old host retire.
 public final class HelperSignatures: PeerVerifying, @unchecked Sendable {
     public static let helperNames = ["touchglass-pinentry", "touchglass-scdaemon"]
 
@@ -83,13 +97,21 @@ public final class HelperSignatures: PeerVerifying, @unchecked Sendable {
         return "\(prefix)/opt/\(parts[0])/\(parts[2])"
     }
 
-    public func allows(socket: Int32) -> Bool {
+    public func identify(socket: Int32) -> PeerIdentity {
+        guard let token = Self.peerToken(socket: socket) else { return PeerIdentity(pid: nil, verified: false) }
+        // `audit_token_to_pid` in libbsm reads the same field.
+        let pid = Int32(bitPattern: token.val.5)
         let hashes = currentHashes()
         guard !hashes.isEmpty,
-              let code = Self.peerCode(socket: socket),
+              let code = Self.code(token: token),
               let requirement = Self.requirement(cdhashes: hashes)
-        else { return false }
-        return SecCodeCheckValidity(code, [], requirement) == errSecSuccess
+        else { return PeerIdentity(pid: pid, verified: false) }
+        return PeerIdentity(pid: pid, verified: SecCodeCheckValidity(code, [], requirement) == errSecSuccess)
+    }
+
+    /// Whether the peer on `socket` runs one of the trusted helpers.
+    public func allows(socket: Int32) -> Bool {
+        identify(socket: socket).verified
     }
 
     /// The code directory hashes of the helpers on disk, in hex, without repeats. A helper that is
@@ -129,11 +151,17 @@ public final class HelperSignatures: PeerVerifying, @unchecked Sendable {
         return unique.map { String(format: "%02x", $0) }.joined()
     }
 
-    /// The running code of the peer, from its audit token: unlike its PID, the token can't be reused.
-    private static func peerCode(socket: Int32) -> SecCode? {
+    /// The peer's audit token: unlike its PID, the token can't be reused by another process.
+    private static func peerToken(socket: Int32) -> audit_token_t? {
         var token = audit_token_t()
         var length = socklen_t(MemoryLayout<audit_token_t>.size)
         guard getsockopt(socket, SOL_LOCAL, LOCAL_PEERTOKEN, &token, &length) == 0 else { return nil }
+        return token
+    }
+
+    /// The running code of the process that `token` names.
+    private static func code(token: audit_token_t) -> SecCode? {
+        var token = token
         let attributes = [kSecGuestAttributeAudit: withUnsafeBytes(of: &token) { Data($0) }] as CFDictionary
         var code: SecCode?
         guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &code) == errSecSuccess else { return nil }

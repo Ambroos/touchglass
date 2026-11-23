@@ -425,30 +425,6 @@ struct ProxyIntegrationTests {
         #expect(harness.finish()?.status == 0)
     }
 
-    /// A host that doesn't trust the proxy's executable accepts and closes each connection; the
-    /// events are lost, and the card operations go on as without a host.
-    @Test func refusedByTheHostKeepsForwarding() throws {
-        var card = ProxyHarness.Card()
-        card.touch_ms = 500
-        let harness = try ProxyHarness(card: card)
-        defer { harness.cleanUp() }
-        let noHelpers = NSTemporaryDirectory() + "tg-no-helpers-\(getpid())-\(UInt32.random(in: 0...UInt32.max))"
-        try FileManager.default.createDirectory(atPath: noHelpers, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(atPath: noHelpers) }
-        let server = try IPCServer(path: harness.hostSocketPath, peerVerifier: HelperSignatures(directory: noHelpers))
-        defer { server.close() }
-        Thread.detachNewThread { while (try? server.accept()) != nil {} }
-
-        try harness.start()
-        _ = harness.handshake()
-        let start = Date()
-        for _ in 0..<3 {
-            #expect(operation(harness.agent, "PKSIGN", grip: Self.sign).isOK)
-        }
-        #expect(Date().timeIntervalSince(start) < 3)
-        #expect(harness.finish()?.status == 0)
-    }
-
     @Test func stoppedHostDoesNotSlowForwarding() throws {
         var card = ProxyHarness.Card()
         card.verified = [1]

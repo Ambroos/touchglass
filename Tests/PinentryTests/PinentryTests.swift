@@ -373,15 +373,18 @@ func answering(secret: String) -> @Sendable (IPCMessage) -> IPCMessage? {
         #expect(sandbox.read(sandbox.pinentryLog).contains("reconnecting to host"))
     }
 
-    /// A host that refuses the pinentry, as one that doesn't trust its executable, accepts and closes
-    /// each connection. The pinentry reconnects once, then hands the prompt to the fallback.
+    /// A host that doesn't verify the pinentry closes its connection when it says hello. The pinentry
+    /// reconnects once, then hands the prompt to the fallback.
     @Test func refusedByTheHostFallsBack() throws {
         let sandbox = Sandbox()
-        let noHelpers = sandbox.directory + "/no-helpers"
-        mkdir(noHelpers, 0o700)
-        let server = try IPCServer(path: sandbox.socketPath, peerVerifier: HelperSignatures(directory: noHelpers))
+        let server = try IPCServer(path: sandbox.socketPath)
         defer { server.close() }
-        Thread.detachNewThread { while (try? server.accept()) != nil {} }
+        Thread.detachNewThread {
+            while let connection = try? server.accept() {
+                _ = try? connection.receive(timeout: 2)
+                connection.close()
+            }
+        }
         let start = Date()
         let pinentry = try PinentryDriver(sandbox: sandbox)
         _ = pinentry.handshake()
