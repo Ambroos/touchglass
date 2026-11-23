@@ -34,14 +34,14 @@ import TouchGlassIPC
     }
 
     @Test func operationStartAsksForTheMatchingKindOfClient() {
-        var coordinator = HostCoordinator()
+        var coordinator = HostCoordinator().verifying(proxy, pinentry)
         #expect(start(&coordinator, conn: "a", op: .sign) == [.resolveClient(.operation(OperationRef(conn: "a", number: 1)), .agentClient(ssh: false))])
         #expect(start(&coordinator, conn: "b", op: .decrypt) == [.resolveClient(.operation(OperationRef(conn: "b", number: 2)), .agentClient(ssh: false))])
         #expect(start(&coordinator, conn: "c", op: .auth, agent: 4321) == [.resolveClient(.operation(OperationRef(conn: "c", number: 3)), .agentClient(ssh: true, agent: 4321))])
     }
 
     @Test func aLateLabelFillsInTheTouchStepInPlace() throws {
-        var coordinator = HostCoordinator()
+        var coordinator = HostCoordinator().verifying(proxy, pinentry)
         _ = start(&coordinator)
         let wait = try #require(touch(&coordinator))
         #expect(wait.client == nil)
@@ -56,7 +56,7 @@ import TouchGlassIPC
     }
 
     @Test func aLabelThatArrivesFirstShowsWithTheTouchStep() throws {
-        var coordinator = HostCoordinator()
+        var coordinator = HostCoordinator().verifying(proxy, pinentry)
         _ = start(&coordinator)
         #expect(coordinator.clientResolved(.operation(first()), label: "ssh example-host").isEmpty)
         #expect(try #require(touch(&coordinator)).client == "ssh example-host")
@@ -64,7 +64,7 @@ import TouchGlassIPC
 
     /// The success state keeps the label that the touch step showed.
     @Test func successCarriesTheLabel() throws {
-        var coordinator = HostCoordinator()
+        var coordinator = HostCoordinator().verifying(proxy, pinentry)
         _ = start(&coordinator)
         _ = coordinator.clientResolved(.operation(first()), label: "git commit · example")
         _ = try #require(touch(&coordinator))
@@ -73,7 +73,7 @@ import TouchGlassIPC
     }
 
     @Test func noLabelOrAnEndedOperationChangesNothing() throws {
-        var coordinator = HostCoordinator()
+        var coordinator = HostCoordinator().verifying(proxy, pinentry)
         _ = start(&coordinator)
         _ = try #require(touch(&coordinator))
         #expect(coordinator.clientResolved(.operation(first()), label: nil).isEmpty)
@@ -83,7 +83,7 @@ import TouchGlassIPC
 
     @Test func aLabelForAnEndedOperationSkipsTheNextOneOnTheSameConnection() throws {
         // Without the touch cache window, so the second operation's touch wait shows at once.
-        var coordinator = HostCoordinator(touchCache: 0)
+        var coordinator = HostCoordinator(touchCache: 0).verifying(proxy, pinentry)
         _ = start(&coordinator)
         _ = coordinator.handle(.opEnd(OpEnd(conn: "100:p", result: .ok)), from: proxy, now: now)
         // The pipe session reuses its connection ID for the next operation.
@@ -101,7 +101,7 @@ import TouchGlassIPC
     }
 
     @Test func ownerLabelFillsThePINPromptAndCarriesToTheTouch() throws {
-        var coordinator = HostCoordinator()
+        var coordinator = HostCoordinator().verifying(proxy, pinentry)
         coordinator.connectionOpened(pinentry, peer: PeerIdentity(pid: 4100, verified: true))
         _ = start(&coordinator)
         _ = coordinator.handle(.pinNeeded(ConnRef(conn: "100:p")), from: proxy, now: now)
@@ -120,7 +120,7 @@ import TouchGlassIPC
     }
 
     @Test func passphrasePromptGetsTheOwnerLabel() {
-        var coordinator = HostCoordinator()
+        var coordinator = HostCoordinator().verifying(proxy, pinentry)
         coordinator.connectionOpened(pinentry, peer: PeerIdentity(pid: 4100, verified: true))
         let prompt = coordinator.handle(.getPin(GetPin(id: "p1", desc: "Please enter the passphrase", owner: "77/501 example-host")), from: pinentry, now: now)
         #expect(queries(prompt) == [.resolveClient(.request(id: "p1", operation: nil), .pinentry(4100, owner: 77))])
@@ -129,7 +129,7 @@ import TouchGlassIPC
 
     /// The resolver starts from the PID that the kernel gave for the connection, never from the hello.
     @Test func aPromptIsCheckedByTheKernelsPIDOfThePinentry() {
-        var coordinator = HostCoordinator()
+        var coordinator = HostCoordinator().verifying(proxy, pinentry)
         coordinator.connectionOpened(pinentry, peer: PeerIdentity(pid: 4100, verified: true))
         _ = coordinator.handle(.hello(Hello(role: .pinentry, pid: 9999)), from: pinentry, now: now)
         let prompt = coordinator.handle(.getPin(GetPin(id: "p1", desc: "Please enter the passphrase", owner: "77/501 example-host")), from: pinentry, now: now)
@@ -142,14 +142,14 @@ import TouchGlassIPC
 
     /// No label is better than one from an owner value nobody checked.
     @Test func withoutTheKernelsPIDThePromptGetsNoLabel() {
-        var coordinator = HostCoordinator()
+        var coordinator = HostCoordinator().verifying(proxy, pinentry)
         _ = coordinator.handle(.hello(Hello(role: .pinentry, pid: 9999)), from: pinentry, now: now)
         let prompt = coordinator.handle(.getPin(GetPin(id: "p1", desc: "Please enter the passphrase", owner: "77/501 example-host")), from: pinentry, now: now)
         #expect(queries(prompt).isEmpty)
     }
 
     @Test func touchTimeoutSettingOverridesTheProxy() throws {
-        var coordinator = HostCoordinator(touchTimeout: 25)
+        var coordinator = HostCoordinator(touchTimeout: 25).verifying(proxy, pinentry)
         _ = start(&coordinator)
         let wait = try #require(touch(&coordinator, timeoutMs: 15_000))
         #expect(wait.deadline == now.addingTimeInterval(25))
@@ -159,7 +159,7 @@ import TouchGlassIPC
     }
 
     @Test func aShortTouchTimeoutKeepsThePanelUntilTheCardAnswers() throws {
-        var coordinator = HostCoordinator(touchTimeout: 5)
+        var coordinator = HostCoordinator(touchTimeout: 5).verifying(proxy, pinentry)
         _ = start(&coordinator)
         let outputs = coordinator.handle(.touchWait(TouchGlassIPC.TouchWait(conn: "100:p", timeoutMs: 15_000, at: now.timeIntervalSince1970)), from: proxy, now: now)
         let expiry = outputs.compactMap { output -> TimeInterval? in
@@ -170,7 +170,7 @@ import TouchGlassIPC
     }
 
     @Test func withoutTheSettingTheProxyTimeoutCounts() throws {
-        var coordinator = HostCoordinator()
+        var coordinator = HostCoordinator().verifying(proxy, pinentry)
         _ = start(&coordinator)
         let wait = try #require(touch(&coordinator, timeoutMs: 20_000))
         #expect(wait.deadline == now.addingTimeInterval(20))

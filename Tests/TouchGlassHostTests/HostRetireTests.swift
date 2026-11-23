@@ -32,7 +32,7 @@ import TouchGlassIPC
     }
 
     @Test func newerPinentryRetiresTheHostAfterItCloses() throws {
-        var c = HostCoordinator(version: "0.1.0")
+        var c = HostCoordinator(version: "0.1.0").verifying(proxy, pinentry)
         #expect(c.handle(hello(.pinentry, build: "0.2.0"), from: pinentry, now: now).isEmpty)
         #expect(c.retiring)
 
@@ -42,21 +42,21 @@ import TouchGlassIPC
 
     @Test func sameOlderOrUnknownBuildsKeepTheHost() {
         for build in ["0.1.0", "0.0.9", nil, "HEAD-1a2b3c4"] {
-            var c = HostCoordinator(version: "0.1.0")
+            var c = HostCoordinator(version: "0.1.0").verifying(proxy, pinentry)
             _ = c.handle(hello(.pinentry, build: build), from: pinentry, now: now)
             _ = c.handle(hello(.proxy, build: build), from: proxy, now: now)
             #expect(!c.retiring)
             #expect(retireTimers(c.connectionClosed(pinentry)).isEmpty)
         }
         // A host without a version, such as a build outside the app bundle, never retires.
-        var c = HostCoordinator()
+        var c = HostCoordinator().verifying(proxy, pinentry)
         _ = c.handle(hello(.pinentry, build: "9.9.9"), from: pinentry, now: now)
         #expect(!c.retiring)
     }
 
     /// Any process of the user may connect as a proxy, so only a verified helper's release counts.
     @Test func anUnverifiedPeerNeverRetiresTheHost() {
-        var c = HostCoordinator(version: "0.1.0")
+        var c = HostCoordinator(version: "0.1.0").verifying(proxy, pinentry)
         c.connectionOpened(proxy, peer: PeerIdentity(pid: 99, verified: false))
         #expect(retireTimers(c.handle(hello(.proxy, build: "0.2.0"), from: proxy, now: now)).isEmpty)
         #expect(!c.retiring)
@@ -64,13 +64,13 @@ import TouchGlassIPC
 
     /// A newer proxy retires the host at once when nothing else holds it; its own connection doesn't count.
     @Test func newerProxyRetiresAnIdleHost() throws {
-        var c = HostCoordinator(version: "0.1.0")
+        var c = HostCoordinator(version: "0.1.0").verifying(proxy, pinentry)
         let timer = try retireTimer(c.handle(hello(.proxy, build: "0.2.0"), from: proxy, now: now))
         #expect(c.fire(timer, now: now) == [.exit])
     }
 
     @Test func runningOperationKeepsTheHostUntilItEnds() throws {
-        var c = HostCoordinator(version: "0.1.0")
+        var c = HostCoordinator(version: "0.1.0").verifying(proxy, pinentry)
         _ = c.handle(.opStart(OpStart(conn: "100:p", op: .sign, slot: 1, at: now.timeIntervalSince1970)), from: proxy, now: now)
         _ = c.handle(.touchWait(TouchGlassIPC.TouchWait(conn: "100:p", at: now.timeIntervalSince1970)), from: proxy, now: now)
         #expect(retireTimers(c.handle(hello(.pinentry, build: "0.2.0"), from: pinentry, now: now)).isEmpty)
@@ -86,7 +86,7 @@ import TouchGlassIPC
     /// A timer from before the host was busy again does nothing, so the result that the panel shows now
     /// gets the full delay.
     @Test func timerFromAnEarlierIdleSpellDoesNothing() throws {
-        var c = HostCoordinator(version: "0.1.0")
+        var c = HostCoordinator(version: "0.1.0").verifying(proxy, pinentry)
         let early = try retireTimer(c.handle(hello(.proxy, build: "0.2.0"), from: proxy, now: now))
         _ = c.handle(.opStart(OpStart(conn: "100:p", op: .sign, slot: 1, at: now.timeIntervalSince1970)), from: proxy, now: now)
         let ended = c.handle(.opEnd(OpEnd(conn: "100:p", result: .badPin)), from: proxy, now: now)
@@ -99,7 +99,7 @@ import TouchGlassIPC
 
     /// A pinentry that connects while the host waits to exit keeps it; the host exits after that one closes.
     @Test func pinentryThatConnectsMeanwhileKeepsTheHost() throws {
-        var c = HostCoordinator(version: "0.1.0")
+        var c = HostCoordinator(version: "0.1.0").verifying(proxy, pinentry, 3)
         _ = c.handle(hello(.pinentry, build: "0.2.0"), from: pinentry, now: now)
         let early = try retireTimer(c.connectionClosed(pinentry))
 

@@ -164,8 +164,8 @@ public struct HostCoordinator: Sendable {
     /// the host never exits while one is connected.
     private(set) var pinentryConnections: Set<ConnectionID> = []
     /// What the server learned about each connection's peer when it accepted it. A connection that
-    /// `connectionOpened` didn't report, as in tests that drive the coordinator alone, counts as
-    /// verified with an unknown PID; the server reports every connection before its first message.
+    /// `connectionOpened` didn't report counts as unverified, with no PID: the check fails closed. The
+    /// server reports every connection before its first message.
     private var peers: [ConnectionID: PeerIdentity] = [:]
     /// Connections closed for asking for a prompt without being verified. Their later messages are ignored.
     private var refusedConnections: Set<ConnectionID> = []
@@ -232,7 +232,7 @@ public struct HostCoordinator: Sendable {
 
     public mutating func handle(_ message: IPCMessage, from connection: ConnectionID, now: Date) -> [HostOutput] {
         guard !refusedConnections.contains(connection) else { return [] }
-        if Self.asksForPrompt(message), peers[connection]?.verified == false {
+        if Self.asksForPrompt(message), peers[connection]?.verified != true {
             return refuse(connection, now: now)
         }
         return tracking(handleMessage(message, from: connection, now: now))
@@ -317,7 +317,7 @@ public struct HostCoordinator: Sendable {
             if hello.role == .pinentry { pinentryConnections.insert(connection) }
             if hello.role == .proxy, let gnupg = hello.gnupg, gnupg.isUsable { gnupgContexts[connection] = gnupg }
             log.append(.hello(id: connection, role: hello.role, build: hello.build))
-            if let version, let build = hello.build, peers[connection]?.verified != false, BuildInfo.isNewer(build, than: version) {
+            if let version, let build = hello.build, peers[connection]?.verified == true, BuildInfo.isNewer(build, than: version) {
                 if !retiring { log.append(.retireDecision(hostVersion: version, helperBuild: build)) }
                 retiring = true
             }

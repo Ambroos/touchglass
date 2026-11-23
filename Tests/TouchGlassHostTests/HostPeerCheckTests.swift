@@ -33,6 +33,15 @@ import TouchGlassIPC
         #expect(c.takeLog().isEmpty)
     }
 
+    /// The check fails closed: a connection that the server never reported counts as unverified.
+    @Test func anUnreportedConnectionCantAskForAPrompt() {
+        var c = HostCoordinator(version: "0.1.0")
+        #expect(c.handle(.getPin(GetPin(id: "r1", desc: "Please enter the passphrase")), from: stranger, now: now) == [.close(stranger)])
+        #expect(c.takeLog() == [.connectionRefused(id: stranger, pid: nil, notLogged: 0)])
+        _ = c.handle(.hello(Hello(role: .proxy, pid: 4100, build: "0.2.0")), from: proxy, now: now)
+        #expect(!c.retiring)
+    }
+
     @Test func aVerifiedPinentryGetsItsPrompt() {
         var c = opened(verified: true, as: stranger)
         _ = c.handle(.hello(Hello(role: .pinentry, pid: 4100)), from: stranger, now: now)
@@ -66,5 +75,17 @@ import TouchGlassIPC
             .connectionRefused(id: 13, pid: 13, notLogged: 2),
         ])
         #expect(LogEvent.connectionRefused(id: 13, pid: 13, notLogged: 2).message.hasSuffix("(2 more refused since the last such line)"))
+    }
+}
+
+extension HostCoordinator {
+    /// Reports `connections` as verified helpers with unknown PIDs, as the server would. The coordinator
+    /// fails closed: a connection it wasn't told about can't ask for a prompt or make the host retire.
+    func verifying(_ connections: ConnectionID...) -> HostCoordinator {
+        var coordinator = self
+        for connection in connections {
+            coordinator.connectionOpened(connection, peer: PeerIdentity(pid: nil, verified: true))
+        }
+        return coordinator
     }
 }

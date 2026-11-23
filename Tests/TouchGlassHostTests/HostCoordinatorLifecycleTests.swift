@@ -35,7 +35,7 @@ import TouchGlassIPC
     // MARK: H2: lost op_end
 
     @Test func closedProxyConnectionEndsItsOperations() {
-        var c = HostCoordinator()
+        var c = HostCoordinator().verifying(proxy, pinentry)
         start(&c, conn: "100:p")
         #expect(isTouch(touch(&c, conn: "100:p")))
 
@@ -50,7 +50,7 @@ import TouchGlassIPC
     }
 
     @Test func closedProxyConnectionLeavesOtherProxiesAlone() {
-        var c = HostCoordinator()
+        var c = HostCoordinator().verifying(proxy, pinentry)
         start(&c, conn: "100:p")
         start(&c, conn: "200:p", from: 5)
         #expect(isTouch(touch(&c, conn: "200:p", from: 5)))
@@ -60,7 +60,7 @@ import TouchGlassIPC
     }
 
     @Test func closedProxyConnectionShowsTheNextQueuedTouch() {
-        var c = HostCoordinator()
+        var c = HostCoordinator().verifying(proxy, pinentry)
         start(&c, conn: "100:p")
         start(&c, conn: "200:s1", from: 5)
         _ = touch(&c, conn: "100:p")
@@ -73,7 +73,7 @@ import TouchGlassIPC
     }
 
     @Test func touchWaitExpiresAfterDeadlineAndGrace() throws {
-        var c = HostCoordinator()
+        var c = HostCoordinator().verifying(proxy, pinentry)
         start(&c, conn: "100:p")
         let shown = touch(&c, conn: "100:p")
         let expiry = try #require(shown.compactMap { output -> (TimeInterval, HostTimer)? in
@@ -88,7 +88,7 @@ import TouchGlassIPC
     }
 
     @Test func expiryIsIgnoredOnceTheOperationMovedOn() throws {
-        var c = HostCoordinator()
+        var c = HostCoordinator().verifying(proxy, pinentry)
         start(&c, conn: "100:p")
         let timer = try #require(timers(touch(&c, conn: "100:p")).first)
         // A false start: the card asks for the PIN, so the touch deadline no longer applies.
@@ -97,7 +97,7 @@ import TouchGlassIPC
         #expect(c.operations["100:p"] != nil)
 
         // An operation that ended normally is not ended again.
-        var d = HostCoordinator()
+        var d = HostCoordinator().verifying(proxy, pinentry)
         start(&d, conn: "100:p")
         let other = try #require(timers(touch(&d, conn: "100:p")).first)
         _ = d.handle(.opEnd(OpEnd(conn: "100:p", result: .ok)), from: proxy, now: now)
@@ -106,7 +106,7 @@ import TouchGlassIPC
     }
 
     @Test func expiredTouchShowsTheNextQueuedTouch() throws {
-        var c = HostCoordinator()
+        var c = HostCoordinator().verifying(proxy, pinentry)
         start(&c, conn: "100:p")
         start(&c, conn: "100:s1")
         let timer = try #require(timers(touch(&c, conn: "100:p")).first)
@@ -119,7 +119,7 @@ import TouchGlassIPC
     // MARK: H1 through the coordinator
 
     @Test func hiddenTouchThenTimeoutThenPINPromptShows() {
-        var c = HostCoordinator()
+        var c = HostCoordinator().verifying(proxy, pinentry)
         var machine = PanelMachine()
         func apply(_ outputs: [HostOutput]) { panelEvents(outputs).forEach { _ = machine.handle($0) } }
 
@@ -143,7 +143,7 @@ import TouchGlassIPC
     // MARK: M4: queued touch behind a prompt
 
     func pinPromptWithQueuedTouch() -> HostCoordinator {
-        var c = HostCoordinator()
+        var c = HostCoordinator().verifying(proxy, pinentry)
         start(&c, conn: "100:p")
         _ = c.handle(.pinNeeded(ConnRef(conn: "100:p")), from: proxy, now: now)
         _ = c.handle(.getPin(GetPin(id: "r1", desc: cardDescription, fields: CardFields(number: "12 345 678"))), from: pinentry, now: now)
@@ -171,7 +171,7 @@ import TouchGlassIPC
     }
 
     @Test func confirmedMessageShowsTheQueuedTouch() {
-        var c = HostCoordinator()
+        var c = HostCoordinator().verifying(proxy, pinentry)
         _ = c.handle(.message(TouchGlassIPC.MessageRequest(id: "m1", desc: "Note")), from: pinentry, now: now)
         start(&c, conn: "100:s1")
         #expect(touch(&c, conn: "100:s1").isEmpty)
@@ -191,7 +191,7 @@ import TouchGlassIPC
     // MARK: L1: passphrase takeover
 
     @Test func anotherConnectionCannotTakeOverAPassphrasePrompt() {
-        var c = HostCoordinator()
+        var c = HostCoordinator().verifying(proxy, pinentry, 3)
         _ = c.handle(.getPin(GetPin(id: "a1", desc: "Passphrase for key")), from: 2, now: now)
         let second = c.handle(.getPin(GetPin(id: "other", desc: "Passphrase for key", error: "Bad passphrase")), from: 3, now: now)
         #expect(second == [.reply(3, .fallback(RequestRef(id: "other")))])
@@ -201,7 +201,7 @@ import TouchGlassIPC
     }
 
     @Test func theOwningPinentryCanStillRetry() {
-        var c = HostCoordinator()
+        var c = HostCoordinator().verifying(proxy, pinentry)
         _ = c.handle(.getPin(GetPin(id: "a1", desc: "Passphrase for key")), from: 2, now: now)
         _ = c.handle(.submit("wrong"))
         let retry = c.handle(.getPin(GetPin(id: "a2", desc: "Passphrase for key", error: "Bad passphrase")), from: 2, now: now)

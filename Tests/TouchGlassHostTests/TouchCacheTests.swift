@@ -53,7 +53,7 @@ import TouchGlassIPC
     // MARK: Inside the window
 
     @Test func cachedOperationInsideTheWindowShowsNothing() {
-        var c = HostCoordinator()
+        var c = HostCoordinator().verifying(proxy, otherProxy, pinentry)
         touchedSignature(&c)
         start(&c, "100:p", at: 5)
         #expect(isHeldBack(touchWait(&c, "100:p", commandAt: 5), "100:p", showAt: 6.5, now: 5.4))
@@ -64,7 +64,7 @@ import TouchGlassIPC
     }
 
     @Test func realTouchInsideTheWindowShowsAtTheLongerDelayWithAnHonestCountdown() throws {
-        var c = HostCoordinator()
+        var c = HostCoordinator().verifying(proxy, otherProxy, pinentry)
         touchedSignature(&c)
         start(&c, "100:p", at: 5)
         #expect(panelEvents(touchWait(&c, "100:p", commandAt: 5)).isEmpty)
@@ -78,7 +78,7 @@ import TouchGlassIPC
     }
 
     @Test func aTouchWaitReportedLateShowsAtOnce() throws {
-        var c = HostCoordinator()
+        var c = HostCoordinator().verifying(proxy, otherProxy, pinentry)
         touchedSignature(&c)
         start(&c, "100:p", at: 5)
         // The event reaches the host 1.6 s after the command, past the longer delay.
@@ -89,7 +89,7 @@ import TouchGlassIPC
     // MARK: Outside the window
 
     @Test func operationOutsideTheWindowShowsTheTouchAtOnce() throws {
-        var c = HostCoordinator()
+        var c = HostCoordinator().verifying(proxy, otherProxy, pinentry)
         touchedSignature(&c, endAt: 3)
         // The window ended at 18 s.
         start(&c, "100:p", at: 18.5)
@@ -99,20 +99,20 @@ import TouchGlassIPC
     }
 
     @Test func firstOperationShowsTheTouchAtOnce() {
-        var c = HostCoordinator()
+        var c = HostCoordinator().verifying(proxy, otherProxy, pinentry)
         start(&c, "100:p", at: 0)
         #expect(shownTouch(touchWait(&c, "100:p", commandAt: 0)) != nil)
     }
 
     @Test func touchCacheZeroTurnsTheWindowOff() {
-        var c = HostCoordinator(touchCache: 0)
+        var c = HostCoordinator(touchCache: 0).verifying(proxy, otherProxy, pinentry)
         touchedSignature(&c)
         start(&c, "100:p", at: 5)
         #expect(shownTouch(touchWait(&c, "100:p", commandAt: 5)) != nil)
     }
 
     @Test func failedOperationDoesNotOpenTheWindow() {
-        var c = HostCoordinator()
+        var c = HostCoordinator().verifying(proxy, otherProxy, pinentry)
         start(&c, "100:p", at: 0)
         _ = touchWait(&c, "100:p", commandAt: 0)
         _ = end(&c, "100:p", at: 15, result: .timeout)
@@ -121,7 +121,7 @@ import TouchGlassIPC
     }
 
     @Test func windowRestartsOnEachOperation() {
-        var c = HostCoordinator()
+        var c = HostCoordinator().verifying(proxy, otherProxy, pinentry)
         touchedSignature(&c, endAt: 3)
         // Cached signatures that finish before their touch wait: each restarts the window.
         for (i, startAt) in [10.0, 22, 34].enumerated() {
@@ -143,7 +143,7 @@ import TouchGlassIPC
     // MARK: PIN prompt
 
     @Test func pinThenTouchKeepsTheTouchInPlaceOfVerifying() throws {
-        var c = HostCoordinator()
+        var c = HostCoordinator().verifying(proxy, otherProxy, pinentry)
         touchedSignature(&c)
         start(&c, "100:p", at: 5, op: .auth)
         _ = c.handle(.pinNeeded(ConnRef(conn: "100:p")), from: proxy, now: at(5.1))
@@ -161,7 +161,7 @@ import TouchGlassIPC
     }
 
     @Test func pinNeededCancelsAHeldBackTouchWait() {
-        var c = HostCoordinator()
+        var c = HostCoordinator().verifying(proxy, otherProxy, pinentry)
         touchedSignature(&c)
         start(&c, "100:p", at: 5)
         _ = touchWait(&c, "100:p", commandAt: 5)
@@ -172,7 +172,7 @@ import TouchGlassIPC
     // MARK: Several proxies
 
     @Test func theWindowCoversEveryProxyOfTheCard() throws {
-        var c = HostCoordinator()
+        var c = HostCoordinator().verifying(proxy, otherProxy, pinentry)
         // A signature on one proxy's pipe session opens the window...
         touchedSignature(&c)
         // ...and an SSH login on another proxy, overlapping a third operation that waits, uses it too.
@@ -189,14 +189,14 @@ import TouchGlassIPC
     }
 
     @Test func anotherCardHasItsOwnWindow() {
-        var c = HostCoordinator()
+        var c = HostCoordinator().verifying(proxy, otherProxy, pinentry)
         touchedSignature(&c)
         start(&c, "200:p", at: 5, serial: "D2760001240103040006999999990000", from: otherProxy)
         #expect(shownTouch(touchWait(&c, "200:p", commandAt: 5, from: otherProxy)) != nil)
     }
 
     @Test func heldBackTouchQueuesBehindAShownOne() {
-        var c = HostCoordinator()
+        var c = HostCoordinator().verifying(proxy, otherProxy, pinentry)
         touchedSignature(&c)
         // A held-back touch wait on one proxy; meanwhile another card's touch shows.
         start(&c, "100:p", at: 5)
@@ -209,7 +209,7 @@ import TouchGlassIPC
     }
 
     @Test func queuedTouchInsideTheCacheWindowIsHeldBack() throws {
-        var c = HostCoordinator()
+        var c = HostCoordinator().verifying(proxy, otherProxy, pinentry)
         start(&c, "100:p", at: 0)
         start(&c, "100:s1", at: 0.1, op: .decrypt)
         _ = touchWait(&c, "100:p", commandAt: 0)

@@ -19,7 +19,7 @@ import TouchGlassIPC
     }
 
     @Test func touchOnlyOperationShowsTouchThenSuccess() throws {
-        var coordinator = HostCoordinator()
+        var coordinator = HostCoordinator().verifying(proxy, pinentry)
         start(&coordinator)
         let shown = panelEvents(coordinator.handle(.touchWait(TouchGlassIPC.TouchWait(conn: "100:p", timeoutMs: 15_000, at: now.timeIntervalSince1970)), from: proxy, now: now.addingTimeInterval(0.4)))
         guard case .show(.touchWait(let wait)) = try #require(shown.first) else {
@@ -33,7 +33,7 @@ import TouchGlassIPC
     }
 
     @Test func pinThenVerifyingThenTouchThenSuccess() throws {
-        var coordinator = HostCoordinator()
+        var coordinator = HostCoordinator().verifying(proxy, pinentry)
         start(&coordinator, op: .auth)
         _ = coordinator.handle(.pinNeeded(ConnRef(conn: "100:p")), from: proxy, now: now)
         let desc = cardDescription + "\nRemaining attempts: 2"
@@ -60,7 +60,7 @@ import TouchGlassIPC
     }
 
     @Test func wrongPINIsTerminal() {
-        var coordinator = HostCoordinator()
+        var coordinator = HostCoordinator().verifying(proxy, pinentry)
         start(&coordinator)
         _ = coordinator.handle(.pinNeeded(ConnRef(conn: "100:p")), from: proxy, now: now)
         _ = coordinator.handle(.getPin(GetPin(id: "r1", desc: cardDescription, fields: CardFields(number: "12 345 678"))), from: pinentry, now: now)
@@ -79,7 +79,7 @@ import TouchGlassIPC
     }
 
     @Test func pinNeededAfterTouchWaitReplacesTheTouchPanel() {
-        var coordinator = HostCoordinator()
+        var coordinator = HostCoordinator().verifying(proxy, pinentry)
         start(&coordinator)
         _ = coordinator.handle(.touchWait(TouchGlassIPC.TouchWait(conn: "100:p", at: now.timeIntervalSince1970)), from: proxy, now: now)
         _ = coordinator.handle(.pinNeeded(ConnRef(conn: "100:p")), from: proxy, now: now)
@@ -89,7 +89,7 @@ import TouchGlassIPC
 
     @Test func queuedTouchWaitRearmsAfterTheFirstOperation() throws {
         // Without the touch cache window; `queuedTouchInsideTheCacheWindowIsHeldBack` covers it with.
-        var coordinator = HostCoordinator(touchCache: 0)
+        var coordinator = HostCoordinator(touchCache: 0).verifying(proxy, pinentry)
         start(&coordinator, conn: "100:p")
         start(&coordinator, conn: "100:s1", op: .decrypt)
         _ = coordinator.handle(.touchWait(TouchGlassIPC.TouchWait(conn: "100:p", at: now.timeIntervalSince1970)), from: proxy, now: now)
@@ -109,13 +109,13 @@ import TouchGlassIPC
     }
 
     @Test func operationsWithoutAPanelEndSilently() {
-        var coordinator = HostCoordinator()
+        var coordinator = HostCoordinator().verifying(proxy, pinentry)
         start(&coordinator)
         #expect(coordinator.handle(.opEnd(OpEnd(conn: "100:p", result: .ok)), from: proxy, now: now).isEmpty)
     }
 
     @Test func passphraseRetryShakesAndDismissCloses() {
-        var coordinator = HostCoordinator()
+        var coordinator = HostCoordinator().verifying(proxy, pinentry)
         let first = panelEvents(coordinator.handle(.getPin(GetPin(id: "p1", desc: "Unlock key")), from: pinentry, now: now))
         #expect(first == [.show(.passphrase(PassphraseRequest(description: "Unlock key", promptID: "p1")))])
         #expect(coordinator.handle(.submit("wrong")) == [.reply(pinentry, .pin(PinReply(id: "p1", secret: Data("wrong".utf8))))])
@@ -126,19 +126,19 @@ import TouchGlassIPC
     }
 
     @Test func cancelRepliesAndCloses() {
-        var coordinator = HostCoordinator()
+        var coordinator = HostCoordinator().verifying(proxy, pinentry)
         _ = coordinator.handle(.getPin(GetPin(id: "r1", desc: cardDescription, fields: CardFields(number: "12 345 678"))), from: pinentry, now: now)
         #expect(coordinator.handle(.cancel) == [.reply(pinentry, .cancelled(RequestRef(id: "r1"))), .panel(.userClosed)])
     }
 
     @Test func secondPromptWhileOneWaitsFallsBack() {
-        var coordinator = HostCoordinator()
+        var coordinator = HostCoordinator().verifying(proxy, pinentry, 3)
         _ = coordinator.handle(.getPin(GetPin(id: "r1", desc: cardDescription, fields: CardFields(number: "12 345 678"))), from: pinentry, now: now)
         #expect(coordinator.handle(.confirm(Confirm(id: "c1", desc: "Allow?")), from: 3, now: now) == [.reply(3, .fallback(RequestRef(id: "c1")))])
     }
 
     @Test func confirmPromptsAndAnswers() {
-        var coordinator = HostCoordinator()
+        var coordinator = HostCoordinator().verifying(proxy, pinentry)
         let shown = panelEvents(coordinator.handle(.confirm(Confirm(id: "c1", desc: "Please insert the card with serial number:\n\n12345678", ok: "_OK", cancel: "_Cancel")), from: pinentry, now: now))
         #expect(shown == [.show(.confirm(ConfirmRequest(purpose: .insertCard, title: "Insert your YubiKey", detail: "Please insert the card with serial number:\n\n12345678")))])
         #expect(coordinator.handle(.confirm) == [.reply(pinentry, .confirmed(RequestRef(id: "c1"))), .panel(.userClosed)])
@@ -146,22 +146,22 @@ import TouchGlassIPC
     }
 
     @Test func closedConnectionWithdrawsItsPrompt() {
-        var coordinator = HostCoordinator()
+        var coordinator = HostCoordinator().verifying(proxy, pinentry)
         _ = coordinator.handle(.message(TouchGlassIPC.MessageRequest(id: "m1", desc: "Key added\nDetails")), from: pinentry, now: now)
         #expect(coordinator.connectionClosed(proxy).isEmpty)
         #expect(coordinator.connectionClosed(pinentry) == [.panel(.dismiss)])
     }
 
     @Test func onlyTheAskingConnectionCanDismissItsPrompt() {
-        var coordinator = HostCoordinator()
         let other: ConnectionID = 3
+        var coordinator = HostCoordinator().verifying(proxy, pinentry, other)
         _ = coordinator.handle(.getPin(GetPin(id: "r1", desc: cardDescription, fields: CardFields(number: "12 345 678"))), from: pinentry, now: now)
         #expect(coordinator.handle(.dismiss(RequestRef(id: "r1")), from: other, now: now).isEmpty)
         #expect(coordinator.handle(.dismiss(RequestRef(id: "r1")), from: pinentry, now: now) == [.panel(.dismiss)])
     }
 
     @Test func verifyingGivesUpWithoutCardEvents() {
-        var coordinator = HostCoordinator()
+        var coordinator = HostCoordinator().verifying(proxy, pinentry)
         _ = coordinator.handle(.getPin(GetPin(id: "r1", desc: cardDescription, fields: CardFields(number: "12 345 678"))), from: pinentry, now: now)
         let submitted = coordinator.handle(.submit("123456"))
         #expect(submitted.contains(.schedule(after: HostCoordinator.verifyTimeout, .verifyWatchdog(requestID: "r1"))))
