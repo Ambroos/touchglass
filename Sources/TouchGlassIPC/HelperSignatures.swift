@@ -7,7 +7,7 @@ public protocol PeerVerifying: Sendable {
     func allows(socket: Int32) -> Bool
 }
 
-/// Admits only processes that run one of TouchGlass's helper executables from the host's own directory,
+/// Admits only processes that run one of TouchGlass's helper executables from a trusted directory,
 /// matched by code directory hash through the peer's audit token.
 ///
 /// The same user ID is not enough: any process of the user could otherwise ask for a PIN in the panel,
@@ -27,20 +27,52 @@ public final class HelperSignatures: PeerVerifying, @unchecked Sendable {
         }
     }
 
-    private let directory: String
+    /// The directories whose helpers are trusted, in order.
+    public let directories: [String]
     private let lock = NSLock()
     private var cache: [String: (stamp: FileStamp, cdhash: String)] = [:]
 
-    /// Trusts the helpers in `directory`: `Contents/MacOS` of the app bundle, or a build directory.
-    public init(directory: String) {
-        self.directory = directory
+    /// Trusts the helpers in each of `directories`: `Contents/MacOS` of an app bundle, or a build directory.
+    public init(directories: [String]) {
+        var seen = Set<String>()
+        self.directories = directories.filter { seen.insert($0).inserted }
     }
 
-    /// The helpers next to this process's executable, by the path it was launched with: after `brew
-    /// upgrade` that path shows the new release, whose helpers must reach this host to make it retire.
-    public static func besideThisExecutable() -> HelperSignatures {
-        let executable = Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])
-        return HelperSignatures(directory: executable.deletingLastPathComponent().path)
+    public convenience init(directory: String) {
+        self.init(directories: [directory])
+    }
+
+    /// The verifier for the host running at `executablePath`; see `trustedDirectories(hostExecutable:)`.
+    public static func forHost(executablePath: String? = Bundle.main.executablePath) -> HelperSignatures {
+        HelperSignatures(directories: trustedDirectories(hostExecutable: executablePath ?? CommandLine.arguments[0]))
+    }
+
+    /// The directories whose helpers may talk to the host at `hostExecutable`: the host's own directory,
+    /// and for a Homebrew keg, the same directory through the formula's `opt` link.
+    ///
+    /// `open` resolves symlinks, so a host that a helper started through the `opt` link runs from the
+    /// versioned `Cellar` keg. `brew upgrade` deletes that keg and points the link at the next one, and
+    /// the launchers that `touchglass install` writes run the helpers through the link, as its
+    /// `stable_app` names it. Without the link, the old host would trust no helper, and the next
+    /// release's helpers couldn't say hello to make it retire. The link only says where to look: a peer
+    /// must still match the code directory hash of a helper file found there.
+    public static func trustedDirectories(hostExecutable: String) -> [String] {
+        let given = URL(fileURLWithPath: hostExecutable).standardizedFileURL.deletingLastPathComponent().path
+        let resolved = URL(fileURLWithPath: hostExecutable).resolvingSymlinksInPath().deletingLastPathComponent().path
+        var directories = [given, resolved]
+        directories += directories.compactMap(homebrewOptPath)
+        var seen = Set<String>()
+        return directories.filter { seen.insert($0).inserted }
+    }
+
+    /// `<prefix>/opt/<formula>/<rest>` for `<prefix>/Cellar/<formula>/<version>/<rest>`, or nil, like
+    /// `stable_app` in `scripts/touchglass`.
+    static func homebrewOptPath(_ path: String) -> String? {
+        guard let cellar = path.range(of: "/Cellar/", options: .backwards) else { return nil }
+        let prefix = path[..<cellar.lowerBound]
+        let parts = path[cellar.upperBound...].split(separator: "/", maxSplits: 2, omittingEmptySubsequences: false)
+        guard parts.count == 3, !parts[0].isEmpty, !parts[1].isEmpty, !parts[2].isEmpty else { return nil }
+        return "\(prefix)/opt/\(parts[0])/\(parts[2])"
     }
 
     public func allows(socket: Int32) -> Bool {
@@ -52,21 +84,24 @@ public final class HelperSignatures: PeerVerifying, @unchecked Sendable {
         return SecCodeCheckValidity(code, [], requirement) == errSecSuccess
     }
 
-    /// The code directory hashes of the helpers on disk, in hex. A helper that is missing or unsigned
-    /// is left out.
+    /// The code directory hashes of the helpers on disk, in hex, without repeats. A helper that is
+    /// missing or unsigned is left out.
     func currentHashes() -> [String] {
         lock.withLock {
-            Self.helperNames.compactMap { name in
-                let path = directory + "/" + name
-                guard let stamp = Self.stamp(path) else {
-                    cache[name] = nil
-                    return nil
+            var seen = Set<String>()
+            return directories.flatMap { directory in
+                Self.helperNames.compactMap { name -> String? in
+                    let path = directory + "/" + name
+                    guard let stamp = Self.stamp(path) else {
+                        cache[path] = nil
+                        return nil
+                    }
+                    if let cached = cache[path], cached.stamp == stamp { return cached.cdhash }
+                    guard let cdhash = Self.staticCDHash(path) else { return nil }
+                    cache[path] = (stamp, cdhash)
+                    return cdhash
                 }
-                if let cached = cache[name], cached.stamp == stamp { return cached.cdhash }
-                guard let cdhash = Self.staticCDHash(path) else { return nil }
-                cache[name] = (stamp, cdhash)
-                return cdhash
-            }
+            }.filter { seen.insert($0).inserted }
         }
     }
 

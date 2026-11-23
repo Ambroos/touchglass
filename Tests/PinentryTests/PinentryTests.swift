@@ -373,6 +373,26 @@ func answering(secret: String) -> @Sendable (IPCMessage) -> IPCMessage? {
         #expect(sandbox.read(sandbox.pinentryLog).contains("reconnecting to host"))
     }
 
+    /// A host that refuses the pinentry, as one that doesn't trust its executable, accepts and closes
+    /// each connection. The pinentry reconnects once, then hands the prompt to the fallback.
+    @Test func refusedByTheHostFallsBack() throws {
+        let sandbox = Sandbox()
+        let noHelpers = sandbox.directory + "/no-helpers"
+        mkdir(noHelpers, 0o700)
+        let server = try IPCServer(path: sandbox.socketPath, peerVerifier: HelperSignatures(directory: noHelpers))
+        defer { server.close() }
+        Thread.detachNewThread { while (try? server.accept()) != nil {} }
+        let start = Date()
+        let pinentry = try PinentryDriver(sandbox: sandbox)
+        _ = pinentry.handshake()
+        #expect(pinentry.transact("SETDESC Unlock%0Athe card") == ["OK"])
+        #expect(pinentry.transact("GETPIN", timeout: 10) == ["D stub-secret", "OK"])
+        #expect(pinentry.transact("BYE") == ["OK closing connection"])
+        #expect(pinentry.waitForExit() == 0)
+        #expect(Date().timeIntervalSince(start) < 5)
+        #expect(sandbox.stubLines.suffix(2) == ["GETPIN", "BYE"])
+    }
+
     @Test func hostStallsMidRequest() throws {
         let start = Date()
         let (_, host) = try expectHandoff(environment: ["TOUCHGLASS_PING_INTERVAL_MS": "100", "TOUCHGLASS_HOST_STALL_MS": "400"]) { _ in .silent }

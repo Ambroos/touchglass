@@ -67,6 +67,49 @@ import Testing
         #expect(signatures.allows(socket: a))
     }
 
+    @Test func trustsTheOptLinkOfAHomebrewKeg() {
+        let host = "/opt/homebrew/Cellar/touchglass/0.1.2/TouchGlass.app/Contents/MacOS/TouchGlass"
+        #expect(HelperSignatures.trustedDirectories(hostExecutable: host) == [
+            "/opt/homebrew/Cellar/touchglass/0.1.2/TouchGlass.app/Contents/MacOS",
+            "/opt/homebrew/opt/touchglass/TouchGlass.app/Contents/MacOS",
+        ])
+        #expect(HelperSignatures.trustedDirectories(hostExecutable: "/Applications/TouchGlass.app/Contents/MacOS/TouchGlass")
+            == ["/Applications/TouchGlass.app/Contents/MacOS"])
+        #expect(HelperSignatures.homebrewOptPath("/usr/local/Cellar/touchglass/0.1.2") == nil)
+        #expect(HelperSignatures.homebrewOptPath("/usr/local/Cellar/touchglass/0.1.2/bin") == "/usr/local/opt/touchglass/bin")
+    }
+
+    /// `brew upgrade` deletes the keg that the host runs from and points the `opt` link at the next one.
+    /// The next release's helpers run through the link, and must reach the old host to make it retire.
+    @Test func admitsTheNextReleaseAfterAnUpgradeDeletedTheHostsKeg() throws {
+        let prefix = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(atPath: prefix) }
+        let macOS = "/TouchGlass.app/Contents/MacOS"
+        let oldKeg = prefix + "/Cellar/touchglass/0.1.2"
+        let newKeg = prefix + "/Cellar/touchglass/0.1.3"
+        let opt = prefix + "/opt/touchglass"
+        try FileManager.default.createDirectory(atPath: oldKeg + macOS, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: prefix + "/opt", withIntermediateDirectories: true)
+        try install("/bin/sleep", as: "touchglass-pinentry", in: oldKeg + macOS)
+        try FileManager.default.createSymbolicLink(atPath: opt, withDestinationPath: "../Cellar/touchglass/0.1.2")
+
+        let signatures = HelperSignatures.forHost(executablePath: oldKeg + macOS + "/TouchGlass")
+        let (a, b) = try socketPair()
+        defer { close(a); close(b) }
+        #expect(!signatures.allows(socket: a))
+
+        try FileManager.default.createDirectory(atPath: newKeg + macOS, withIntermediateDirectories: true)
+        try install(try ownExecutable(), as: "touchglass-pinentry", in: newKeg + macOS)
+        try FileManager.default.removeItem(atPath: opt)
+        try FileManager.default.createSymbolicLink(atPath: opt, withDestinationPath: "../Cellar/touchglass/0.1.3")
+        try FileManager.default.removeItem(atPath: oldKeg)
+        #expect(signatures.allows(socket: a))
+
+        // The link only says where to look: a file there must still match the peer's hash.
+        try install("/bin/cat", as: "touchglass-pinentry", in: newKeg + macOS)
+        #expect(!signatures.allows(socket: a))
+    }
+
     @Test func serverClosesARefusedConnection() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(atPath: directory) }

@@ -17,7 +17,7 @@ extension PanelController: PanelDriving {
 func runHost() {
     let server: HostServer
     do {
-        server = try HostServer(peerVerifier: HelperSignatures.besideThisExecutable())
+        server = try HostServer(peerVerifier: HelperSignatures.forHost())
     } catch IPCError.addressInUse {
         exit(0)
     } catch {
