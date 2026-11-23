@@ -16,14 +16,20 @@ public protocol PeerVerifying: Sendable {
 public final class HelperSignatures: PeerVerifying, @unchecked Sendable {
     public static let helperNames = ["touchglass-pinentry", "touchglass-scdaemon"]
 
+    /// What identifies a helper file's contents without reading it. A copy that keeps the inode and
+    /// restores the modification time, such as `cp -p` over the file, still changes the size or the
+    /// status change time, which a user can't set.
     private struct FileStamp: Equatable {
         var device: dev_t
         var inode: ino_t
+        var size: off_t
         var modified: timespec
+        var changed: timespec
 
         static func == (a: FileStamp, b: FileStamp) -> Bool {
-            a.device == b.device && a.inode == b.inode
+            a.device == b.device && a.inode == b.inode && a.size == b.size
                 && a.modified.tv_sec == b.modified.tv_sec && a.modified.tv_nsec == b.modified.tv_nsec
+                && a.changed.tv_sec == b.changed.tv_sec && a.changed.tv_nsec == b.changed.tv_nsec
         }
     }
 
@@ -47,22 +53,24 @@ public final class HelperSignatures: PeerVerifying, @unchecked Sendable {
         HelperSignatures(directories: trustedDirectories(hostExecutable: executablePath ?? CommandLine.arguments[0]))
     }
 
-    /// The directories whose helpers may talk to the host at `hostExecutable`: the host's own directory,
-    /// and for a Homebrew keg, the same directory through the formula's `opt` link.
+    /// The directories whose helpers may talk to the host at `hostExecutable`: the directory that the
+    /// host runs from, with symlinks resolved, and for a Homebrew keg, the same directory through the
+    /// formula's `opt` link.
     ///
-    /// `open` resolves symlinks, so a host that a helper started through the `opt` link runs from the
-    /// versioned `Cellar` keg. `brew upgrade` deletes that keg and points the link at the next one, and
-    /// the launchers that `touchglass install` writes run the helpers through the link, as its
+    /// The path that the host was launched through doesn't count: whoever starts the host chooses it.
+    /// `open` resolves symlinks anyway, so a host that a helper started through the `opt` link runs from
+    /// the versioned `Cellar` keg. `brew upgrade` deletes that keg and points the link at the next one,
+    /// and the launchers that `touchglass install` writes run the helpers through the link, as its
     /// `stable_app` names it. Without the link, the old host would trust no helper, and the next
     /// release's helpers couldn't say hello to make it retire. The link only says where to look: a peer
     /// must still match the code directory hash of a helper file found there.
     public static func trustedDirectories(hostExecutable: String) -> [String] {
-        let given = URL(fileURLWithPath: hostExecutable).standardizedFileURL.deletingLastPathComponent().path
-        let resolved = URL(fileURLWithPath: hostExecutable).resolvingSymlinksInPath().deletingLastPathComponent().path
-        var directories = [given, resolved]
-        directories += directories.compactMap(homebrewOptPath)
-        var seen = Set<String>()
-        return directories.filter { seen.insert($0).inserted }
+        let directory = URL(fileURLWithPath: hostExecutable).standardizedFileURL.deletingLastPathComponent().path
+        let resolved = realpath(directory, nil).map { pointer in
+            defer { free(pointer) }
+            return String(cString: pointer)
+        } ?? directory
+        return [resolved] + [homebrewOptPath(resolved)].compactMap { $0 }
     }
 
     /// `<prefix>/opt/<formula>/<rest>` for `<prefix>/Cellar/<formula>/<version>/<rest>`, or nil, like
@@ -108,7 +116,7 @@ public final class HelperSignatures: PeerVerifying, @unchecked Sendable {
     private static func stamp(_ path: String) -> FileStamp? {
         var info = stat()
         guard stat(path, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { return nil }
-        return FileStamp(device: info.st_dev, inode: info.st_ino, modified: info.st_mtimespec)
+        return FileStamp(device: info.st_dev, inode: info.st_ino, size: info.st_size, modified: info.st_mtimespec, changed: info.st_ctimespec)
     }
 
     private static func staticCDHash(_ path: String) -> String? {

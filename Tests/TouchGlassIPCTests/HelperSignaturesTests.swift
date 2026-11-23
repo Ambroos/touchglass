@@ -79,6 +79,41 @@ import Testing
         #expect(HelperSignatures.homebrewOptPath("/usr/local/Cellar/touchglass/0.1.2/bin") == "/usr/local/opt/touchglass/bin")
     }
 
+    /// Whoever starts the host chooses the path it is launched through; only the resolved one counts.
+    @Test func ignoresThePathTheHostWasLaunchedThrough() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        let real = directory + "/real/TouchGlass.app/Contents/MacOS"
+        try FileManager.default.createDirectory(atPath: real, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: directory + "/link", withDestinationPath: "real")
+        let resolvedReal = try #require(realpath(real, nil).map { pointer in
+            defer { free(pointer) }
+            return String(cString: pointer)
+        })
+        #expect(HelperSignatures.trustedDirectories(hostExecutable: directory + "/link/TouchGlass.app/Contents/MacOS/TouchGlass") == [resolvedReal])
+    }
+
+    /// `cp -p` over a helper keeps its inode and modification time; the stamp still sees the change.
+    @Test func readsAHelperCopiedInPlaceWithItsTimesAgain() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        let (a, b) = try socketPair()
+        defer { close(a); close(b) }
+        let target = directory + "/touchglass-pinentry"
+        try install("/bin/sleep", as: "touchglass-pinentry", in: directory)
+        let signatures = HelperSignatures(directory: directory)
+        #expect(!signatures.allows(socket: a))
+        let before = try FileManager.default.attributesOfItem(atPath: target)[.modificationDate] as! Date
+        // Overwrite in place, keeping the inode, then restore the modification time.
+        let data = try Data(contentsOf: URL(fileURLWithPath: try ownExecutable()))
+        let handle = try #require(FileHandle(forWritingAtPath: target))
+        try handle.truncate(atOffset: 0)
+        try handle.write(contentsOf: data)
+        try handle.close()
+        try FileManager.default.setAttributes([.modificationDate: before], ofItemAtPath: target)
+        #expect(signatures.allows(socket: a))
+    }
+
     /// `brew upgrade` deletes the keg that the host runs from and points the `opt` link at the next one.
     /// The next release's helpers run through the link, and must reach the old host to make it retire.
     @Test func admitsTheNextReleaseAfterAnUpgradeDeletedTheHostsKeg() throws {
