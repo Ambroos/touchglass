@@ -152,6 +152,14 @@ import TouchGlassIPC
         #expect(coordinator.connectionClosed(pinentry) == [.panel(.dismiss)])
     }
 
+    @Test func onlyTheAskingConnectionCanDismissItsPrompt() {
+        var coordinator = HostCoordinator()
+        let other: ConnectionID = 3
+        _ = coordinator.handle(.getPin(GetPin(id: "r1", desc: cardDescription, fields: CardFields(number: "12 345 678"))), from: pinentry, now: now)
+        #expect(coordinator.handle(.dismiss(RequestRef(id: "r1")), from: other, now: now).isEmpty)
+        #expect(coordinator.handle(.dismiss(RequestRef(id: "r1")), from: pinentry, now: now) == [.panel(.dismiss)])
+    }
+
     @Test func verifyingGivesUpWithoutCardEvents() {
         var coordinator = HostCoordinator()
         _ = coordinator.handle(.getPin(GetPin(id: "r1", desc: cardDescription, fields: CardFields(number: "12 345 678"))), from: pinentry, now: now)

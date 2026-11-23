@@ -189,15 +189,18 @@ public enum IPCClient {
     }
 }
 
-/// A listening Unix socket for the host. Accepts only peers with the same user ID. Call `accept` from one thread at a time.
+/// A listening Unix socket for the host. Accepts only peers with the same user ID, and with a verifier,
+/// only peers it allows. Call `accept` from one thread at a time.
 public final class IPCServer: @unchecked Sendable {
     public let path: String
     public let fileDescriptor: Int32
+    private let peerVerifier: (any PeerVerifying)?
     private var isClosed = false
 
     /// Creates the socket's directory with mode 0700 if missing, removes a stale socket file, and listens. Throws `IPCError.addressInUse` if another server answers on the path.
-    public init(path: String = IPCPaths.hostSocket) throws {
+    public init(path: String = IPCPaths.hostSocket, peerVerifier: (any PeerVerifying)? = nil) throws {
         self.path = path
+        self.peerVerifier = peerVerifier
         let directory = (path as NSString).deletingLastPathComponent
         try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         guard chmod(directory, 0o700) == 0 else { throw IPCError.errno("chmod") }
@@ -236,7 +239,8 @@ public final class IPCServer: @unchecked Sendable {
         unlink(path)
     }
 
-    /// Blocks until a peer with this process's user ID connects. Connections from other users are closed and skipped.
+    /// Blocks until an allowed peer connects: one with this process's user ID that the verifier, if any,
+    /// accepts. Other connections are closed and skipped.
     public func accept() throws -> IPCConnection {
         while true {
             let fd = Darwin.accept(fileDescriptor, nil, nil)
@@ -247,6 +251,14 @@ public final class IPCServer: @unchecked Sendable {
             var uid: uid_t = 0
             var gid: gid_t = 0
             guard getpeereid(fd, &uid, &gid) == 0, uid == geteuid() else {
+                Darwin.close(fd)
+                continue
+            }
+            if let peerVerifier, !peerVerifier.allows(socket: fd) {
+                var pid: pid_t = 0
+                var length = socklen_t(MemoryLayout<pid_t>.size)
+                let known = getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &pid, &length) == 0
+                TouchGlassLog(.host)(.connectionRefused(pid: known ? Int(pid) : nil))
                 Darwin.close(fd)
                 continue
             }

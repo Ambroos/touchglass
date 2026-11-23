@@ -23,9 +23,10 @@ public final class HostServer: @unchecked Sendable {
     private var onMessage: MessageHandler = { _, _ in }
     private var onClose: CloseHandler = { _ in }
 
-    /// Listens on `path`. Throws `IPCError.addressInUse` if another host answers there.
-    public init(path: String = IPCPaths.hostSocket) throws {
-        server = try IPCServer(path: path)
+    /// Listens on `path`, admitting only peers that `peerVerifier` allows when one is given. Throws
+    /// `IPCError.addressInUse` if another host answers there.
+    public init(path: String = IPCPaths.hostSocket, peerVerifier: (any PeerVerifying)? = nil) throws {
+        server = try IPCServer(path: path, peerVerifier: peerVerifier)
     }
 
     public var path: String { server.path }

@@ -257,6 +257,8 @@ public struct HostCoordinator: Sendable {
         case .message(let request):
             return showMessage(request, from: connection)
         case .dismiss(let ref):
+            // Only the pinentry that asked may withdraw its prompt.
+            guard let shown, Self.connection(of: shown) == connection else { return [] }
             return requestEnded(ref.id)
         case .hello(let hello):
             if hello.role == .pinentry { pinentryConnections.insert(connection) }

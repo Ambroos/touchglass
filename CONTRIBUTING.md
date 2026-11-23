@@ -18,7 +18,7 @@ The script builds `build/TouchGlass.app` with Swift Package Manager and signs it
 
 To install your build, run `scripts/touchglass install`. Run from a checkout, it builds the app if it is missing or older than the sources and copies it to `~/Applications`. See [Install and uninstall TouchGlass](docs/install.md).
 
-Run without arguments, `TouchGlass.app` is the host: it listens on a Unix socket in `~/Library/Application Support/TouchGlass` for `touchglass-pinentry` and `touchglass-scdaemon`, and shows the panel for their prompts and card operations. For how the scdaemon proxy works, see [How touchglass-scdaemon works](docs/touchglass-scdaemon.md).
+Run without arguments, `TouchGlass.app` is the host: it listens on a Unix socket in `~/Library/Application Support/TouchGlass` for `touchglass-pinentry` and `touchglass-scdaemon`, and shows the panel for their prompts and card operations. The host admits only processes that run one of the two helpers in its own `Contents/MacOS`, checked by code directory hash, so another program of yours can't show a prompt in the panel; a connection it refuses logs `connection refused`. For how the scdaemon proxy works, see [How touchglass-scdaemon works](docs/touchglass-scdaemon.md).
 
 ## Run the tests
 

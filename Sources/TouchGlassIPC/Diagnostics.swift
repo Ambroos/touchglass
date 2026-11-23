@@ -96,6 +96,8 @@ public enum LogEvent: Sendable, Equatable {
     case hostStarted(version: String?, touchTimeout: TimeInterval?, touchCache: TimeInterval?)
     case connectionOpened(id: Int)
     case connectionClosed(id: Int)
+    /// A process that isn't one of the host's helpers connected to the socket.
+    case connectionRefused(pid: Int?)
     case hello(id: Int, role: PeerRole, build: String?)
     case retireDecision(hostVersion: String, helperBuild: String)
     case retireExit
@@ -185,6 +187,8 @@ public enum LogEvent: Sendable, Equatable {
             return "connection \(id) opened"
         case let .connectionClosed(id):
             return "connection \(id) closed"
+        case let .connectionRefused(pid):
+            return "connection refused: pid \(pid.map(String.init) ?? "?") is not a TouchGlass helper"
         case let .hello(id, role, build):
             return "connection \(id) hello: \(role.rawValue)" + (build.map { ", release \(Self.release($0))" } ?? "")
         case let .retireDecision(host, helper):
