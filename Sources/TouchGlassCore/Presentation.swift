@@ -114,7 +114,7 @@ public enum Copy {
     public static func successTitle(_ kind: OperationKind) -> String {
         switch kind {
         case .sign: "Signed"
-        case .sshLogin: "Logged in"
+        case .sshLogin: "Authenticated"
         case .decrypt: "Decrypted"
         case .unknown: "Done"
         }
