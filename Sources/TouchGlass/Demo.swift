@@ -44,7 +44,7 @@ enum DemoScenario: String, CaseIterable {
         case .touch: "touch only, touched after a few seconds"
         case .timeout: "full touch countdown with escalation, then the timeout state"
         case .wrongPIN: "PIN entry with 2 attempts left, verifying, wrong PIN"
-        case .ssh: "PIN for SSH login, touch, logged in"
+        case .ssh: "PIN for SSH login, touch, authenticated"
         case .decrypt: "PIN with 1 attempt left, touch, decrypted"
         case .blocked: "PIN entry, verifying, PIN blocked"
         case .passphrase: "soft-key passphrase, rejected once with a shake, then accepted"
