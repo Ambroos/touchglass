@@ -563,14 +563,19 @@ public final class PanelController {
     }
 
     /// When the user switches Spaces while the panel shows a state, orders the panel in again so it shows on
-    /// the new Space, and checks that the window server lists it there. Without a state, there is nothing to
+    /// the new Space, and checks that the window server lists it there. A new Space is a new situation, so the
+    /// presence ladder starts over, even if it gave up on the old Space. Without a state, there is nothing to
     /// show, so the switch is not logged.
     private func activeSpaceChanged() {
         guard !holdsState, model.state != nil, !closing else { return }
         log(.activeSpaceChanged(state: shownStateName))
+        // Keeps key status only if the panel still has it when the notification arrives. A swipe to another
+        // app's full-screen Space activates that app, so the panel usually lost key status before this runs.
+        // That loss is intended: the panel doesn't take key status from the app the user moved to.
         let wasKey = panel.isKeyWindow
         panel.orderFrontRegardless()
         if wasKey, mayHoldKey, !panel.isKeyWindow { takeKey(.spaceChange) }
+        presence.reset()
         schedulePresenceCheck()
     }
 

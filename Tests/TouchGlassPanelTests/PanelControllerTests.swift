@@ -655,6 +655,70 @@ import enum TouchGlassIPC.LogEvent
         controller.send(.userClosed)
     }
 
+    @Test func aSpaceChangeStartsAFinishedLadderOver() async throws {
+        let workspace = NotificationCenter()
+        let probe = Probe(otherwise: false)
+        let (controller, events) = makeController(probe: probe, workspace: workspace)
+        controller.send(.show(pin))
+        await waitUntil { count(events, gaveUp) > 0 }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(probe.calls == 3)
+        #expect(count(events, reordered) == 1)
+
+        // On the new Space, the panel is missing once and then listed.
+        probe.answers = [false]
+        probe.otherwise = true
+        workspace.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        await waitUntil { probe.calls >= 5 }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(probe.calls == 5)
+        #expect(count(events, reordered) == 2, "the ladder repairs again after the Space change")
+        #expect(count(events, gaveUp) == 1)
+        controller.send(.userClosed)
+    }
+
+    @Test func aSpaceChangeDuringTheCloseDoesNothing() async throws {
+        let workspace = NotificationCenter()
+        let probe = Probe(otherwise: true)
+        let (controller, events) = makeController(probe: probe, workspace: workspace)
+        controller.send(.show(pin))
+        await waitUntil { probe.calls > 0 }
+        let original = controller.panel
+        let callsBefore = probe.calls
+
+        // Only the close watchdog finishes the close, 0.3 s after it starts.
+        controller.dropsAnimationCompletions = true
+        controller.send(.userClosed)
+        #expect(controller.isPanelVisible)
+        let eventsAfterClose = events.events.count
+        workspace.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(controller.isPanelVisible, "the close is still underway")
+        #expect(count(events, spaceChanged) == 0)
+        #expect(events.events.count == eventsAfterClose)
+        #expect(probe.calls == callsBefore)
+        #expect(controller.panel === original)
+    }
+
+    @Test func aSpaceChangeWhileATouchShowsTakesNoKey() async throws {
+        let workspace = NotificationCenter()
+        let probe = Probe(otherwise: true)
+        let (controller, events) = makeController(probe: probe, workspace: workspace)
+        let state = touch()
+        controller.send(.show(state))
+        await waitUntil { probe.calls > 0 }
+        let callsBefore = probe.calls
+
+        workspace.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        await waitUntil { probe.calls > callsBefore }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(count(events, spaceChanged) == 1)
+        #expect(events.taken.isEmpty)
+        #expect(controller.isPanelVisible)
+        #expect(controller.model.state == state)
+        controller.send(.userClosed)
+    }
+
     @Test func aSpaceChangeWhileIdleDoesNothing() async throws {
         let workspace = NotificationCenter()
         let probe = Probe(otherwise: true)

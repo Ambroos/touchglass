@@ -40,7 +40,7 @@ public struct PanelPresence: Sendable, Equatable {
         }
     }
 
-    /// Starts the ladder over: on a new prompt, and after the panel closes.
+    /// Starts the ladder over: on a new prompt, after the panel closes, and on a Space change.
     public mutating func reset() {
         failures = 0
         gaveUp = false
