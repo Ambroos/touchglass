@@ -50,9 +50,16 @@ public final class PanelController {
     /// How long after ordering the panel in the controller asks the window server whether it is on screen.
     var presenceCheckDelay: TimeInterval = 0.25
     private var presence = PanelPresence()
+    /// The one pending presence check. Each order-in and system event replaces it, so a burst of them, such as
+    /// the wake notifications that arrive together, leads to one check after the last of them.
+    private var presenceCheck: DispatchWorkItem?
+    /// The pending new window after a wake while no state is shown, replaced in the same way.
+    private var wakeRebuild: DispatchWorkItem?
+    /// A wake arrived while the exit animation ran: the close gets a new window when it finishes.
+    private var rebuildAfterClose = false
     /// Finishes a close if the exit animation's completion doesn't arrive.
     private var closeWatchdog: DispatchWorkItem?
-    /// Tests: drop the exit animation's completion, so that only the close watchdog can finish a close.
+    /// Tests only: drop the exit animation's completion, so that only the close watchdog can finish a close.
     var dropsAnimationCompletions = false
     private var systemObservers: [NSObjectProtocol] = []
 
@@ -387,6 +394,7 @@ public final class PanelController {
             var instant = Transaction()
             instant.disablesAnimations = true
             withTransaction(instant) { self.model.state = nil }
+            if self.rebuildAfterClose { self.rebuildWindow(reason: .wake) }
         }
         let animationFinished = { [weak self] in
             guard let self, !self.dropsAnimationCompletions else { return }
@@ -422,14 +430,19 @@ public final class PanelController {
 
     // MARK: Presence
 
-    /// Asks the window server, after `presenceCheckDelay`, whether the panel that the current generation
-    /// ordered in is on screen.
+    /// Asks the window server, `presenceCheckDelay` after the last order-in or system event, whether the panel
+    /// that the current generation ordered in is on screen. One check at a time: two checks in a row would
+    /// climb the ladder before the window server shows the result of the first repair.
     private func schedulePresenceCheck() {
         guard !holdsState else { return }
+        presenceCheck?.cancel()
         let current = generation
-        DispatchQueue.main.asyncAfter(deadline: .now() + presenceCheckDelay) { [weak self] in
+        let item = DispatchWorkItem { [weak self] in
+            self?.presenceCheck = nil
             self?.checkPresence(generation: current)
         }
+        presenceCheck = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + presenceCheckDelay, execute: item)
     }
 
     /// The window server can drop a window that AppKit still takes to be ordered in; after a sleep, every
@@ -477,7 +490,7 @@ public final class PanelController {
     }
 
     /// Replaces the panel window with a new one that shows the same state. The state machine isn't told: what
-    /// the panel shows doesn't change, only the window it shows in.
+    /// the panel shows doesn't change, only the window it shows in. Internal for tests.
     func rebuildWindow(reason: PanelRebuildReason) {
         let old = panel
         let new = Self.makePanel(model: model)
@@ -494,6 +507,9 @@ public final class PanelController {
         keyGuardUntil = .distantPast
         closeWatchdog?.cancel()
         closeWatchdog = nil
+        wakeRebuild?.cancel()
+        wakeRebuild = nil
+        rebuildAfterClose = false
 
         old.orderOut(nil)
         old.contentView = nil
@@ -538,8 +554,10 @@ public final class PanelController {
         }
     }
 
-    /// After a wake, a panel that waits for the next prompt gets a new window, made after the wake. A panel
-    /// that shows a state, such as a touch wait across the sleep, is placed again and checked now.
+    /// After a wake, a panel that waits for the next prompt gets a new window, made after the wake; a closing
+    /// panel gets it when the close finishes. A panel that shows a state, such as a touch wait across the sleep,
+    /// is placed again and checked. The check and the new window wait for `presenceCheckDelay` after the last
+    /// event, because the wake and screen notifications arrive in bursts.
     private func systemChanged(_ event: LogEvent) {
         log(event)
         guard !holdsState else { return }
@@ -548,13 +566,31 @@ public final class PanelController {
         case .systemWoke, .screensWoke:
             if shown {
                 place()
-                checkPresence(generation: generation)
-            } else if !closing {
-                rebuildWindow(reason: .wake)
+                schedulePresenceCheck()
+            } else if closing {
+                rebuildAfterClose = true
+            } else {
+                scheduleWakeRebuild()
             }
         default:
-            if shown { checkPresence(generation: generation) }
+            if shown { schedulePresenceCheck() }
         }
+    }
+
+    private func scheduleWakeRebuild() {
+        wakeRebuild?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.wakeRebuild = nil
+            // A prompt that opened meanwhile has its own presence check.
+            if self.closing {
+                self.rebuildAfterClose = true
+            } else if self.model.state == nil {
+                self.rebuildWindow(reason: .wake)
+            }
+        }
+        wakeRebuild = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + presenceCheckDelay, execute: item)
     }
 
     // MARK: Escalation

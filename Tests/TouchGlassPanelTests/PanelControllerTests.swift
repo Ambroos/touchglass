@@ -19,12 +19,15 @@ import enum TouchGlassIPC.LogEvent
     static let offScreen = NSPoint(x: -30_000, y: -30_000)
 
     /// A controller whose panel opens off screen and fully transparent. The window still orders in and
-    /// out, takes key status and runs its animations, so the tests see what the controller does.
-    func makeController(animationScale: Double = 0.05) -> PanelController {
-        let controller = PanelController(animationScale: animationScale)
+    /// out, takes key status and runs its animations, so the tests see what the controller does. It hears no
+    /// real wake or screen notifications, and takes its panel to be on screen, so that no presence repair
+    /// runs under a test that doesn't ask for one, such as in a session whose screen is locked.
+    func makeController(animationScale: Double = 0.05, settings: HostSettings = HostSettings()) -> PanelController {
+        let controller = PanelController(animationScale: animationScale, settings: settings, workspaceCenter: NotificationCenter(), appCenter: NotificationCenter())
         controller.muted = true
         controller.testOrigin = Self.offScreen
         controller.panel.alphaValue = 0
+        controller.onScreenProbe = { _ in true }
         return controller
     }
 
@@ -32,10 +35,12 @@ import enum TouchGlassIPC.LogEvent
         .touchWait(TouchWait(operation: operation, cardSerial: "12345678", deadline: Date().addingTimeInterval(15), shownAt: Date()))
     }
 
-    /// Lets the main queue and the animation completions run until `condition` holds or 2 s pass.
+    /// Lets the main queue and the animation completions run until `condition` holds or 2 s pass. The 2 s
+    /// don't count while the Mac sleeps, as the controller's timers don't.
     func waitUntil(_ condition: () -> Bool) async {
-        let end = Date().addingTimeInterval(2)
-        while !condition(), Date() < end {
+        let clock = SuspendingClock()
+        let end = clock.now.advanced(by: .seconds(2))
+        while !condition(), clock.now < end {
             try? await Task.sleep(for: .milliseconds(20))
         }
     }
@@ -359,10 +364,7 @@ import enum TouchGlassIPC.LogEvent
     /// there, so the content moves in from the bottom right.
     @Test(arguments: [PanelAppearance.readable, .smoked])
     func everyTransitionStaysCentred(appearance: PanelAppearance) async throws {
-        let controller = PanelController(animationScale: 1, settings: HostSettings(appearance: appearance))
-        controller.muted = true
-        controller.testOrigin = Self.offScreen
-        controller.panel.alphaValue = 0
+        let controller = makeController(animationScale: 1, settings: HostSettings(appearance: appearance))
         let tolerance: CGFloat = 0.5
 
         controller.send(.show(pin))
@@ -442,8 +444,8 @@ import enum TouchGlassIPC.LogEvent
 
     /// An off-screen, transparent controller that asks `probe` instead of the window server, checks soon after
     /// each order-in, and hears wake notifications only from `workspace`.
-    func makeController(probe: Probe, workspace: NotificationCenter = NotificationCenter()) -> (PanelController, KeyRequests) {
-        let controller = PanelController(animationScale: 0.05, settings: HostSettings(), workspaceCenter: workspace, appCenter: NotificationCenter())
+    func makeController(probe: Probe, workspace: NotificationCenter = NotificationCenter(), app: NotificationCenter = NotificationCenter()) -> (PanelController, KeyRequests) {
+        let controller = PanelController(animationScale: 0.05, settings: HostSettings(), workspaceCenter: workspace, appCenter: app)
         controller.muted = true
         controller.testOrigin = Self.offScreen
         controller.panel.alphaValue = 0
@@ -589,6 +591,71 @@ import enum TouchGlassIPC.LogEvent
         #expect(controller.model.state == state)
         #expect(controller.machine.state == state)
         controller.send(.userClosed)
+    }
+
+    @Test func aBurstOfWakeNotificationsChecksOnce() async throws {
+        let workspace = NotificationCenter()
+        let app = NotificationCenter()
+        let probe = Probe(otherwise: true)
+        let (controller, events) = makeController(probe: probe, workspace: workspace, app: app)
+        controller.send(.show(touch()))
+        await waitUntil { probe.calls > 0 }
+        let original = controller.panel
+
+        // The window server lists the panel again 10 ms after the notifications, before the check runs.
+        let listedAgain = Date().addingTimeInterval(0.01)
+        controller.onScreenProbe = { _ in probe.calls += 1; return Date() >= listedAgain }
+        workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
+        workspace.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+        app.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(probe.calls == 2)
+        #expect(count(events, notOnScreen) == 0)
+        #expect(controller.panel === original)
+        controller.send(.userClosed)
+    }
+
+    @Test func aScreenChangeChecksAShownPanel() async throws {
+        let app = NotificationCenter()
+        let probe = Probe(otherwise: true)
+        let (controller, events) = makeController(probe: probe, app: app)
+        controller.send(.show(touch()))
+        await waitUntil { probe.calls > 0 }
+
+        probe.answers = [false]
+        app.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        await waitUntil { probe.calls >= 3 }
+        #expect(count(events, reordered) == 1)
+        #expect(count(events, rebuilt) == 0)
+        controller.send(.userClosed)
+    }
+
+    @Test func twoWakeNotificationsWhileIdleReplaceTheWindowOnce() async throws {
+        let workspace = NotificationCenter()
+        let (controller, events) = makeController(probe: Probe(otherwise: true), workspace: workspace)
+        let original = controller.panel
+        workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
+        workspace.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+        await waitUntil { controller.panel !== original }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(count(events, rebuilt) == 1)
+    }
+
+    @Test func aWakeDuringTheCloseReplacesTheWindowAfterIt() async throws {
+        let workspace = NotificationCenter()
+        let (controller, events) = makeController(probe: Probe(otherwise: true), workspace: workspace)
+        controller.send(.show(pin))
+        try await Task.sleep(for: .milliseconds(100))
+        let original = controller.panel
+        controller.send(.userClosed)
+        #expect(controller.isPanelVisible)
+        workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
+        await waitUntil { controller.panel !== original }
+        #expect(controller.panel !== original)
+        #expect(!original.isVisible)
+        #expect(!controller.isPanelVisible)
+        #expect(controller.model.state == nil)
+        #expect(events.events.contains(.panelRebuilt(reason: .wake, state: nil)))
     }
 
     @Test func theCloseWatchdogFinishesACloseWhoseAnimationNeverCompletes() async throws {
