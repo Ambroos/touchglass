@@ -556,6 +556,22 @@ public final class PanelController {
             }
             systemObservers.append(token)
         }
+        let spaceToken = workspaceCenter.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.activeSpaceChanged() }
+        }
+        systemObservers.append(spaceToken)
+    }
+
+    /// When the user switches Spaces while the panel shows a state, orders the panel in again so it shows on
+    /// the new Space, and checks that the window server lists it there. Without a state, there is nothing to
+    /// show, so the switch is not logged.
+    private func activeSpaceChanged() {
+        guard !holdsState, model.state != nil, !closing else { return }
+        log(.activeSpaceChanged(state: shownStateName))
+        let wasKey = panel.isKeyWindow
+        panel.orderFrontRegardless()
+        if wasKey, mayHoldKey, !panel.isKeyWindow { takeKey(.spaceChange) }
+        schedulePresenceCheck()
     }
 
     /// After a wake, a panel that waits for the next prompt gets a new window, made after the wake. A panel that

@@ -33,7 +33,14 @@ final class PanelWindow: NSPanel {
 
     /// Above other apps' floating windows, so nothing covers a prompt.
     static let panelLevel: NSWindow.Level = .statusBar
-    static let panelCollectionBehavior: NSWindow.CollectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+    /// On every Space, including other apps' full-screen Spaces, so a prompt shows wherever the user is.
+    /// `.canJoinAllSpaces` alone keeps the window off full-screen Spaces other than the one it was ordered in on:
+    /// the window server listed the panel on the desktop Space and one full-screen Space only, so a prompt that
+    /// opened in, or stayed open across a swipe to, any other full-screen app was invisible and gpg-agent
+    /// waited on it. `.canJoinAllApplications` lets the window join those Spaces as well.
+    static let panelCollectionBehavior: NSWindow.CollectionBehavior = [
+        .canJoinAllSpaces, .canJoinAllApplications, .fullScreenAuxiliary, .stationary, .ignoresCycle,
+    ]
 
     /// Sets the level and the Spaces behaviour. The presence check sets them again before it re-orders the window.
     func applyPlacementAttributes() {

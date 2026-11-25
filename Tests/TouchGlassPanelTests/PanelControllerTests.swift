@@ -632,6 +632,44 @@ import enum TouchGlassIPC.LogEvent
         controller.send(.userClosed)
     }
 
+    func spaceChanged(_ event: LogEvent) -> Bool { if case .activeSpaceChanged = event { true } else { false } }
+
+    @Test func aSpaceChangeWhileShowingChecksThePanelAndKeepsTheState() async throws {
+        let workspace = NotificationCenter()
+        let probe = Probe(otherwise: true)
+        let (controller, events) = makeController(probe: probe, workspace: workspace)
+        controller.send(.show(pin))
+        await waitUntil { probe.calls > 0 }
+        let original = controller.panel
+        let callsBefore = probe.calls
+
+        workspace.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        await waitUntil { probe.calls > callsBefore }
+        #expect(probe.calls == callsBefore + 1)
+        #expect(count(events, spaceChanged) == 1)
+        #expect(count(events, notOnScreen) == 0)
+        #expect(controller.panel === original)
+        #expect(controller.isPanelVisible)
+        #expect(controller.model.state == pin)
+        #expect(controller.machine.state == pin)
+        controller.send(.userClosed)
+    }
+
+    @Test func aSpaceChangeWhileIdleDoesNothing() async throws {
+        let workspace = NotificationCenter()
+        let probe = Probe(otherwise: true)
+        let (controller, events) = makeController(probe: probe, workspace: workspace)
+        let original = controller.panel
+
+        workspace.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(probe.calls == 0)
+        #expect(events.events.isEmpty)
+        #expect(controller.panel === original)
+        #expect(!controller.isPanelVisible)
+        #expect(controller.model.state == nil)
+    }
+
     @Test func twoWakeNotificationsWhileIdleReplaceTheWindowOnce() async throws {
         let workspace = NotificationCenter()
         let (controller, events) = makeController(probe: Probe(otherwise: true), workspace: workspace)
@@ -778,6 +816,43 @@ import enum TouchGlassIPC.LogEvent
     @Test func thePanelSitsAtStatusBarLevel() {
         #expect(PanelWindow().level == .statusBar)
         #expect(makeController().panel.level == .statusBar)
+    }
+
+    /// Without `.canJoinAllApplications`, the panel stays off other apps' full-screen Spaces.
+    @Test func thePanelJoinsEverySpaceIncludingFullScreenApps() {
+        let behavior = PanelWindow().collectionBehavior
+        #expect(behavior.contains(.canJoinAllSpaces))
+        #expect(behavior.contains(.canJoinAllApplications))
+        #expect(behavior.contains(.fullScreenAuxiliary))
+    }
+
+    @Test func settingThePlacementAgainKeepsTheSpacesBehaviour() {
+        let window = PanelWindow()
+        window.collectionBehavior = []
+        window.applyPlacementAttributes()
+        #expect(window.collectionBehavior.contains(.canJoinAllSpaces))
+        #expect(window.collectionBehavior.contains(.canJoinAllApplications))
+        #expect(window.collectionBehavior.contains(.fullScreenAuxiliary))
+        #expect(window.level == .statusBar)
+    }
+
+    @Test func orderingThePanelInAgainRestoresTheSpacesBehaviour() async throws {
+        let app = NotificationCenter()
+        let probe = Probe(otherwise: true)
+        let (controller, events) = makeController(probe: probe, app: app)
+        controller.send(.show(pin))
+        await waitUntil { probe.calls > 0 }
+        controller.panel.collectionBehavior = []
+
+        // The screen change starts a check, which fails and orders the panel in again.
+        probe.answers = [false]
+        app.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        await waitUntil { count(events, reordered) > 0 }
+        #expect(count(events, reordered) == 1)
+        #expect(controller.panel.collectionBehavior.contains(.canJoinAllSpaces))
+        #expect(controller.panel.collectionBehavior.contains(.canJoinAllApplications))
+        #expect(controller.panel.collectionBehavior.contains(.fullScreenAuxiliary))
+        controller.send(.userClosed)
     }
 
     @Test func holdingKeepsResultStatesOpenAndTakesKey() async throws {

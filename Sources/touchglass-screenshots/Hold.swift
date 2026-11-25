@@ -158,7 +158,8 @@ final class HoldRunner {
         window.ignoresMouseEvents = true
         window.isReleasedWhenClosed = false
         window.animationBehavior = .none
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        // On the same Spaces as the panel it backs.
+        window.collectionBehavior = panel.collectionBehavior
         window.level = NSWindow.Level(rawValue: panel.level.rawValue - 1)
         window.setFrame(screen.frame, display: true)
         window.orderFrontRegardless()

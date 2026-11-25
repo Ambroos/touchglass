@@ -60,6 +60,8 @@ public enum PanelKeyReason: String, Sendable, Equatable {
     case reverseClose = "reverse close"
     /// The presence check ordered the panel out and in again, which resigned its key status.
     case reorder = "re-order after presence check"
+    /// The user switched Spaces while the panel showed a state, and the controller ordered it in again.
+    case spaceChange = "space change"
 }
 
 /// Why the panel controller replaced the panel window, for the log.
@@ -149,6 +151,9 @@ public enum LogEvent: Sendable, Equatable {
     case screensWoke
     /// `NSApplication.didChangeScreenParametersNotification`: a display was added, removed or changed.
     case screenParametersChanged
+    /// `NSWorkspace.activeSpaceDidChangeNotification` while the panel showed a state: the user switched Spaces,
+    /// for example to or from a full-screen app.
+    case activeSpaceChanged(state: PanelStateName?)
     /// The window server didn't list the panel as on screen after the controller ordered it in. `attempt`
     /// counts the failed checks in a row; `isVisible` and `isKey` are what AppKit reports; `occlusionVisible`
     /// is whether the window's occlusion state includes `.visible`.
@@ -181,7 +186,7 @@ public enum LogEvent: Sendable, Equatable {
              .connectionOpened, .connectionClosed, .hello,
              .panelShow, .panelDismiss, .panelUserClosed, .panelUserHid,
              .panelKeyTaken, .panelKeyReleased, .panelOrderedOutWhileKey,
-             .systemWoke, .screensWoke, .screenParametersChanged,
+             .systemWoke, .screensWoke, .screenParametersChanged, .activeSpaceChanged,
              .panelNotOnScreen, .panelReordered, .panelRebuilt, .panelCloseWatchdogFired:
             .default
         default: .info
@@ -286,6 +291,8 @@ public enum LogEvent: Sendable, Equatable {
             return "screens woke"
         case .screenParametersChanged:
             return "screen parameters changed"
+        case let .activeSpaceChanged(state):
+            return "active space changed in \(Self.name(state))"
         case let .panelNotOnScreen(state, attempt, isVisible, isKey, occlusionVisible, windowNumber):
             return "panel: not on screen in \(Self.name(state)), check \(attempt): window \(windowNumber), AppKit visible \(Self.yesNo(isVisible)), key \(Self.yesNo(isKey)), occlusion visible \(Self.yesNo(occlusionVisible))"
         case let .panelReordered(state):

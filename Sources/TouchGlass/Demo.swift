@@ -359,7 +359,8 @@ final class DemoRunner {
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
         panel.becomesKeyOnlyIfNeeded = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        // On every Space, including other apps' full-screen Spaces, like the prompt panel.
+        panel.collectionBehavior = [.canJoinAllSpaces, .canJoinAllApplications, .fullScreenAuxiliary]
         panel.contentView = NSHostingView(rootView: DemoControlsView(model: controls))
         if let screen = NSScreen.main {
             let visible = screen.visibleFrame
