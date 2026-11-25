@@ -118,9 +118,7 @@ public struct HostCoordinator: Sendable {
         /// Start of the card command that the touch wait belongs to (or of the PIN answer before it), as the
         /// proxy reported it. Not moved when the panel re-arms, unlike `touchStart`.
         var commandStart: Date?
-        /// When the host heard of the operation.
-        var startedAt: Date?
-        /// When the last operation that started before this one on the same card ended, as its proxy reported.
+        /// When the last operation that held the same card ended, as its proxy reported.
         /// The card works on one command at a time, so a command that was sent while another ran starts on the
         /// card only then.
         var cardFreeAt: Date?
@@ -289,7 +287,6 @@ public struct HostCoordinator: Sendable {
             let serial = start.serial.flatMap { CardSerial.isValid($0) ? $0.uppercased() : nil }
             var operation = CardOperation(number: number, kind: kind, serial: Self.displaySerial(serial), reporter: connection)
             operation.cardSerial = serial ?? ""
-            operation.startedAt = now
             operation.slot = start.slot ?? kind.cardSlot
             operation.gnupg = gnupgContexts[connection]
             operations[start.conn] = operation
@@ -555,7 +552,7 @@ public struct HostCoordinator: Sendable {
     // MARK: Card events
 
     private mutating func touchWait(_ wait: TouchGlassIPC.TouchWait, from connection: ConnectionID, now: Date) -> [HostOutput] {
-        var operation = operations[wait.conn] ?? CardOperation(number: nextOperationNumber(), kind: .unknown, serial: "", startedAt: now)
+        var operation = operations[wait.conn] ?? CardOperation(number: nextOperationNumber(), kind: .unknown, serial: "")
         operation.reporter = connection
         if operations[wait.conn] == nil {
             operationOrder.append(wait.conn)
@@ -707,11 +704,12 @@ public struct HostCoordinator: Sendable {
                     log.append(.touchCacheNotRestarted(conn: end.conn, silence: silence.seconds, threshold: silence.threshold, afterQueue: silence.afterQueue))
                 }
             }
-            if reported, let startedAt = operation.startedAt {
+            // An operation held the card when its proxy reported a card command for it or it ended `.ok`. Its
+            // start time doesn't tell: an operation that started later can reach the card first, such as while
+            // another one waits on a PIN prompt. One that failed before any card command never held the card.
+            if reported, operation.commandStart != nil || end.result == .ok {
                 for (conn, other) in operations where other.serial == operation.serial {
-                    if let otherStart = other.startedAt, otherStart >= startedAt {
-                        operations[conn]?.cardFreeAt = now
-                    }
+                    operations[conn]?.cardFreeAt = now
                 }
             }
             policyOutputs = schedulePolicyQuery(after: operation, end: end, now: now)

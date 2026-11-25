@@ -225,6 +225,26 @@ import TouchGlassIPC
         #expect(c.lastTouch[Self.displaySerial] == at(5.2))
     }
 
+    @Test func anOperationThatStartedLaterButHeldTheCardShortensTheSilence() {
+        var c = HostCoordinator().verifying(proxy, otherProxy, pinentry)
+        start(&c, "100:p", at: 0, op: .auth)
+        _ = c.handle(.pinNeeded(ConnRef(conn: "100:p")), from: proxy, now: at(0.5))
+        _ = c.handle(.getPin(GetPin(id: "r1", desc: "Please unlock the card", fields: CardFields(number: "12 345 678"))), from: pinentry, now: at(0.5))
+        // While the PIN prompt shows, an operation that started later reaches the card and holds it until 10.5 s.
+        start(&c, "200:p", at: 2, op: .decrypt, from: otherProxy)
+        _ = c.handle(.submit("975310"))
+        // The PIN answer goes out at 10 s and waits for the card; the card answers 0.1 s after it is free.
+        _ = touchWait(&c, "100:p", commandAt: 10)
+        _ = end(&c, "200:p", at: 10.5, from: otherProxy)
+        _ = c.takeLog()
+        _ = end(&c, "100:p", at: 10.6)
+        #expect(c.lastTouch[Self.displaySerial] == nil)
+        #expect(c.takeLog().contains {
+            guard case .touchCacheNotRestarted("100:p", let silence, TouchTiming.detectionThreshold, true) = $0 else { return false }
+            return abs(silence - 0.1) < 1e-6
+        })
+    }
+
     @Test func anExpiredTouchWaitDoesNotShortenTheSilenceOfTheOperationAfterIt() {
         var c = HostCoordinator().verifying(proxy, otherProxy, pinentry)
         start(&c, "100:p", at: 0)
