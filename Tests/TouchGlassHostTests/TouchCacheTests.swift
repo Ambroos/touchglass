@@ -202,8 +202,40 @@ import TouchGlassIPC
         _ = c.handle(.pinNeeded(ConnRef(conn: "100:p")), from: proxy, now: at(5.5))
         _ = c.handle(.getPin(GetPin(id: "r1", desc: "Please unlock the card", fields: CardFields(number: "12 345 678"))), from: pinentry, now: at(5.5))
         _ = c.handle(.submit("975310"))
+        // The agent answers the PIN at 7.4 s and the proxy reports a touch wait; the cache answers at 8.1 s.
+        _ = touchWait(&c, "100:p", commandAt: 7.4)
+        _ = c.takeLog()
         _ = end(&c, "100:p", at: 8.1)
         #expect(c.lastTouch[Self.displaySerial] == at(3))
+        #expect(c.takeLog().contains {
+            guard case .touchCacheNotRestarted("100:p", let silence, TouchTiming.cachedDetectionThreshold, false) = $0 else { return false }
+            return abs(silence - 0.7) < 1e-6
+        })
+    }
+
+    @Test func anEndOfAnOperationThatStartedLaterDoesNotShortenTheSilence() {
+        var c = HostCoordinator().verifying(proxy, otherProxy, pinentry)
+        start(&c, "100:p", at: 0)
+        _ = touchWait(&c, "100:p", commandAt: 0)
+        // An operation that started after the first one's command fails at 5 s, without the card.
+        start(&c, "200:p", at: 1, from: otherProxy)
+        _ = end(&c, "200:p", at: 5, result: .error, from: otherProxy)
+        // The user touches 0.2 s later.
+        _ = end(&c, "100:p", at: 5.2)
+        #expect(c.lastTouch[Self.displaySerial] == at(5.2))
+    }
+
+    @Test func anExpiredTouchWaitDoesNotShortenTheSilenceOfTheOperationAfterIt() {
+        var c = HostCoordinator().verifying(proxy, otherProxy, pinentry)
+        start(&c, "100:p", at: 0)
+        start(&c, "100:s1", at: 0.1, op: .decrypt)
+        _ = touchWait(&c, "100:p", commandAt: 0)
+        _ = touchWait(&c, "100:s1", commandAt: 0.1)
+        // The host gives up on the first operation's touch wait; the card may still wait for its touch.
+        let deadline = at(TouchTiming.cardTimeout)
+        _ = c.fire(.touchExpired(operation: "100:p", deadline: deadline), now: at(TouchTiming.cardTimeout + HostCoordinator.touchExpiryGrace))
+        _ = end(&c, "100:s1", at: TouchTiming.cardTimeout + HostCoordinator.touchExpiryGrace + 0.2)
+        #expect(c.lastTouch[Self.displaySerial] == at(TouchTiming.cardTimeout + HostCoordinator.touchExpiryGrace + 0.2))
     }
 
     static let displaySerial = "12345678"

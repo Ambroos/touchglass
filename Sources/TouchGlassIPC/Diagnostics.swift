@@ -113,6 +113,10 @@ public enum LogEvent: Sendable, Equatable {
     case retireDecision(hostVersion: String, helperBuild: String)
     case retireExit
     case touchCacheRestarted(serial: String, seconds: TimeInterval)
+    /// The proxy reported a touch wait for an operation that ended, but the card answered within `threshold`
+    /// of the moment it could start the command, so the operation doesn't count as touched. `afterQueue`:
+    /// the silence counts from the end of an operation that the command waited behind.
+    case touchCacheNotRestarted(conn: String, silence: TimeInterval, threshold: TimeInterval, afterQueue: Bool)
     case touchDeferred(conn: String, serial: String, showIn: TimeInterval, sinceCommand: TimeInterval)
     case touchShown(conn: String, sinceCommand: TimeInterval, deferred: Bool)
     case touchQueued(conn: String)
@@ -173,6 +177,7 @@ public enum LogEvent: Sendable, Equatable {
         // history of each prompt, so a report written after the fact has them.
         case .hostUnreachable, .eventDropped,
              .operationStarted, .operationEnded, .touchShown,
+             .touchCacheRestarted, .touchCacheNotRestarted,
              .connectionOpened, .connectionClosed, .hello,
              .panelShow, .panelDismiss, .panelUserClosed, .panelUserHid,
              .panelKeyTaken, .panelKeyReleased, .panelOrderedOutWhileKey,
@@ -237,6 +242,10 @@ public enum LogEvent: Sendable, Equatable {
             return "retiring: idle, exiting"
         case let .touchCacheRestarted(serial, seconds):
             return "touch cache: card \(Self.card(serial)) window restarted, \(Self.seconds(seconds))"
+        case let .touchCacheNotRestarted(conn, silence, threshold, afterQueue):
+            return "\(Self.conn(conn)) op ended \(Self.ms(silence)) after "
+                + (afterQueue ? "the operation before it" : "its command")
+                + ", under \(Self.ms(threshold)): not counted as touched, touch cache window not restarted"
         case let .touchDeferred(conn, serial, showIn, since):
             return "\(Self.conn(conn)) touch wait inside card \(Self.card(serial)) cache window: panel deferred \(Self.ms(showIn)), \(Self.ms(since)) since command"
         case let .touchShown(conn, since, deferred):

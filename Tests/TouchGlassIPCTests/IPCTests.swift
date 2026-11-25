@@ -265,6 +265,7 @@ import Testing
         #expect(start.message == "12:p op start: sign slot 1 card …5678")
         #expect(LogEvent.touchCacheRestarted(serial: "12345678", seconds: 15).message == "touch cache: card …5678 window restarted, 15 s")
         #expect(LogEvent.touchCacheRestarted(serial: "", seconds: 15).message == "touch cache: card ? window restarted, 15 s")
+        #expect(LogEvent.touchCacheNotRestarted(conn: "12:p", silence: 0.7, threshold: 1.5, afterQueue: true).message == "12:p op ended 700 ms after the operation before it, under 1500 ms: not counted as touched, touch cache window not restarted")
         #expect(LogEvent.operationStarted(conn: "12:s3", kind: .auth, slot: 3, serial: nil).message.hasSuffix("card ?"))
     }
 
