@@ -15,9 +15,9 @@ final class PanelWindow: NSPanel {
             backing: .buffered,
             defer: false
         )
-        level = .statusBar
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        // Setting `isFloatingPanel` sets the level to `.floating`, so it comes before the level.
         isFloatingPanel = true
+        applyPlacementAttributes()
         hidesOnDeactivate = false
         isOpaque = false
         backgroundColor = .clear
@@ -29,6 +29,16 @@ final class PanelWindow: NSPanel {
         // The entrance and exit are SwiftUI glass transitions inside the fixed-size window.
         animationBehavior = .none
         acceptsMouseMovedEvents = true
+    }
+
+    /// Above other apps' floating windows, so nothing covers a prompt.
+    static let panelLevel: NSWindow.Level = .statusBar
+    static let panelCollectionBehavior: NSWindow.CollectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+
+    /// Sets the level and the Spaces behaviour. The presence check sets them again before it re-orders the window.
+    func applyPlacementAttributes() {
+        level = Self.panelLevel
+        collectionBehavior = Self.panelCollectionBehavior
     }
 
     override var canBecomeKey: Bool { allowsKey && !Self.refusesKey }

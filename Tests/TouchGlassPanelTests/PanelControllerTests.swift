@@ -421,6 +421,12 @@ import enum TouchGlassIPC.LogEvent
         controller.send(.userClosed)
     }
 
+    /// `isFloatingPanel` resets the level to `.floating`, so the order in which `PanelWindow` sets them matters.
+    @Test func thePanelSitsAtStatusBarLevel() {
+        #expect(PanelWindow().level == .statusBar)
+        #expect(makeController().panel.level == .statusBar)
+    }
+
     @Test func holdingKeepsResultStatesOpenAndTakesKey() async throws {
         let controller = makeController()
         controller.holdsState = true
