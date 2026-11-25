@@ -3,6 +3,7 @@ import SwiftUI
 import TouchGlassCore
 import enum TouchGlassIPC.LogEvent
 import enum TouchGlassIPC.PanelKeyReason
+import enum TouchGlassIPC.PanelRebuildReason
 import enum TouchGlassIPC.PanelStateName
 import struct TouchGlassIPC.TouchGlassLog
 
@@ -11,14 +12,14 @@ import struct TouchGlassIPC.TouchGlassLog
 /// Feed it `PanelEvent`s with `send(_:)`; read user actions through `actions`.
 @MainActor
 public final class PanelController {
-    public let model = PanelModel()
+    public let model: PanelModel
     public private(set) var machine = PanelMachine()
 
     /// User actions from the panel. `hide` and `dismiss` are handled here first.
     public var actions = PanelActions()
 
-    /// Internal so that tests can inspect the window.
-    let panel = PanelWindow()
+    /// Internal so that tests can inspect the window. `rebuildWindow(reason:)` replaces it.
+    private(set) var panel: PanelWindow
     private let sounds = Sounds()
     /// Tests set this, so they make no sound.
     var muted = false
@@ -44,14 +45,34 @@ public final class PanelController {
     /// Tests replace this to see the key status changes.
     var log: (LogEvent) -> Void = { TouchGlassLog(.host)($0) }
 
-    public init(animationScale: Double = 1, settings: HostSettings = HostSettings()) {
+    /// Whether the window server shows the window. Tests replace it to stand for a window that it doesn't show.
+    var onScreenProbe: (NSWindow) -> Bool = { ($0 as? PanelWindow)?.isOnScreenPerWindowServer ?? true }
+    /// How long after ordering the panel in the controller asks the window server whether it is on screen.
+    var presenceCheckDelay: TimeInterval = 0.25
+    private var presence = PanelPresence()
+    /// Finishes a close if the exit animation's completion doesn't arrive.
+    private var closeWatchdog: DispatchWorkItem?
+    /// Tests: drop the exit animation's completion, so that only the close watchdog can finish a close.
+    var dropsAnimationCompletions = false
+    private var systemObservers: [NSObjectProtocol] = []
+
+    public convenience init(animationScale: Double = 1, settings: HostSettings = HostSettings()) {
+        self.init(
+            animationScale: animationScale,
+            settings: settings,
+            workspaceCenter: NSWorkspace.shared.notificationCenter,
+            appCenter: NotificationCenter.default
+        )
+    }
+
+    /// Tests pass their own notification centers, to post wake and screen notifications.
+    init(animationScale: Double, settings: HostSettings, workspaceCenter: NotificationCenter, appCenter: NotificationCenter) {
+        let model = PanelModel()
         model.animationScale = animationScale
         model.appearance = settings.appearance
         model.showsClient = settings.showClient
-        let host = NSHostingView(rootView: PanelSurfaceView(model: model))
-        host.sizingOptions = []
-        host.frame = NSRect(origin: .zero, size: PanelMetrics.windowSize)
-        panel.contentView = host
+        self.model = model
+        panel = Self.makePanel(model: model)
 
         var forwarded = PanelActions()
         forwarded.submitSecret = { [weak self] secret in self?.actions.submitSecret(secret) }
@@ -66,6 +87,16 @@ public final class PanelController {
             self?.actions.dismiss()
         }
         model.actions = forwarded
+        observeSystem(workspaceCenter: workspaceCenter, appCenter: appCenter)
+    }
+
+    private static func makePanel(model: PanelModel) -> PanelWindow {
+        let panel = PanelWindow()
+        let host = NSHostingView(rootView: PanelSurfaceView(model: model))
+        host.sizingOptions = []
+        host.frame = NSRect(origin: .zero, size: PanelMetrics.windowSize)
+        panel.contentView = host
+        return panel
     }
 
     public var isPanelKey: Bool { panel.isKeyWindow }
@@ -228,19 +259,28 @@ public final class PanelController {
             panel.orderFrontRegardless()
         }
         log(.panelKeyReleased(state: shownStateName, isKey: panel.isKeyWindow, frontmostBefore: before, frontmostAfter: Self.frontmostApp()))
+        schedulePresenceCheck()
     }
 
     // MARK: Entrance and exit
 
     private func open(_ state: PanelState) {
         generation += 1
-        let current = generation
-        let scale = model.animationScale
+        presence.reset()
+        closeWatchdog?.cancel()
+        closeWatchdog = nil
 
         if closing, panel.isVisible {
             reverseClose(into: state)
             return
         }
+        enter(state, allowsKey: state.allowsKey || holdsState)
+    }
+
+    /// Orders the panel in with `state` and runs the entrance, for the current generation.
+    private func enter(_ state: PanelState, allowsKey: Bool) {
+        let current = generation
+        let scale = model.animationScale
 
         var instant = Transaction()
         instant.disablesAnimations = true
@@ -254,14 +294,11 @@ public final class PanelController {
         // Resolve the layout now, with animations off, so the entrance only animates opacity and scale.
         panel.contentView?.layoutSubtreeIfNeeded()
 
-        if let testOrigin {
-            panel.setFrameOrigin(testOrigin)
-        } else if let screen = Placement.targetScreen() {
-            panel.setFrameOrigin(Placement.origin(on: screen))
-        }
-        panel.allowsKey = state.allowsKey || holdsState
+        place()
+        panel.allowsKey = allowsKey
         entrancePending = true
         panel.orderFrontRegardless()
+        schedulePresenceCheck()
 
         // Let the empty, transparent window reach the screen first, so the glass visibly
         // materialises in place instead of appearing with the window. The panel takes key status
@@ -288,6 +325,14 @@ public final class PanelController {
         }
     }
 
+    private func place() {
+        if let testOrigin {
+            panel.setFrameOrigin(testOrigin)
+        } else if let screen = Placement.targetScreen() {
+            panel.setFrameOrigin(Placement.origin(on: screen))
+        }
+    }
+
     /// A state arrived while the exit animation runs: the panel is still on screen, at its place, so
     /// swap the content and animate the glass and content back from wherever the exit has got them.
     /// SwiftUI retargets the running animations, so the glass grows back around its centre without
@@ -297,6 +342,9 @@ public final class PanelController {
         let scale = model.animationScale
         withTransaction(Transaction(animation: nil)) { model.state = state }
         panel.allowsKey = state.allowsKey || holdsState
+        // AppKit reports the window as visible; order it in anyway in case the window server dropped it.
+        panel.orderFrontRegardless()
+        schedulePresenceCheck()
         if mayHoldKey { takeKey(.reverseClose) }
         if reduceMotion {
             withAnimation(.easeOut(duration: 0.16 * scale)) {
@@ -325,21 +373,40 @@ public final class PanelController {
             panel.allowsKey = false
             if panel.isKeyWindow { releaseKey() }
         }
-        let finish = { [weak self] in
-            guard let self, self.generation == current else { return }
+        // Whichever comes first, the animation's completion or the watchdog, finishes the close; the other
+        // finds `closing` false or a newer generation and does nothing.
+        let finish = { [weak self] (byWatchdog: Bool) in
+            guard let self, self.generation == current, self.closing else { return }
             self.closing = false
+            self.closeWatchdog?.cancel()
+            self.closeWatchdog = nil
+            if byWatchdog { self.log(.panelCloseWatchdogFired(state: self.shownStateName)) }
             if self.panel.isKeyWindow { self.log(.panelOrderedOutWhileKey(state: self.shownStateName)) }
             self.panel.orderOut(nil)
+            self.presence.reset()
             var instant = Transaction()
             instant.disablesAnimations = true
             withTransaction(instant) { self.model.state = nil }
         }
+        let animationFinished = { [weak self] in
+            guard let self, !self.dropsAnimationCompletions else { return }
+            finish(false)
+        }
+
+        // SwiftUI may not run the completion, for example if its animation clock stops while the window is on
+        // no display. Without the watchdog, `closing` would stay set and every later prompt would turn a close
+        // around that never ends, in a window that may not be on screen.
+        let exitDuration = (reduceMotion ? 0.22 : 0.41) * scale
+        let watchdog = DispatchWorkItem { finish(true) }
+        closeWatchdog?.cancel()
+        closeWatchdog = watchdog
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0.3, exitDuration + 0.5 * scale), execute: watchdog)
 
         if reduceMotion {
             withAnimation(.easeIn(duration: 0.22 * scale), completionCriteria: .removed) {
                 model.contentShown = false
                 model.surfaceShown = false
-            } completion: { finish() }
+            } completion: { animationFinished() }
             return
         }
 
@@ -350,7 +417,144 @@ public final class PanelController {
         withAnimation(.spring(duration: 0.34 * scale, bounce: 0).delay(0.07 * scale), completionCriteria: .removed) {
             model.hiddenSurfaceScale = 0.94
             model.surfaceShown = false
-        } completion: { finish() }
+        } completion: { animationFinished() }
+    }
+
+    // MARK: Presence
+
+    /// Asks the window server, after `presenceCheckDelay`, whether the panel that the current generation
+    /// ordered in is on screen.
+    private func schedulePresenceCheck() {
+        guard !holdsState else { return }
+        let current = generation
+        DispatchQueue.main.asyncAfter(deadline: .now() + presenceCheckDelay) { [weak self] in
+            self?.checkPresence(generation: current)
+        }
+    }
+
+    /// The window server can drop a window that AppKit still takes to be ordered in; after a sleep, every
+    /// prompt was then invisible and gpg-agent waited on it. Order the window in again, then replace it, then
+    /// give up until the next prompt (see `PanelPresence`).
+    private func checkPresence(generation current: Int) {
+        guard generation == current, !holdsState else { return }
+        let expected = model.state != nil && !closing
+        let onScreen = expected ? onScreenProbe(panel) : true
+        let action = presence.check(expectedOnScreen: expected, onScreen: onScreen)
+        guard action != .none else { return }
+        log(.panelNotOnScreen(
+            state: shownStateName,
+            attempt: presence.failures,
+            isVisible: panel.isVisible,
+            isKey: panel.isKeyWindow,
+            occlusionVisible: panel.occlusionState.contains(.visible),
+            windowNumber: panel.windowNumber
+        ))
+        switch action {
+        case .none:
+            break
+        case .reorder:
+            reorder()
+        case .rebuild:
+            rebuildWindow(reason: .notOnScreen)
+        case .giveUp:
+            log(.panelPresenceGaveUp(state: shownStateName))
+        }
+    }
+
+    /// Orders the panel out and in again, with its level and Spaces behaviour set again, in one visual change.
+    private func reorder() {
+        let wasKey = panel.isKeyWindow
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            context.allowsImplicitAnimation = false
+            panel.orderOut(nil)
+            panel.applyPlacementAttributes()
+            panel.orderFrontRegardless()
+        }
+        log(.panelReordered(state: shownStateName))
+        if wasKey, mayHoldKey, !panel.isKeyWindow { takeKey(.reorder) }
+        schedulePresenceCheck()
+    }
+
+    /// Replaces the panel window with a new one that shows the same state. The state machine isn't told: what
+    /// the panel shows doesn't change, only the window it shows in.
+    func rebuildWindow(reason: PanelRebuildReason) {
+        let old = panel
+        let new = Self.makePanel(model: model)
+        new.allowsKey = old.allowsKey
+        new.ignoresMouseEvents = old.ignoresMouseEvents
+        new.alphaValue = old.alphaValue
+        new.setFrameOrigin(old.frame.origin)
+
+        // The observer watches the old window; `guardKeyAfterOwnChange` registers one for the new window.
+        if let resignObserver {
+            NotificationCenter.default.removeObserver(resignObserver)
+            self.resignObserver = nil
+        }
+        keyGuardUntil = .distantPast
+        closeWatchdog?.cancel()
+        closeWatchdog = nil
+
+        old.orderOut(nil)
+        old.contentView = nil
+        old.close()
+        panel = new
+        let wasClosing = closing
+        closing = false
+        entrancePending = false
+        generation += 1
+        log(.panelRebuilt(reason: reason, state: shownStateName))
+
+        var instant = Transaction()
+        instant.disablesAnimations = true
+        if let state = model.state, !wasClosing {
+            withTransaction(instant) {
+                model.surfaceShown = false
+                model.contentShown = false
+            }
+            enter(state, allowsKey: new.allowsKey)
+        } else {
+            withTransaction(instant) {
+                model.surfaceShown = false
+                model.contentShown = false
+                model.state = nil
+            }
+        }
+    }
+
+    // MARK: Wake and screens
+
+    private func observeSystem(workspaceCenter: NotificationCenter, appCenter: NotificationCenter) {
+        let observed: [(NotificationCenter, Notification.Name, LogEvent)] = [
+            (workspaceCenter, NSWorkspace.didWakeNotification, .systemWoke),
+            (workspaceCenter, NSWorkspace.screensDidWakeNotification, .screensWoke),
+            (appCenter, NSApplication.didChangeScreenParametersNotification, .screenParametersChanged),
+        ]
+        for (center, name, event) in observed {
+            let token = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.systemChanged(event) }
+            }
+            systemObservers.append(token)
+        }
+    }
+
+    /// After a wake, a panel that waits for the next prompt gets a new window, made after the wake. A panel
+    /// that shows a state, such as a touch wait across the sleep, is placed again and checked now.
+    private func systemChanged(_ event: LogEvent) {
+        log(event)
+        guard !holdsState else { return }
+        let shown = model.state != nil && !closing
+        switch event {
+        case .systemWoke, .screensWoke:
+            if shown {
+                place()
+                checkPresence(generation: generation)
+            } else if !closing {
+                rebuildWindow(reason: .wake)
+            }
+        default:
+            if shown { checkPresence(generation: generation) }
+        }
     }
 
     // MARK: Escalation

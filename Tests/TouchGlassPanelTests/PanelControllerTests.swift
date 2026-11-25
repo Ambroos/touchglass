@@ -421,6 +421,211 @@ import enum TouchGlassIPC.LogEvent
         controller.send(.userClosed)
     }
 
+    // MARK: Presence check
+
+    /// Stands for the window server's answer to "is the panel on screen": `answers` first, then `otherwise`.
+    final class Probe {
+        var answers: [Bool]
+        var otherwise: Bool
+        var calls = 0
+
+        init(_ answers: [Bool] = [], otherwise: Bool) {
+            self.answers = answers
+            self.otherwise = otherwise
+        }
+
+        func answer() -> Bool {
+            calls += 1
+            return answers.isEmpty ? otherwise : answers.removeFirst()
+        }
+    }
+
+    /// An off-screen, transparent controller that asks `probe` instead of the window server, checks soon after
+    /// each order-in, and hears wake notifications only from `workspace`.
+    func makeController(probe: Probe, workspace: NotificationCenter = NotificationCenter()) -> (PanelController, KeyRequests) {
+        let controller = PanelController(animationScale: 0.05, settings: HostSettings(), workspaceCenter: workspace, appCenter: NotificationCenter())
+        controller.muted = true
+        controller.testOrigin = Self.offScreen
+        controller.panel.alphaValue = 0
+        controller.onScreenProbe = { _ in probe.answer() }
+        controller.presenceCheckDelay = 0.02
+        return (controller, recordKeyRequests(controller))
+    }
+
+    func count(_ events: KeyRequests, _ matches: (LogEvent) -> Bool) -> Int {
+        events.events.filter(matches).count
+    }
+
+    func notOnScreen(_ event: LogEvent) -> Bool { if case .panelNotOnScreen = event { true } else { false } }
+    func reordered(_ event: LogEvent) -> Bool { if case .panelReordered = event { true } else { false } }
+    func rebuilt(_ event: LogEvent) -> Bool { if case .panelRebuilt = event { true } else { false } }
+    func gaveUp(_ event: LogEvent) -> Bool { if case .panelPresenceGaveUp = event { true } else { false } }
+    func watchdogFired(_ event: LogEvent) -> Bool { if case .panelCloseWatchdogFired = event { true } else { false } }
+
+    @Test func aPanelOnScreenKeepsItsWindow() async throws {
+        let probe = Probe(otherwise: true)
+        let (controller, events) = makeController(probe: probe)
+        let original = controller.panel
+        controller.send(.show(pin))
+        await waitUntil { probe.calls > 0 }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(probe.calls == 1)
+        #expect(controller.panel === original)
+        #expect(count(events, notOnScreen) == 0)
+
+        controller.send(.userClosed)
+        await waitUntil { !controller.isPanelVisible }
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(count(events, watchdogFired) == 0, "the exit animation's completion finishes a normal close")
+    }
+
+    @Test func aPanelMissingOnceIsOrderedInAgain() async throws {
+        let probe = Probe([false], otherwise: true)
+        let (controller, events) = makeController(probe: probe)
+        let original = controller.panel
+        controller.send(.show(pin))
+        await waitUntil { probe.calls >= 2 }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(probe.calls == 2)
+        #expect(count(events, notOnScreen) == 1)
+        #expect(count(events, reordered) == 1)
+        #expect(count(events, rebuilt) == 0)
+        #expect(controller.panel === original)
+        #expect(controller.isPanelVisible)
+        controller.send(.userClosed)
+    }
+
+    @Test func aPanelMissingTwiceGetsANewWindow() async throws {
+        let probe = Probe([false, false], otherwise: true)
+        let (controller, events) = makeController(probe: probe)
+        let original = controller.panel
+        controller.send(.show(pin))
+        await waitUntil { probe.calls >= 3 }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(count(events, rebuilt) == 1)
+        #expect(count(events, gaveUp) == 0)
+        #expect(controller.panel !== original)
+        #expect(!original.isVisible)
+        #expect(original.contentView == nil)
+        #expect(controller.isPanelVisible)
+        #expect(controller.model.state == pin)
+        #expect(controller.model.surfaceShown)
+        #expect(controller.machine.state == pin)
+        #expect(controller.panel.allowsKey)
+        #expect(!controller.panel.ignoresMouseEvents)
+        #expect(controller.panel.alphaValue == 0)
+        #expect(controller.panel.frame.origin == Self.offScreen)
+        controller.send(.userClosed)
+        await waitUntil { !controller.isPanelVisible }
+        #expect(controller.model.state == nil)
+    }
+
+    @Test func aPanelThatNeverAppearsGivesUpWithoutALoop() async throws {
+        let probe = Probe(otherwise: false)
+        let (controller, events) = makeController(probe: probe)
+        controller.send(.show(pin))
+        await waitUntil { count(events, gaveUp) > 0 }
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(probe.calls == 3)
+        #expect(count(events, reordered) == 1)
+        #expect(count(events, rebuilt) == 1)
+        #expect(count(events, gaveUp) == 1)
+        #expect(controller.machine.state == pin)
+
+        // The next prompt starts the ladder over.
+        controller.send(.userClosed)
+        await waitUntil { !controller.isPanelVisible }
+        controller.send(.show(pin))
+        await waitUntil { count(events, gaveUp) > 1 }
+        #expect(probe.calls == 6)
+        controller.send(.userClosed)
+    }
+
+    @Test func aPanelClosedBeforeTheCheckIsNotChecked() async throws {
+        let probe = Probe(otherwise: false)
+        let (controller, events) = makeController(probe: probe)
+        controller.send(.show(pin))
+        controller.send(.userClosed)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(probe.calls == 0)
+        #expect(count(events, notOnScreen) == 0)
+    }
+
+    @Test func aWakeWhileIdleReplacesTheWindow() async throws {
+        let workspace = NotificationCenter()
+        let probe = Probe(otherwise: true)
+        let (controller, events) = makeController(probe: probe, workspace: workspace)
+        let original = controller.panel
+        workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
+        await waitUntil { controller.panel !== original }
+        #expect(controller.panel !== original)
+        #expect(!controller.isPanelVisible)
+        #expect(controller.model.state == nil)
+        #expect(events.events.contains(.systemWoke))
+        #expect(events.events.contains(.panelRebuilt(reason: .wake, state: nil)))
+        #expect(controller.panel.level == .statusBar)
+
+        // The new window shows the next prompt.
+        controller.send(.show(pin))
+        #expect(controller.isPanelVisible)
+        controller.send(.userClosed)
+    }
+
+    @Test func aWakeWhileShowingChecksAndRepairsThePanel() async throws {
+        let workspace = NotificationCenter()
+        let probe = Probe(otherwise: true)
+        let (controller, events) = makeController(probe: probe, workspace: workspace)
+        let state = touch()
+        controller.send(.show(state))
+        await waitUntil { probe.calls > 0 }
+        let original = controller.panel
+
+        probe.otherwise = false
+        workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
+        await waitUntil { count(events, rebuilt) > 0 }
+        #expect(controller.panel !== original)
+        #expect(!original.isVisible)
+        #expect(controller.isPanelVisible)
+        #expect(controller.model.state == state)
+        #expect(controller.machine.state == state)
+        controller.send(.userClosed)
+    }
+
+    @Test func theCloseWatchdogFinishesACloseWhoseAnimationNeverCompletes() async throws {
+        let probe = Probe(otherwise: true)
+        let (controller, events) = makeController(probe: probe)
+        controller.dropsAnimationCompletions = true
+        controller.send(.show(pin))
+        try await Task.sleep(for: .milliseconds(100))
+        controller.send(.userClosed)
+        #expect(controller.isPanelVisible)
+        await waitUntil { !controller.isPanelVisible }
+        #expect(!controller.isPanelVisible)
+        #expect(controller.model.state == nil)
+        #expect(count(events, watchdogFired) == 1)
+
+        // The next prompt opens afresh instead of turning a close around.
+        controller.send(.show(pin))
+        #expect(controller.isPanelVisible)
+        #expect(!controller.model.surfaceShown)
+        await waitUntil { controller.model.surfaceShown }
+        #expect(controller.model.state == pin)
+        controller.send(.userClosed)
+    }
+
+    /// The window server lists an ordered-in test panel as on screen, though it is off every display and
+    /// transparent, and an ordered-out one as not.
+    @Test func theWindowServerProbeSeesOrderingInAndOut() async throws {
+        let controller = makeController()
+        controller.send(.show(pin))
+        await waitUntil { controller.panel.isOnScreenPerWindowServer }
+        #expect(controller.panel.isOnScreenPerWindowServer)
+        controller.send(.userClosed)
+        await waitUntil { !controller.isPanelVisible }
+        await waitUntil { !controller.panel.isOnScreenPerWindowServer }
+        #expect(!controller.panel.isOnScreenPerWindowServer)
+    }
+
     /// `isFloatingPanel` resets the level to `.floating`, so the order in which `PanelWindow` sets them matters.
     @Test func thePanelSitsAtStatusBarLevel() {
         #expect(PanelWindow().level == .statusBar)

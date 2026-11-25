@@ -41,6 +41,16 @@ final class PanelWindow: NSPanel {
         collectionBehavior = Self.panelCollectionBehavior
     }
 
+    /// Whether the window server lists the window as on screen: ordered in, on the current Space. Being
+    /// covered by other windows or transparent doesn't count against it. Needs no Screen Recording permission.
+    var isOnScreenPerWindowServer: Bool {
+        guard windowNumber > 0,
+              let list = CGWindowListCopyWindowInfo([.optionIncludingWindow], CGWindowID(windowNumber)) as? [[String: Any]],
+              let info = list.first(where: { ($0[kCGWindowNumber as String] as? Int) == windowNumber })
+        else { return false }
+        return (info[kCGWindowIsOnscreen as String] as? Bool) == true
+    }
+
     override var canBecomeKey: Bool { allowsKey && !Self.refusesKey }
     override var canBecomeMain: Bool { false }
 

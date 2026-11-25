@@ -58,6 +58,8 @@ public enum PanelKeyReason: String, Sendable, Equatable {
     case retake = "re-take after own change"
     /// A prompt arrived during the exit animation, which turned around.
     case reverseClose = "reverse close"
+    /// The presence check ordered the panel out and in again, which resigned its key status.
+    case reorder = "re-order after presence check"
 }
 
 /// Why the panel controller replaced the panel window, for the log.
