@@ -11,7 +11,7 @@ The host reads `~/Library/Application Support/TouchGlass/host.conf` when it star
 | `appearance` | `readable` (default), `smoked` | `readable` is regular glass with standard label colours. `smoked` is clear glass with dark smoke and HDR white text. |
 | `show-client` | `yes` (default), `no` | Shows what asked for the card operation under the detail line, such as `git commit · touchglass` or `ssh build-box`. See [How TouchGlass labels what asked](#how-touchglass-labels-what-asked). |
 | `touch-timeout` | Seconds, 1 to 600 | Sets the length of the touch countdown. Without it, the countdown uses the card's touch timeout that `touchglass-scdaemon` reports, 15 seconds. Set it only if your card waits for a different time. |
-| `touch-cache` | `auto` (default), or seconds, 0 to 600 | How the panel times the touch step after an operation that the card completed. `auto` follows the touch policy of each key; see [Touch policies](#touch-policies). A number of seconds applies to every card and key, whatever TouchGlass learned: within that time after an operation that the card completed, the panel shows the touch step only after the card stays silent for 1.5 seconds instead of 0.4, and shows nothing for an operation that finishes sooner. `0` shows the touch step after 0.4 seconds for every operation. |
+| `touch-cache` | `auto` (default), or seconds, 0 to 600 | How the panel times the touch step after a touch. `auto` follows the touch policy of each key; see [Touch policies](#touch-policies). A number of seconds applies to every card and key, whatever TouchGlass learned: within that time after an operation that waited for a touch, the panel shows the touch step only after the card stays silent for 1.5 seconds instead of 0.4, and shows nothing for an operation that finishes sooner. `0` shows the touch step after 0.4 seconds for every operation. |
 
 The reminder sounds and the urgent phase of the countdown keep their proportions for any `touch-timeout`: they start at a third and at two thirds of the countdown. If `touch-timeout` is shorter than the card's own timeout, the countdown reaches 0 and the panel stays until the card answers.
 
@@ -36,7 +36,7 @@ An OpenPGP card with a touch button, such as a YubiKey, sets a touch policy for 
 
 | Policy | What the card does | What the panel does |
 | --- | --- | --- |
-| `cached`, `cached-fixed` | Waits for a touch, then accepts operations without one for 15 seconds after each use. | Within 15 seconds after the card's last operation, shows the touch step only after the card stays silent for 1.5 seconds, and nothing for an operation that finishes sooner. Otherwise, after 0.4 seconds. |
+| `cached`, `cached-fixed` | Waits for a touch, then accepts operations without one for 15 seconds after the touch. | Within 15 seconds after the card's last operation that waited for a touch, shows the touch step only after the card stays silent for 1.5 seconds, and nothing for an operation that finishes sooner. Otherwise, after 0.4 seconds. |
 | `on`, `fixed` | Waits for a touch for every operation. | Shows the touch step after 0.4 seconds. |
 | `off` | Never waits for a touch. | Shows the touch step only after the card stays silent for 3 seconds, and nothing for an operation that finishes sooner. A slow card stays without a panel, and a key whose policy changed since TouchGlass learned it still gets one. |
 | Not learned yet | Any of these. | As for `cached`. |
@@ -76,11 +76,11 @@ To read the last 10 minutes afterwards:
 log show --last 10m --predicate 'subsystem == "io.ambroos.touchglass"' --info
 ```
 
-macOS keeps info lines in memory only, so `log show` finds them only for a short time. The history of each prompt is written at the default level, which macOS stores: operation start and end, connections, the panel's states, keyboard focus, wakes and screen changes, and the panel's presence check (`not on screen`, `ordered in again`, `new window`), with a `still not on screen` error if the panel can't be shown.
+macOS keeps info lines in memory only, so `log show` finds them only for a short time. The history of each prompt is written at the default level, which macOS stores: operation start and end, connections, the panel's states, keyboard focus, wakes and screen changes, the panel's presence check (`not on screen`, `ordered in again`, `new window`), with a `still not on screen` error if the panel can't be shown, and the close watchdog (`exit animation did not complete`).
 
 With `--level debug` for `log stream`, or `--debug` for `log show`, the log also shows every scdaemon command with its duration and each Assuan keyword that the pinentry handles. To show one component, add a category to the predicate, such as `subsystem == "io.ambroos.touchglass" AND category == "scdaemon"`.
 
-To check the touch timing, look at the `op end` lines of the `scdaemon` category. Each one gives the time the card took after the command or the PIN. Operations that the cached touch covers take that time without a touch; the host's `touch wait inside … cache window` and `nothing shown` lines show which operations it held back. The host's `touch policy` lines show what it learned for each card, and when it asked gpg-agent.
+To check the touch timing, look at the `op end` lines of the `scdaemon` category. Each one gives the time the card took after the command or the PIN. Operations that the cached touch covers take that time without a touch; the host's `touch wait inside … cache window` and `nothing shown` lines show which operations it held back. The host's `window restarted` lines show which operations counted as touched, and its `not counted as touched` lines show an operation with a reported touch wait that the card answered too soon to count. The host's `touch policy` lines show what it learned for each card, and when it asked gpg-agent.
 
 If focus leaves your terminal unexpectedly, look at the `panel: make key` and `panel: release key` lines of the `host` category. Each one names the panel state, why the panel asked for focus, and the frontmost app before and after.
 
