@@ -60,6 +60,14 @@ public enum PanelKeyReason: String, Sendable, Equatable {
     case reverseClose = "reverse close"
 }
 
+/// Why the panel controller replaced the panel window, for the log.
+public enum PanelRebuildReason: String, Sendable, Equatable {
+    /// The window server still didn't list the window as on screen after it was ordered in again.
+    case notOnScreen = "not on screen"
+    /// The Mac woke while no panel was shown, so the next prompt gets a window made after the wake.
+    case wake
+}
+
 /// Something worth a line in the unified log.
 ///
 /// Log calls take only these events, and each case carries only typed, non-secret values: operation kinds,
@@ -129,6 +137,24 @@ public enum LogEvent: Sendable, Equatable {
     case panelKeyRetakeSkipped(state: PanelStateName?)
     /// The exit animation ended and ordered the panel out while it still had key status.
     case panelOrderedOutWhileKey(state: PanelStateName?)
+    /// `NSWorkspace.didWakeNotification`: the Mac woke from sleep.
+    case systemWoke
+    /// `NSWorkspace.screensDidWakeNotification`: the displays woke.
+    case screensWoke
+    /// `NSApplication.didChangeScreenParametersNotification`: a display was added, removed or changed.
+    case screenParametersChanged
+    /// The window server didn't list the panel as on screen after the controller ordered it in. `attempt`
+    /// counts the failed checks in a row; `isVisible` and `isKey` are what AppKit reports; `occlusionVisible`
+    /// is whether the window's occlusion state includes `.visible`.
+    case panelNotOnScreen(state: PanelStateName?, attempt: Int, isVisible: Bool, isKey: Bool, occlusionVisible: Bool, windowNumber: Int)
+    /// The controller ordered the panel out and in again after a failed presence check.
+    case panelReordered(state: PanelStateName?)
+    /// The controller replaced the panel window.
+    case panelRebuilt(reason: PanelRebuildReason, state: PanelStateName?)
+    /// The panel still wasn't on screen after a new window; the controller stops checking until the next prompt.
+    case panelPresenceGaveUp(state: PanelStateName?)
+    /// The exit animation's completion didn't arrive in time, and the close watchdog ordered the panel out.
+    case panelCloseWatchdogFired(state: PanelStateName?)
 
     // touchglass-pinentry
     /// A line of the pinentry's diagnostic trace: fixed text, Assuan keywords, message types, request IDs and
@@ -137,10 +163,20 @@ public enum LogEvent: Sendable, Equatable {
 
     public var level: OSLogType {
         switch self {
-        case .cardCommand, .panelUserHid: .debug
+        case .cardCommand: .debug
         // Each Assuan keyword and host message the pinentry passes on; the rest is connection and fallback news.
         case .pinentryTrace(let text) where text.hasPrefix("<- ") || text.hasPrefix("-> "): .debug
-        case .hostUnreachable, .eventDropped: .default
+        case .panelPresenceGaveUp: .error
+        // `.default` and above persist in the unified log; `.info` stays in memory only. These lines are the
+        // history of each prompt, so a report written after the fact has them.
+        case .hostUnreachable, .eventDropped,
+             .operationStarted, .operationEnded, .touchShown,
+             .connectionOpened, .connectionClosed, .hello,
+             .panelShow, .panelDismiss, .panelUserClosed, .panelUserHid,
+             .panelKeyTaken, .panelKeyReleased, .panelOrderedOutWhileKey,
+             .systemWoke, .screensWoke, .screenParametersChanged,
+             .panelNotOnScreen, .panelReordered, .panelRebuilt, .panelCloseWatchdogFired:
+            .default
         default: .info
         }
     }
@@ -233,6 +269,22 @@ public enum LogEvent: Sendable, Equatable {
             return "panel: lost key in \(Self.name(state)), not taking it back"
         case let .panelOrderedOutWhileKey(state):
             return "panel: ordered out while key, after \(Self.name(state))"
+        case .systemWoke:
+            return "system woke"
+        case .screensWoke:
+            return "screens woke"
+        case .screenParametersChanged:
+            return "screen parameters changed"
+        case let .panelNotOnScreen(state, attempt, isVisible, isKey, occlusionVisible, windowNumber):
+            return "panel: not on screen in \(Self.name(state)), check \(attempt): window \(windowNumber), AppKit visible \(Self.yesNo(isVisible)), key \(Self.yesNo(isKey)), occlusion visible \(Self.yesNo(occlusionVisible))"
+        case let .panelReordered(state):
+            return "panel: ordered in again in \(Self.name(state))"
+        case let .panelRebuilt(reason, state):
+            return "panel: new window (\(reason.rawValue)) in \(Self.name(state))"
+        case let .panelPresenceGaveUp(state):
+            return "panel: still not on screen with a new window in \(Self.name(state)); no more checks until the next prompt"
+        case let .panelCloseWatchdogFired(state):
+            return "panel: exit animation did not complete; close watchdog ordered out \(Self.name(state))"
         case let .pinentryTrace(text):
             return text
         }
@@ -275,6 +327,10 @@ public enum LogEvent: Sendable, Equatable {
 
     static func name(_ state: PanelStateName?) -> String {
         state?.rawValue ?? "no state"
+    }
+
+    static func yesNo(_ value: Bool) -> String {
+        value ? "yes" : "no"
     }
 
     static func app(_ bundleID: String?) -> String {
