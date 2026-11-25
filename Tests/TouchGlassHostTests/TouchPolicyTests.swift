@@ -132,8 +132,10 @@ import TouchGlassIPC
         var c = HostCoordinator()
         learn(&c, [1: .cached, 2: .off])
         start(&c, at: 0, op: .decrypt, slot: 2)
-        _ = end(&c, at: 0.3)
-        #expect(c.lastCardUse[Self.display] == nil)
+        // The card stays silent long enough for a touch wait, but the key took no touch.
+        _ = touchWait(&c, commandAt: 0)
+        _ = end(&c, at: 0.8)
+        #expect(c.lastTouch[Self.display] == nil)
         start(&c, at: 5)
         #expect(shows(touchWait(&c, commandAt: 5)))
     }
@@ -171,8 +173,8 @@ import TouchGlassIPC
         #expect(holdsBack(touchWait(&c, commandAt: 25)))
         _ = end(&c, at: 26)
         // Inside the configured window, the off key gets the window's delay, not its own.
-        start(&c, at: 40, op: .decrypt, slot: 2)
-        #expect(heldUntil(touchWait(&c, commandAt: 40), 40 + TouchTiming.cachedDetectionThreshold))
+        start(&c, at: 28, op: .decrypt, slot: 2)
+        #expect(heldUntil(touchWait(&c, commandAt: 28), 28 + TouchTiming.cachedDetectionThreshold))
 
         var off = HostCoordinator(touchCache: 0)
         learn(&off, [1: .cached])

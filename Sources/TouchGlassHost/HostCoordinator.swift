@@ -113,6 +113,11 @@ public struct HostCoordinator: Sendable {
         var gnupg: GnuPGContext?
         /// The proxy inferred a touch wait for this operation.
         var touchInferred = false
+        /// The proxy reported a touch wait for this operation, and no PIN request followed it.
+        var touchWaitReported = false
+        /// When the card command that the touch wait belongs to started, as the proxy reported it: the command
+        /// itself, or the PIN answer before it. Unlike `touchStart`, a re-armed panel doesn't move it.
+        var commandStart: Date?
         /// The card stayed silent past `offDetectionThreshold` on a key learned as `off`, so its held-back
         /// touch wait went to the panel: the policy most likely changed.
         var offTouchPlaced = false
@@ -186,9 +191,12 @@ public struct HostCoordinator: Sendable {
     /// The `touch-cache` setting: `auto` follows each card's learned policy, a number of seconds sets one
     /// window for all, and 0 turns the window off.
     public var touchCache: TouchCacheSetting
-    /// When each card last completed an operation that used its touch, by display serial. It restarts the
+    /// When each card last completed an operation that waited for a touch, by display serial. It restarts the
     /// card's touch cache window, from any proxy: the cache belongs to the card, not to one scdaemon session.
-    private(set) var lastCardUse: [String: Date] = [:]
+    private(set) var lastTouch: [String: Date] = [:]
+    /// When each card last ended an operation, by display serial. The card works on one command at a time,
+    /// so a command that was sent while another ran starts on the card only then.
+    private(set) var lastCardEnd: [String: Date] = [:]
     /// The learned touch policies, by display serial.
     private(set) var policies: [String: CardTouchPolicy] = [:]
     /// The GnuPG installation that each proxy connection reported in its hello.
@@ -290,6 +298,7 @@ public struct HostCoordinator: Sendable {
         case .pinNeeded(let ref):
             // The touch wait, if any, was a false start: the card asks for the PIN first.
             operations[ref.conn]?.pinNeeded = true
+            operations[ref.conn]?.touchWaitReported = false
             operations[ref.conn]?.reporter = connection
             operations[ref.conn]?.touchDeadline = nil
             operations[ref.conn]?.touchShowAt = nil
@@ -408,9 +417,9 @@ public struct HostCoordinator: Sendable {
                 queuedTouch.removeFirst()
                 guard var operation = operations[next] else { continue }
                 // The queued command reaches the card only once the operation before it ended, so its touch
-                // countdown starts about now. When that operation succeeded, it restarted the touch cache
-                // window: the card most likely answers this one without a touch, so hold it back as well,
-                // counting from that operation's end.
+                // countdown starts about now. Inside the touch cache window, the card most likely answers this
+                // one without a touch, so hold it back as well. The window counts from the last operation that
+                // waited for a touch: the one before this one, if it did.
                 let timeout = operation.touchTimeout ?? touchTimeout ?? TouchTiming.cardTimeout
                 var start = now.addingTimeInterval(-TouchTiming.detectionThreshold)
                 let cached = cacheWindowStart(for: operation, at: now)
@@ -558,6 +567,8 @@ public struct HostCoordinator: Sendable {
         operation.touchStart = start
         operation.touchShowAt = nil
         operation.touchInferred = wait.pinpad != true
+        operation.touchWaitReported = true
+        operation.commandStart = start
         operations[wait.conn] = operation
 
         // A pinpad prompt is scdaemon's own word: it shows at once.
@@ -589,10 +600,10 @@ public struct HostCoordinator: Sendable {
     }
 
     /// When the touch cache window of the operation's card is open at `date` for the operation's slot,
-    /// the time it last restarted: when the card last finished an operation. Nil when the window is closed,
-    /// or the slot doesn't use it.
+    /// the time it last restarted: when the card last finished an operation that waited for a touch. Nil when
+    /// the window is closed, or the slot doesn't use it.
     private func cacheWindowStart(for operation: CardOperation, at date: Date) -> Date? {
-        guard case .cacheWindow(let seconds) = handling(for: operation), let last = lastCardUse[operation.serial],
+        guard case .cacheWindow(let seconds) = handling(for: operation), let last = lastTouch[operation.serial],
               last.addingTimeInterval(seconds) > date else { return nil }
         return last
     }
@@ -666,21 +677,25 @@ public struct HostCoordinator: Sendable {
         if let operation, operation.touchShowAt != nil {
             log.append(.touchSkipped(conn: end.conn, result: end.result))
         }
-        // When the card's touch cache window restarts. Assumed, not checked on a card:
-        // - One touch covers every key on the card, so the window belongs to the card, not to one key.
-        // - Every operation that the card completes restarts the window, on any key of the card, also on a key
-        //   whose policy is `on` or `fixed`, because it took a fresh touch.
+        // When the card's touch cache window restarts:
+        // - Only an operation that waited for a touch restarts it. An operation that the card answered from
+        //   the cache doesn't extend it. Observed on a real card with the `cached` policy: after a touch,
+        //   the cache answered a run of signatures, and the next operation needed a touch again 29 s after
+        //   the touch, though it came less than 15 s after the last of those signatures.
+        // - One touch covers every key on the card, so the window belongs to the card, not to one key. A touch
+        //   on a key whose policy is `on` or `fixed` restarts it too. Assumed, not checked on a card.
         // - An operation on a key whose policy is `off` doesn't restart it, because it took no touch.
-        // - A key whose policy isn't known counts as touched.
+        // - A key whose policy isn't known counts as touched when the operation waited for a touch.
         var policyOutputs: [HostOutput] = []
         if let operation {
             let handling = handling(for: operation)
-            if end.result == .ok, operation.kind != .unknown, handling != .noTouch {
-                lastCardUse[operation.serial] = now
+            if end.result == .ok, operation.kind != .unknown, handling != .noTouch, waitedForTouch(operation, endedAt: now) {
+                lastTouch[operation.serial] = now
                 if case .cacheWindow(let seconds) = handling {
                     log.append(.touchCacheRestarted(serial: operation.serial, seconds: seconds))
                 }
             }
+            lastCardEnd[operation.serial] = now
             policyOutputs = schedulePolicyQuery(after: operation, end: end, now: now)
         }
 
@@ -716,6 +731,19 @@ public struct HostCoordinator: Sendable {
             outputs.append(.schedule(after: succeeded ? Self.rearmAfterSuccess : Self.rearmAfterFailure, .rearm))
         }
         return outputs + policyOutputs
+    }
+
+    /// Whether the card most likely waited for a touch before it completed `operation` at `end`: the proxy
+    /// reported a touch wait, and the card stayed silent after it could start the command for as long as the
+    /// host waits before it shows the touch step. A command queued behind another operation on the card
+    /// starts on the card when that one ends, so the proxy's report alone also counts the time it waited in
+    /// line. Inside the touch cache window, a slow cached answer can outlast `detectionThreshold`, so the
+    /// longer `cachedDetectionThreshold` applies there.
+    private func waitedForTouch(_ operation: CardOperation, endedAt end: Date) -> Bool {
+        guard operation.touchWaitReported, var start = operation.commandStart else { return false }
+        if let previous = lastCardEnd[operation.serial] { start = max(start, previous) }
+        let threshold = cacheWindowStart(for: operation, at: start) == nil ? TouchTiming.detectionThreshold : TouchTiming.cachedDetectionThreshold
+        return end.timeIntervalSince(start) >= threshold
     }
 
     // MARK: Touch policies

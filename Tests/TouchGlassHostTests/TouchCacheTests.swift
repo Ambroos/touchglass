@@ -4,8 +4,9 @@ import TouchGlassCore
 import TouchGlassIPC
 @testable import TouchGlassHost
 
-/// The touch cache window: after the card completes an operation, a touch wait shows only once the card
-/// command stayed silent for `cachedDetectionThreshold`, and an operation that ends before that shows nothing.
+/// The touch cache window: after the card completes an operation that waited for a touch, a touch wait shows
+/// only once the card command stayed silent for `cachedDetectionThreshold`, and an operation that ends before
+/// that shows nothing.
 @Suite struct TouchCacheTests {
     let t0 = Date(timeIntervalSince1970: 1_000_000)
     let proxy: ConnectionID = 1
@@ -120,22 +121,89 @@ import TouchGlassIPC
         #expect(shownTouch(touchWait(&c, "100:p", commandAt: 20)) != nil)
     }
 
-    @Test func windowRestartsOnEachOperation() {
+    @Test func cachedOperationsDoNotRestartTheWindow() throws {
+        var c = HostCoordinator().verifying(proxy, otherProxy, pinentry)
+        // The touch ends at 11 s; the cache answers 20 signatures between 22 and 26 s, each in 0.11 s,
+        // before the proxy reports a touch wait.
+        start(&c, "100:p", at: 0)
+        _ = touchWait(&c, "100:p", commandAt: 0)
+        _ = end(&c, "100:p", at: 11)
+        for i in 0..<20 {
+            let startAt = 22 + Double(i) * 0.2
+            start(&c, "100:p", at: startAt)
+            #expect(end(&c, "100:p", at: startAt + 0.11).isEmpty, "operation \(i)")
+        }
+        #expect(c.lastTouch[Self.displaySerial] == at(11))
+        _ = c.takeLog()
+        // 40.5 s is 29.5 s past the touch, but less than 15 s after the last cached signature: the window has
+        // closed, so the touch shows at once.
+        start(&c, "100:s1", at: 40.5, op: .auth)
+        let wait = try #require(shownTouch(touchWait(&c, "100:s1", commandAt: 40.5)))
+        #expect(wait.shownAt == at(40.9))
+        #expect(!c.takeLog().contains { if case .touchDeferred = $0 { true } else { false } })
+    }
+
+    @Test func theDeferralEndsFifteenSecondsAfterTheLastTouch() {
         var c = HostCoordinator().verifying(proxy, otherProxy, pinentry)
         touchedSignature(&c, endAt: 3)
-        // Cached signatures that finish before their touch wait: each restarts the window.
-        for (i, startAt) in [10.0, 22, 34].enumerated() {
-            start(&c, "100:p", at: startAt)
-            _ = end(&c, "100:p", at: startAt + 0.2)
-            #expect(c.lastCardUse[TouchCacheTests.displaySerial] == at(startAt + 0.2), "operation \(i)")
-        }
-        // 46 s is 43 s past the touch, but 11.8 s after the last operation.
-        start(&c, "100:p", at: 46)
-        #expect(panelEvents(touchWait(&c, "100:p", commandAt: 46)).isEmpty)
-        // Past the last restart: at once again.
-        _ = end(&c, "100:p", at: 46.5)
-        start(&c, "100:p", at: 62)
-        #expect(shownTouch(touchWait(&c, "100:p", commandAt: 62)) != nil)
+        start(&c, "100:p", at: 10)
+        _ = end(&c, "100:p", at: 10.1)
+        // Still inside the window that the touch opened: held back.
+        start(&c, "100:p", at: 17.5)
+        #expect(isHeldBack(touchWait(&c, "100:p", commandAt: 17.5), "100:p", showAt: 19, now: 17.9))
+        _ = end(&c, "100:p", at: 18)
+        // Past it: at once, although a cached signature ended less than 15 s ago.
+        start(&c, "100:p", at: 18.5)
+        #expect(shownTouch(touchWait(&c, "100:p", commandAt: 18.5)) != nil)
+    }
+
+    @Test func slowCachedAnswerInsideTheWindowDoesNotRestartIt() {
+        var c = HostCoordinator().verifying(proxy, otherProxy, pinentry)
+        touchedSignature(&c, endAt: 3)
+        // The proxy reports a touch wait, but the card answers 0.8 s after the command, before the panel shows.
+        start(&c, "100:p", at: 5)
+        _ = touchWait(&c, "100:p", commandAt: 5)
+        _ = end(&c, "100:p", at: 5.8)
+        #expect(c.lastTouch[Self.displaySerial] == at(3))
+    }
+
+    @Test func operationThatWaitedForATouchRestartsTheWindow() {
+        var c = HostCoordinator().verifying(proxy, otherProxy, pinentry)
+        touchedSignature(&c, endAt: 3)
+        start(&c, "100:p", at: 20)
+        _ = touchWait(&c, "100:p", commandAt: 20)
+        _ = c.takeLog()
+        _ = end(&c, "100:p", at: 23)
+        #expect(c.lastTouch[Self.displaySerial] == at(23))
+        #expect(c.takeLog().contains(.touchCacheRestarted(serial: Self.displaySerial, seconds: TouchTiming.touchCacheWindow)))
+        start(&c, "100:p", at: 30)
+        #expect(panelEvents(touchWait(&c, "100:p", commandAt: 30)).isEmpty)
+    }
+
+    @Test func touchAfterAPinRestartsTheWindow() throws {
+        var c = HostCoordinator().verifying(proxy, otherProxy, pinentry)
+        start(&c, "100:p", at: 0, op: .auth)
+        // A touch wait before the PIN request is a false start.
+        _ = touchWait(&c, "100:p", commandAt: 0)
+        _ = c.handle(.pinNeeded(ConnRef(conn: "100:p")), from: proxy, now: at(0.5))
+        _ = c.handle(.getPin(GetPin(id: "r1", desc: "Please unlock the card", fields: CardFields(number: "12 345 678"))), from: pinentry, now: at(0.5))
+        _ = c.handle(.submit("975310"))
+        _ = try #require(shownTouch(touchWait(&c, "100:p", commandAt: 3)))
+        _ = end(&c, "100:p", at: 5)
+        #expect(c.lastTouch[Self.displaySerial] == at(5))
+    }
+
+    @Test func cachedAnswerAfterAPinDoesNotRestartTheWindow() {
+        var c = HostCoordinator().verifying(proxy, otherProxy, pinentry)
+        touchedSignature(&c, endAt: 3)
+        start(&c, "100:p", at: 5, op: .auth)
+        // The touch wait before the PIN request is a false start; after the PIN, the cache answers.
+        _ = touchWait(&c, "100:p", commandAt: 5)
+        _ = c.handle(.pinNeeded(ConnRef(conn: "100:p")), from: proxy, now: at(5.5))
+        _ = c.handle(.getPin(GetPin(id: "r1", desc: "Please unlock the card", fields: CardFields(number: "12 345 678"))), from: pinentry, now: at(5.5))
+        _ = c.handle(.submit("975310"))
+        _ = end(&c, "100:p", at: 8.1)
+        #expect(c.lastTouch[Self.displaySerial] == at(3))
     }
 
     static let displaySerial = "12345678"
@@ -222,6 +290,8 @@ import TouchGlassIPC
         #expect(isHeldBack(rearmed, "100:s1", showAt: 4.6, now: 3.5))
         // The cached touch answers it: nothing shows after the first operation's success.
         #expect(end(&c, "100:s1", at: 3.6).isEmpty)
+        // Its touch wait was reported while it waited in line behind the first operation, not for a touch.
+        #expect(c.lastTouch[Self.displaySerial] == at(3))
     }
 
     // MARK: Settings
