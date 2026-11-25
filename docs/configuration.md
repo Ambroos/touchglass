@@ -76,6 +76,8 @@ To read the last 10 minutes afterwards:
 log show --last 10m --predicate 'subsystem == "io.ambroos.touchglass"' --info
 ```
 
+macOS keeps info lines in memory only, so `log show` finds them only for a short time. The history of each prompt is written at the default level, which macOS stores: operation start and end, connections, the panel's states, keyboard focus, wakes and screen changes, and the panel's presence check (`not on screen`, `ordered in again`, `new window`), with a `still not on screen` error if the panel can't be shown.
+
 With `--level debug` for `log stream`, or `--debug` for `log show`, the log also shows every scdaemon command with its duration and each Assuan keyword that the pinentry handles. To show one component, add a category to the predicate, such as `subsystem == "io.ambroos.touchglass" AND category == "scdaemon"`.
 
 To check the touch timing, look at the `op end` lines of the `scdaemon` category. Each one gives the time the card took after the command or the PIN. Operations that the cached touch covers take that time without a touch; the host's `touch wait inside … cache window` and `nothing shown` lines show which operations it held back. The host's `touch policy` lines show what it learned for each card, and when it asked gpg-agent.
