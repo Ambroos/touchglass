@@ -608,7 +608,9 @@ import enum TouchGlassIPC.LogEvent
         workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
         workspace.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
         app.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
-        try await Task.sleep(for: .milliseconds(200))
+        await waitUntil { probe.calls >= 2 }
+        // A second check would follow the first within `presenceCheckDelay`.
+        try await Task.sleep(for: .milliseconds(100))
         #expect(probe.calls == 2)
         #expect(count(events, notOnScreen) == 0)
         #expect(controller.panel === original)
@@ -656,6 +658,85 @@ import enum TouchGlassIPC.LogEvent
         #expect(!controller.isPanelVisible)
         #expect(controller.model.state == nil)
         #expect(events.events.contains(.panelRebuilt(reason: .wake, state: nil)))
+    }
+
+    @Test func aWakeWhileShowingReplacesTheWindowAfterTheClose() async throws {
+        let workspace = NotificationCenter()
+        let probe = Probe(otherwise: true)
+        let (controller, events) = makeController(probe: probe, workspace: workspace)
+        controller.send(.show(touch()))
+        await waitUntil { probe.calls > 0 }
+        let original = controller.panel
+        workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(controller.panel === original)
+
+        controller.send(.userClosed)
+        await waitUntil { controller.panel !== original }
+        #expect(controller.panel !== original)
+        #expect(!controller.isPanelVisible)
+        #expect(events.events.contains(.panelRebuilt(reason: .wake, state: nil)))
+    }
+
+    @Test func aPromptInsideTheWakeDelayGetsTheNewWindowWhenItCloses() async throws {
+        let workspace = NotificationCenter()
+        let (controller, events) = makeController(probe: Probe(otherwise: true), workspace: workspace)
+        controller.presenceCheckDelay = 0.1
+        let original = controller.panel
+        workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
+        controller.send(.show(pin))
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(controller.panel === original)
+        #expect(count(events, rebuilt) == 0)
+
+        controller.send(.userClosed)
+        await waitUntil { controller.panel !== original }
+        #expect(controller.panel !== original)
+        #expect(!controller.isPanelVisible)
+        #expect(controller.model.state == nil)
+        #expect(events.events.contains(.panelRebuilt(reason: .wake, state: nil)))
+    }
+
+    @Test func aCloseUnderwayWhenTheWakeDelayEndsGetsTheNewWindowWhenItFinishes() async throws {
+        let workspace = NotificationCenter()
+        let (controller, events) = makeController(probe: Probe(otherwise: true), workspace: workspace)
+        // Only the close watchdog finishes the close, 0.3 s after it starts; the wake delay ends before that.
+        controller.dropsAnimationCompletions = true
+        controller.presenceCheckDelay = 0.1
+        let original = controller.panel
+        workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
+        controller.send(.show(pin))
+        controller.send(.userClosed)
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(controller.panel === original)
+        #expect(controller.isPanelVisible)
+
+        await waitUntil { controller.panel !== original }
+        #expect(controller.panel !== original)
+        #expect(!controller.isPanelVisible)
+        #expect(count(events, watchdogFired) == 1)
+        #expect(events.events.contains(.panelRebuilt(reason: .wake, state: nil)))
+    }
+
+    @Test func aPromptAfterTheWindowLeftTheScreenDuringTheCloseIsChecked() async throws {
+        let probe = Probe(otherwise: true)
+        let (controller, _) = makeController(probe: probe)
+        controller.dropsAnimationCompletions = true
+        controller.send(.show(pin))
+        try await Task.sleep(for: .milliseconds(100))
+        controller.send(.userClosed)
+        controller.panel.orderOut(nil)
+        let callsBefore = probe.calls
+
+        controller.send(.show(pin))
+        #expect(controller.isPanelVisible)
+        await waitUntil { probe.calls > callsBefore }
+        #expect(probe.calls > callsBefore)
+        await waitUntil { controller.model.surfaceShown }
+        #expect(controller.model.surfaceShown)
+        controller.dropsAnimationCompletions = false
+        controller.send(.userClosed)
+        await waitUntil { !controller.isPanelVisible }
     }
 
     @Test func theCloseWatchdogFinishesACloseWhoseAnimationNeverCompletes() async throws {

@@ -55,7 +55,8 @@ public final class PanelController {
     private var presenceCheck: DispatchWorkItem?
     /// The pending new window after a wake while no state is shown, replaced in the same way.
     private var wakeRebuild: DispatchWorkItem?
-    /// A wake arrived while the exit animation ran: the close gets a new window when it finishes.
+    /// A wake arrived while a state showed or the exit animation ran: the next close that finishes gets a new
+    /// window. It survives a close that a new state reverses.
     private var rebuildAfterClose = false
     /// Finishes a close if the exit animation's completion doesn't arrive.
     private var closeWatchdog: DispatchWorkItem?
@@ -281,6 +282,9 @@ public final class PanelController {
             reverseClose(into: state)
             return
         }
+        // The closing window is no longer visible, so there is nothing to reverse: the close ends here, and the
+        // state enters afresh.
+        closing = false
         enter(state, allowsKey: state.allowsKey || holdsState)
     }
 
@@ -554,10 +558,10 @@ public final class PanelController {
         }
     }
 
-    /// After a wake, a panel that waits for the next prompt gets a new window, made after the wake; a closing
-    /// panel gets it when the close finishes. A panel that shows a state, such as a touch wait across the sleep,
-    /// is placed again and checked. The check and the new window wait for `presenceCheckDelay` after the last
-    /// event, because the wake and screen notifications arrive in bursts.
+    /// After a wake, a panel that waits for the next prompt gets a new window, made after the wake. A panel that
+    /// shows a state, such as a touch wait across the sleep, is placed again and checked, and gets the new window
+    /// when that state closes; so does a closing panel. The check and the new window wait for
+    /// `presenceCheckDelay` after the last event, because the wake and screen notifications arrive in bursts.
     private func systemChanged(_ event: LogEvent) {
         log(event)
         guard !holdsState else { return }
@@ -567,6 +571,7 @@ public final class PanelController {
             if shown {
                 place()
                 schedulePresenceCheck()
+                rebuildAfterClose = true
             } else if closing {
                 rebuildAfterClose = true
             } else {
@@ -582,11 +587,11 @@ public final class PanelController {
         let item = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.wakeRebuild = nil
-            // A prompt that opened meanwhile has its own presence check.
-            if self.closing {
-                self.rebuildAfterClose = true
-            } else if self.model.state == nil {
+            // A prompt that opened meanwhile has its own presence check, and gets the new window when it closes.
+            if self.model.state == nil, !self.closing {
                 self.rebuildWindow(reason: .wake)
+            } else {
+                self.rebuildAfterClose = true
             }
         }
         wakeRebuild = item
